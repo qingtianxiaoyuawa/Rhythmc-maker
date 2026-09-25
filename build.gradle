@@ -1,0 +1,81 @@
+plugins {
+    id "fabric-loom" version "1.15.3"
+    id "maven-publish"
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+    archivesName = project.archives_base_name
+}
+
+def arcadeRuntimeJars = files(
+    "libs/arcade-dimensions.jar",
+    "libs/arcade-event-registry.jar",
+    "libs/arcade-events-server.jar",
+    "libs/arcade-extensions.jar",
+    "libs/arcade-utils.jar"
+)
+
+repositories {
+    maven { name = "Fabric"; url = "https://maven.fabricmc.net/" }
+    maven { name = "Wisp Forest"; url = "https://maven.wispforest.io/releases/" }
+    mavenCentral()
+    maven { name = "JitPack"; url = "https://jitpack.io" }
+    flatDir { dirs "libs" }
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+    modImplementation "io.wispforest:owo-lib:${project.owo_version}"
+    include modImplementation(name: "arcade-dimensions", ext: "jar")
+    include modImplementation(name: "arcade-event-registry", ext: "jar")
+    include modImplementation(name: "arcade-events-server", ext: "jar")
+    include modImplementation(name: "arcade-extensions", ext: "jar")
+    include modImplementation(name: "arcade-utils", ext: "jar")
+    compileOnly files("libs/kotlin-stdlib.jar", "libs/kotlin-reflect.jar")
+}
+
+processResources {
+    inputs.property "version", project.version
+    filesMatching("fabric.mod.json") {
+        expand "version": project.version
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 21
+}
+
+java {
+    withSourcesJar()
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+jar {
+    from("LICENSE") {
+        rename { "${it}_${project.archives_base_name}" }
+    }
+}
+
+publishing {
+    publications {
+        create("mavenJava", MavenPublication) {
+            from components.java
+        }
+    }
+    repositories {
+        maven {
+            name = "local"
+            url = layout.buildDirectory.dir("repo")
+        }
+    }
+}
+
+
+

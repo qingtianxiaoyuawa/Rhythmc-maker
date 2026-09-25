@@ -1,0 +1,11 @@
+{
+  "required": true,
+  "package": "cn.frkovo.rhythmcmaker.mixin.client",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "MouseMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

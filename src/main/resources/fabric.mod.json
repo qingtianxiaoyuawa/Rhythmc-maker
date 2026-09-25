@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "id": "rhythmc_maker",
+  "version": "${version}",
+  "name": "Rhythmc maker",
+  "description": "RhythMC 3.0 chart editor for Fabric.",
+  "authors": [
+    "Rhythmc maker"
+  ],
+  "contact": {},
+  "license": "MIT",
+  "icon": "assets/rhythmc_maker/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "cn.frkovo.rhythmcmaker.RhythmcMaker"
+    ],
+    "client": [
+      "cn.frkovo.rhythmcmaker.client.RhythmcMakerClient"
+    ]
+  },
+  "mixins": [
+    "rhythmc_maker.client.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": "1.21.11",
+    "java": ">=21",
+    "fabric-api": "*",
+    "owo": ">=0.13.0+1.21.11",
+    "arcade-dimensions": ">=0.8.1-beta.8",
+    "arcade-event-registry": ">=0.8.1-beta.8",
+    "arcade-events-server": ">=0.8.1-beta.8",
+    "arcade-extensions": ">=0.8.1-beta.8",
+    "arcade-utils": ">=0.8.1-beta.8"
+  }
+}

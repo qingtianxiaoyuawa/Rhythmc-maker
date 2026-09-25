@@ -1,0 +1,10 @@
+{
+  "generator.rhythmc_maker.charter": "制谱器",
+  "key.rhythmc_maker.settings": "打开设置",
+  "key.rhythmc_maker.select_playback_start": "选择播放起始 Chunk（按住并滚轮）",
+  "key.rhythmc_maker.flight_normal": "飞行速度：1 倍",
+  "key.rhythmc_maker.flight_fast": "飞行速度：1.5 倍",
+  "key.rhythmc_maker.flight_double": "飞行速度：2 倍",
+  "key.rhythmc_maker.flight_quad": "飞行速度：4 倍",
+  "key.category.rhythmc_maker.main": "Rhythmc maker"
+}
