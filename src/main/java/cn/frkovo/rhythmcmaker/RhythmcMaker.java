@@ -108,6 +108,7 @@ public final class RhythmcMaker implements ModInitializer {
     private static final Set<UUID> DIMENSION_TRAVEL_READY = ConcurrentHashMap.newKeySet();
     private static final Map<UUID, Integer> SELECTED_START_CHUNKS = new ConcurrentHashMap<>();
     private static final Map<UUID, PlaybackSession> PLAYBACK_SESSIONS = new ConcurrentHashMap<>();
+    private static final Map<UUID, ScrollJudgementSession> SCROLL_JUDGEMENT_SESSIONS = new ConcurrentHashMap<>();
     private static final Set<UUID> EDITOR_TRACK_ADJUSTMENTS = ConcurrentHashMap.newKeySet();
     private static final Map<UUID, Long> EDITOR_TRACK_ADJUSTMENT_NOTICES = new ConcurrentHashMap<>();
     private static final Map<UUID, java.util.List<ItemStack>> SAVED_HOTBARS = new ConcurrentHashMap<>();
@@ -237,6 +238,7 @@ public final class RhythmcMaker implements ModInitializer {
             processEditorNoteRefreshTasks(server);
             processNoteDisplayChunkCleanupTasks(server);
             processEditorNoteDisplaySweepTasks(server);
+            processScrollJudgementSessions(server);
             processPlaybackSessions(server);
             long tick = server.getTicks();
             if (tick % SCENE_BORDER_INTERVAL_TICKS == 0) showSceneBoundary(server);
@@ -254,7 +256,7 @@ public final class RhythmcMaker implements ModInitializer {
             if (!(world instanceof ServerWorld serverWorld) || !isEditorWorld(world) || !(player instanceof ServerPlayerEntity serverPlayer)) return ActionResult.PASS;
             if (isSceneOperationBusy(serverPlayer.getUuid())) return ActionResult.FAIL;
             if (rejectEditorTrackAdjustment(serverPlayer)) return ActionResult.FAIL;
-            if (PLAYBACK_SESSIONS.containsKey(serverPlayer.getUuid())) return ActionResult.FAIL;
+            if (hasPlaybackSession(serverPlayer.getUuid())) return ActionResult.FAIL;
             BlockPos target = hitResult.getBlockPos().offset(hitResult.getSide());
             ChartManifest chart = loadActiveChart(serverPlayer, serverWorld.getServer());
             SceneEditStorage.Scene sceneArea = chart == null ? null : sceneAtPosition(serverWorld, target, chart);
@@ -303,7 +305,7 @@ public final class RhythmcMaker implements ModInitializer {
             SceneEditStorage.Scene sceneArea = chart == null ? null : sceneAtPosition(serverWorld, pos, chart);
             Integer activeScene = ACTIVE_SCENE_EDITORS.get(serverPlayer.getUuid());
             if (activeScene != null && isWorldEditSelectionAxe(serverPlayer.getMainHandStack())) return true;
-            if (SCENE_CAPTURE_PENDING.contains(serverPlayer.getUuid()) || PLAYBACK_SESSIONS.containsKey(player.getUuid())) return false;
+            if (SCENE_CAPTURE_PENDING.contains(serverPlayer.getUuid()) || hasPlaybackSession(player.getUuid())) return false;
             if (activeScene != null) return chart != null && chart.id.equals(ACTIVE_SCENE_CHARTS.get(serverPlayer.getUuid()))
                     && sceneArea != null && sceneArea.index == activeScene;
             if (sceneArea != null) return false;
@@ -845,7 +847,7 @@ public final class RhythmcMaker implements ModInitializer {
         return adjustStartChunk(server, player, delta);
     }
     private static int adjustStartChunk(MinecraftServer server, ServerPlayerEntity player, int delta) {
-        if (PLAYBACK_SESSIONS.containsKey(player.getUuid())) return 0;
+        if (hasPlaybackSession(player.getUuid())) return 0;
         ChartManifest chart = loadActiveChart(player, server);
         if (chart == null || !(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world)) return 0;
         int previous = selectedStartChunk(player, chart);
@@ -861,7 +863,7 @@ public final class RhythmcMaker implements ModInitializer {
     }
     private static int setStartChunk(net.minecraft.server.command.ServerCommandSource source, int requestedChunk) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayerEntity player = source.getPlayerOrThrow();
-        if (PLAYBACK_SESSIONS.containsKey(player.getUuid())) return 0;
+        if (hasPlaybackSession(player.getUuid())) return 0;
         ChartManifest chart = loadActiveChart(player, source.getServer());
         if (chart == null || !(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world)) return 0;
         int maximum = Math.max(1, chart.chunkCount);
@@ -909,7 +911,7 @@ public final class RhythmcMaker implements ModInitializer {
     }
     private static int teleportToPlaybackScene(net.minecraft.server.command.ServerCommandSource source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayerEntity player = source.getPlayerOrThrow();
-        if (PLAYBACK_SESSIONS.containsKey(player.getUuid())) {
+        if (hasPlaybackSession(player.getUuid())) {
             player.sendMessage(Text.literal("播放中不能使用快捷传送"), true);
             return 0;
         }
@@ -923,7 +925,7 @@ public final class RhythmcMaker implements ModInitializer {
     }
     private static int teleportToEditorPlatform(net.minecraft.server.command.ServerCommandSource source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayerEntity player = source.getPlayerOrThrow();
-        if (PLAYBACK_SESSIONS.containsKey(player.getUuid())) {
+        if (hasPlaybackSession(player.getUuid())) {
             player.sendMessage(Text.literal("播放中不能使用快捷传送"), true);
             return 0;
         }
@@ -1824,7 +1826,7 @@ private static void showSceneBoundary(MinecraftServer server) {
     }
     private static int stopPlaybackCommand(net.minecraft.server.command.ServerCommandSource source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayerEntity player = source.getPlayerOrThrow();
-        if (!PLAYBACK_SESSIONS.containsKey(player.getUuid())) return 0;
+        if (!hasPlaybackSession(player.getUuid())) return 0;
         stopPlayback(source.getServer(), player, true);
         return 1;
     }
@@ -1836,7 +1838,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             player.sendMessage(Text.literal("场景搭建期间不能播放谱面"), true);
             return 0;
         }
-        if (PLAYBACK_SESSIONS.containsKey(player.getUuid())) {
+        if (hasPlaybackSession(player.getUuid())) {
             stopPlayback(source.getServer(), player, true);
             return 1;
         }
@@ -1847,10 +1849,16 @@ private static void showSceneBoundary(MinecraftServer server) {
         double startBeat = (startChunk - 1.0) * divisionsPerChunk;
         String mode = "scroll".equalsIgnoreCase(requestedMode) ? "scroll" : "formal";
         double rate = normalizePlaybackRate(requestedRate);
-        PlaybackSession session = new PlaybackSession(world, player.getX(), player.getY(), player.getZ(), player.getYaw(), player.getPitch(), chart, ChartTiming.beatToSeconds(chart, startBeat), System.nanoTime() + PLAYBACK_START_DELAY_TICKS * 50_000_000L, mode, rate);
-        PLAYBACK_SESSIONS.put(player.getUuid(), session);
-        if (session.formal) player.teleport(world, PLAYBACK_PLATFORM_X + 0.5, PLAYBACK_PLATFORM_Y + 1.0, PLAYBACK_PLATFORM_Z + 0.5, Set.of(), 180.0f, 0.0f, false);
-        player.sendMessage(Text.literal("开始" + (session.formal ? "正式" : "滚动") + "播放：Chunk " + startChunk + "，" + rate + "x"), true);
+        double startSeconds = ChartTiming.beatToSeconds(chart, startBeat);
+        long startNanos = System.nanoTime() + PLAYBACK_START_DELAY_TICKS * 50_000_000L;
+        if ("scroll".equals(mode)) {
+            SCROLL_JUDGEMENT_SESSIONS.put(player.getUuid(), new ScrollJudgementSession(world, chart, startSeconds, startNanos, rate));
+        } else {
+            PlaybackSession session = new PlaybackSession(world, player.getX(), player.getY(), player.getZ(), player.getYaw(), player.getPitch(), chart, startSeconds, startNanos, mode, rate);
+            PLAYBACK_SESSIONS.put(player.getUuid(), session);
+            player.teleport(world, PLAYBACK_PLATFORM_X + 0.5, PLAYBACK_PLATFORM_Y + 1.0, PLAYBACK_PLATFORM_Z + 0.5, Set.of(), 180.0f, 0.0f, false);
+        }
+        player.sendMessage(Text.literal("开始" + ("scroll".equals(mode) ? "滚动" : "正式") + "播放：Chunk " + startChunk + "，" + rate + "x"), true);
         return 1;
     }
     private static void processPlaybackSessions(MinecraftServer server) {
@@ -1923,17 +1931,29 @@ private static void showSceneBoundary(MinecraftServer server) {
                     session.displays.put(note.id, display);
                     preloadedThisTick++;
                 }
-            } else {
-                while (session.nextNoteIndex < session.notes.size() && session.noteTimes.getOrDefault(session.notes.get(session.nextNoteIndex).id, Double.POSITIVE_INFINITY) <= songTime) {
-                    ChartManifest.Note note = session.notes.get(session.nextNoteIndex++);
-                    if (session.hitNotes.add(note.id)) playHitSound(session, player, note);
-                }
             }
             if (songTime >= session.endSeconds) stopPlayback(server, player, session.formal);
                     } catch (RuntimeException exception) {
                 LOGGER.error("Playback session failed for {}", player.getUuid(), exception);
                 stopPlayback(server, player, session.formal);
             }
+        }
+    }
+    private static void processScrollJudgementSessions(MinecraftServer server) {
+        for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+            ScrollJudgementSession session = SCROLL_JUDGEMENT_SESSIONS.get(player.getUuid());
+            if (session == null || System.nanoTime() < session.startNanos) continue;
+            double songTime = session.startSeconds + (System.nanoTime() - session.startNanos) / 1_000_000_000.0 * session.rate;
+            session.playedTapSoundThisTick = false;
+            session.playedLookSoundThisTick = false;
+            int processed = 0;
+            while (session.nextNoteIndex < session.notes.size()
+                    && session.noteTimes.get(session.nextNoteIndex) <= songTime
+                    && processed++ < PLAYBACK_MAX_PRELOADS_PER_TICK) {
+                ChartManifest.Note note = session.notes.get(session.nextNoteIndex++);
+                playHitSound(session, player, note);
+            }
+            if (songTime >= session.endSeconds) stopPlayback(server, player, false);
         }
     }
     private static double normalizePlaybackRate(double value) {
@@ -1955,6 +1975,24 @@ private static void showSceneBoundary(MinecraftServer server) {
             if (session.playedTapSoundThisTick) return;
             session.playedTapSoundThisTick = true;
             // RhythMC 3.0 uses the configurable note-box sound for TAP and LOOK.
+            sound = net.minecraft.sound.SoundEvents.BLOCK_NOTE_BLOCK_BASEDRUM.value();
+            pitch = 0.5f;
+        }
+        session.world.playSound(null, player.getX(), player.getY(), player.getZ(), sound,
+            net.minecraft.sound.SoundCategory.PLAYERS, (float) Math.max(0.1, Math.min(5.0, config.noteJudgementVolumeMultiplier)), pitch);
+    }
+    private static void playHitSound(ScrollJudgementSession session, ServerPlayerEntity player, ChartManifest.Note note) {
+        if (note.type == 3) return;
+        net.minecraft.sound.SoundEvent sound;
+        float pitch;
+        if (note.type == 2) {
+            if (session.playedLookSoundThisTick) return;
+            session.playedLookSoundThisTick = true;
+            sound = net.minecraft.sound.SoundEvents.BLOCK_STONE_PRESSURE_PLATE_CLICK_ON;
+            pitch = 1.0f;
+        } else {
+            if (session.playedTapSoundThisTick) return;
+            session.playedTapSoundThisTick = true;
             sound = net.minecraft.sound.SoundEvents.BLOCK_NOTE_BLOCK_BASEDRUM.value();
             pitch = 0.5f;
         }
@@ -2032,6 +2070,8 @@ private static void showSceneBoundary(MinecraftServer server) {
     }
     private static JsonObject effectProperties(JsonObject effect) { return effect != null && effect.has("properties") && effect.get("properties").isJsonObject() ? effect.getAsJsonObject("properties") : new JsonObject(); }
     private static void stopPlayback(MinecraftServer server, ServerPlayerEntity player, boolean returnPlayer) {
+        ScrollJudgementSession scrollSession = SCROLL_JUDGEMENT_SESSIONS.remove(player.getUuid());
+        if (scrollSession != null) return;
         PlaybackSession session = PLAYBACK_SESSIONS.remove(player.getUuid());
         if (session == null) return;
         try {
@@ -2056,6 +2096,35 @@ private static void showSceneBoundary(MinecraftServer server) {
                     LOGGER.error("Failed to return player {} after playback", player.getUuid(), exception);
                 }
             }
+        }
+    }
+    private static boolean hasPlaybackSession(UUID playerId) {
+        return PLAYBACK_SESSIONS.containsKey(playerId) || SCROLL_JUDGEMENT_SESSIONS.containsKey(playerId);
+    }
+    private static final class ScrollJudgementSession {
+        private final ServerWorld world;
+        private final double startSeconds;
+        private final long startNanos;
+        private final double rate;
+        private final java.util.List<ChartManifest.Note> notes;
+        private final java.util.List<Double> noteTimes;
+        private final double endSeconds;
+        private int nextNoteIndex;
+        private boolean playedTapSoundThisTick;
+        private boolean playedLookSoundThisTick;
+
+        private ScrollJudgementSession(ServerWorld world, ChartManifest chart, double startSeconds, long startNanos, double rate) {
+            this.world = world;
+            this.startSeconds = startSeconds;
+            this.startNanos = startNanos;
+            this.rate = rate;
+            this.notes = new java.util.ArrayList<>(chart.notes == null ? java.util.List.of() : chart.notes);
+            this.notes.removeIf(note -> note == null || note.id == null);
+            this.notes.sort(java.util.Comparator.comparingDouble(note -> effectiveNoteTime(note, chart)));
+            this.noteTimes = new java.util.ArrayList<>(notes.size());
+            for (ChartManifest.Note note : notes) noteTimes.add(effectiveNoteTime(note, chart));
+            this.endSeconds = playbackEndTime(chart);
+            while (nextNoteIndex < noteTimes.size() && noteTimes.get(nextNoteIndex) < startSeconds) nextNoteIndex++;
         }
     }
     private static void cleanupOrphanedPlaybackDisplays(ServerWorld world) {
@@ -2777,7 +2846,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                     markSelectedStartChunk(world, chart, chart.selectedStartChunk);
                     refreshNoteDisplays(world, chart, task.oldLength, task.previousLaneCount);
                     ServerPlayerEntity player = server.getPlayerManager().getPlayer(task.playerId);
-                    if (player != null && config.preventChunkDisplacement && !PLAYBACK_SESSIONS.containsKey(task.playerId)) {
+                    if (player != null && config.preventChunkDisplacement && !hasPlaybackSession(task.playerId)) {
                         double targetZ = PlaybackCoordinates.editorWorldZAtBeat(chart, task.previousChunk - 1.0);
                         player.teleport(world, player.getX(), player.getY(), targetZ, Set.of(), player.getYaw(), player.getPitch(), false);
                     }
@@ -3033,13 +3102,6 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
     }
 }
-
-
-
-
-
-
-
 
 
 
