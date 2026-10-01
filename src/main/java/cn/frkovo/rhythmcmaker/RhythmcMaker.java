@@ -1390,7 +1390,7 @@ public final class RhythmcMaker implements ModInitializer {
         int left = laneWallLeftX(chart);
         int right = laneWallRightX(chart);
         for (int x = left; x <= right; x++) for (int y = 64; y <= 68; y++) {
-            if (x != left && x != right && y != 64 && y != 68) continue;
+            if (x != left && x != right && y != 64) continue;
             BlockPos pos = new BlockPos(x, y, z);
             BlockState state = world.getBlockState(pos);
             if (!isNoteBlock(state.getBlock())) world.setBlockState(pos, Blocks.LIME_CONCRETE.getDefaultState(), 3);
@@ -3032,7 +3032,6 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
     }
 }
-
 
 
 
