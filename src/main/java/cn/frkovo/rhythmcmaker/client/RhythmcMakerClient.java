@@ -36,6 +36,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 
 public final class RhythmcMakerClient implements ClientModInitializer {
+    private static final double PLAYBACK_FRAME_SPEED_MULTIPLIER = 0.2;
     private static KeyBinding settingsKey;
     private static KeyBinding selectPlaybackStartKey;
     private static boolean controlSpeedHandled;
@@ -459,7 +460,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             double sampleSeconds = 1.0 / 20.0;
             playbackFrameStartZ = PlaybackCoordinates.editorWorldZAtSongTime(chart, playbackTimingProfile, startSeconds);
             double nextFrameZ = PlaybackCoordinates.editorWorldZAtSongTime(chart, playbackTimingProfile, startSeconds + sampleSeconds);
-            playbackFrameVelocity = (nextFrameZ - playbackFrameStartZ) / sampleSeconds;
+            playbackFrameVelocity = (nextFrameZ - playbackFrameStartZ) / sampleSeconds * PLAYBACK_FRAME_SPEED_MULTIPLIER;
             audioDurationSeconds = Math.max(0, chart.durationSeconds - startSeconds) / playbackRate;
         } catch (IOException | CompletionException exception) {
             audioAttempted = true;
