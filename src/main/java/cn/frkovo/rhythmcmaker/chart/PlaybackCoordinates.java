@@ -1,7 +1,7 @@
 package cn.frkovo.rhythmcmaker.chart;
 
 public final class PlaybackCoordinates {
-    private static final double PLAYBACK_FLOW_MULTIPLIER = 2.5;
+    private static final double PLAYBACK_FLOW_MULTIPLIER = 0.5;
     public static final double CHART_ORIGIN_Z = -3.0;
     private PlaybackCoordinates() {}
 
