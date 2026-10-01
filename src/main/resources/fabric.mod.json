@@ -27,6 +27,7 @@
     "minecraft": "1.21.11",
     "java": ">=21",
     "fabric-api": "*",
+    "owo": ">=0.13.0+1.21.11",
     "arcade-dimensions": ">=0.8.1-beta.8",
     "arcade-event-registry": ">=0.8.1-beta.8",
     "arcade-events-server": ">=0.8.1-beta.8",

@@ -1,0 +1,25 @@
+# RhythMC-Charter-V2 config
+
+workspace:
+  world: charter_workspace
+
+render:
+  # 编辑态窗口（游标 ± N 拍内的音符参与渲染）
+  window-beats: 8.0
+  # 与 Reborn GameOptions 同域（0.1..5.0）
+  player-speed: 1.0
+
+autosave:
+  seconds: 60
+
+transport:
+  # 插件 beat 换算 ms 与 mod 音频 ms 的对账阈值（>1 tick 且 < PERFECT 窗）
+  sync-threshold-ms: 60
+  muted-audit: true
+
+sessions:
+  max: 8
+
+# 外部谱面导入根目录（/charter open <folder> 在此找 manifest.yml）
+import:
+  root: plugins/RhythMC-Charter-V2/import

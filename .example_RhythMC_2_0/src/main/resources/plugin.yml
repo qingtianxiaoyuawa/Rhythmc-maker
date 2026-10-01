@@ -1,0 +1,35 @@
+name: RhythMC-Charter-V2
+description: In-game charter editor for RhythMC (plugin-led, mod-required)
+prefix: RhythMC
+version: '${version}'
+
+main: cn.frkovo.rhythmcv2.cv2.Main
+api-version: '1.21'
+load: STARTUP
+
+authors: [ Frkovo ]
+website: www.frkovo.cn
+
+commands:
+  charter:
+    description: RhythMC Charter V2 main command
+    aliases: [ cv2 ]
+    permission: rhythmc.charter.session
+    usage: /charter help
+
+permissions:
+  rhythmc.charter.*:
+    default: op
+    children:
+      rhythmc.charter.session: true
+      rhythmc.charter.transport: true
+      rhythmc.charter.admin: true
+  rhythmc.charter.session:
+    description: Open/close/save charter sessions and editing tools
+    default: op
+  rhythmc.charter.transport:
+    description: Transport controls (play/pause/seek/loop/speed)
+    default: op
+  rhythmc.charter.admin:
+    description: Administrative operations
+    default: op

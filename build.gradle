@@ -1,5 +1,3 @@
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 plugins {
     id "fabric-loom" version "1.15.3"
     id "maven-publish"
@@ -12,16 +10,9 @@ base {
     archivesName = project.archives_base_name
 }
 
-def arcadeRuntimeJars = files(
-    "libs/arcade-dimensions.jar",
-    "libs/arcade-event-registry.jar",
-    "libs/arcade-events-server.jar",
-    "libs/arcade-extensions.jar",
-    "libs/arcade-utils.jar"
-)
-
 repositories {
     maven { name = "Fabric"; url = "https://maven.fabricmc.net/" }
+    maven { name = "Wisp Forest"; url = "https://maven.wispforest.io/releases/" }
     mavenCentral()
     maven { name = "JitPack"; url = "https://jitpack.io" }
     flatDir { dirs "libs" }
@@ -32,18 +23,16 @@ dependencies {
     mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
-    include implementation("io.github.spair:imgui-java-binding:${project.imgui_version}")
-    include implementation("io.github.spair:imgui-java-lwjgl3:${project.imgui_version}")
-    include implementation("io.github.spair:imgui-java-natives-windows:${project.imgui_version}")
-    include modImplementation(name: "arcade-dimensions", ext: "jar")
-    include modImplementation(name: "arcade-event-registry", ext: "jar")
-    include modImplementation(name: "arcade-events-server", ext: "jar")
-    include modImplementation(name: "arcade-extensions", ext: "jar")
-    include modImplementation(name: "arcade-utils", ext: "jar")
+    modImplementation "io.wispforest:owo-lib:${project.owo_version}"
+    include modImplementation(group: "net.casual.arcade", name: "arcade-dimensions", version: "0.8.1-beta.8")
+    include modImplementation(group: "net.casual.arcade", name: "arcade-event-registry", version: "0.8.1-beta.8")
+    include modImplementation(group: "net.casual.arcade", name: "arcade-events-server", version: "0.8.1-beta.8")
+    include modImplementation(group: "net.casual.arcade", name: "arcade-extensions", version: "0.8.1-beta.8")
+    include modImplementation(group: "net.casual.arcade", name: "arcade-utils", version: "0.8.1-beta.8")
+    modLocalRuntime files("libs/fabric-language-kotlin.jar")
+    runtimeOnly "org.jetbrains.kotlin:kotlin-stdlib:2.4.20"
+    runtimeOnly "org.jetbrains.kotlin:kotlin-reflect:2.4.20"
     compileOnly files("libs/kotlin-stdlib.jar", "libs/kotlin-reflect.jar")
-    compileOnly files("libs/worldedit-mod-7.4.2.jar")
-    include implementation("com.github.luben:zstd-jni:1.5.7-6")
-    include implementation("org.yaml:snakeyaml:2.4")
 }
 
 processResources {
@@ -55,8 +44,6 @@ processResources {
 
 tasks.withType(JavaCompile).configureEach {
     options.release = 21
-    options.incremental = true
-    options.fork = true
 }
 
 java {
@@ -85,55 +72,18 @@ publishing {
     }
 }
 
-def makerModsDirectory = file("F:/b晴天小雨awa/程序/我的世界PCL/.minecraft/versions/Rhythmc 3.0/mods")
-def makerBackupDirectory = file("bak")
-def makerJarPrefix = "${project.archives_base_name}-"
+def runClientTask = tasks.named("runClient")
 
-tasks.register("deployRhythmcMaker") {
-    group = "distribution"
-    description = "Deploys the versioned RhythMC Maker JAR to the Rhythmc 3.0 instance."
-    dependsOn tasks.named("remapJar")
-    mustRunAfter tasks.named("check")
-
-    doLast {
-        File artifact = tasks.named("remapJar").get().archiveFile.get().asFile
-        if (!artifact.isFile()) throw new GradleException("RhythMC Maker artifact was not produced: ${artifact}")
-
-        Files.createDirectories(makerModsDirectory.toPath())
-        Files.createDirectories(makerBackupDirectory.toPath())
-        File target = new File(makerModsDirectory, "${project.archives_base_name}-${project.version}.jar")
-        List<File> previousMakerJars = (makerModsDirectory.listFiles() ?: [] as File[]).findAll { file ->
-            file.isFile() && file.name.startsWith(makerJarPrefix) && file.name.endsWith(".jar") && file != target
-        }
-        File lockedFallback = null
-
-        previousMakerJars.each { File previous ->
-            File backup = new File(makerBackupDirectory, previous.name.replaceFirst(/\.jar$/, ".bak-${new Date().format('yyyyMMdd-HHmmss')}.jar"))
-            try {
-                Files.move(previous.toPath(), backup.toPath(), StandardCopyOption.REPLACE_EXISTING)
-                logger.lifecycle("Backed up ${previous.name} to ${backup.name}")
-            } catch (IOException exception) {
-                if (previousMakerJars.size() == 1 && !target.exists()) {
-                    lockedFallback = previous
-                    logger.warn("Could not rename locked ${previous.name}; overwriting it without changing its filename.")
-                } else {
-                    throw new GradleException("Could not remove previous RhythMC Maker JAR: ${previous}", exception)
-                }
-            }
-        }
-
-        if (lockedFallback != null) {
-            Files.copy(artifact.toPath(), lockedFallback.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            logger.lifecycle("Deployed ${artifact.name} over locked fallback ${lockedFallback.name}")
-        } else if (target.isFile() && Files.mismatch(artifact.toPath(), target.toPath()) == -1L) {
-            logger.lifecycle("RhythMC Maker ${project.version} is already deployed: ${target.name}")
-        } else {
-            Files.copy(artifact.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            logger.lifecycle("Deployed ${artifact.name} as ${target.name}")
-        }
-    }
+runClientTask.configure {
+    group = "fabric"
+    description = "Starts the Fabric test client with the RhythMC Maker development mod and runtime dependencies."
+    mustRunAfter tasks.named("build")
 }
 
-tasks.named("build") {
-    dependsOn tasks.named("deployRhythmcMaker")
+def buildTask = tasks.named("build")
+
+tasks.register("buildAndRunClient") {
+    group = "fabric"
+    description = "Builds the project, then starts the Fabric test client."
+    dependsOn buildTask, runClientTask
 }
