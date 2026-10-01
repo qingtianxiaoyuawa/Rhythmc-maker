@@ -1,6 +1,7 @@
 package cn.frkovo.rhythmcmaker.chart;
 
 public final class PlaybackCoordinates {
+    private static final double PLAYBACK_FLOW_MULTIPLIER = 2.5;
     public static final double CHART_ORIGIN_Z = -3.0;
     private PlaybackCoordinates() {}
 
@@ -19,17 +20,17 @@ public final class PlaybackCoordinates {
     }
 
     public static double distanceAtBeat(ChartManifest chart, TrackPlayback.Prepared track, double beat, double playerSpeed) {
-        return track.distanceAt(beat) * divisionsPerChunk(chart) * normalizedPlayerSpeed(playerSpeed);
+        return track.distanceAt(beat) * divisionsPerChunk(chart) * normalizedPlayerSpeed(playerSpeed) * PLAYBACK_FLOW_MULTIPLIER;
     }
 
     public static double distanceBetweenBeats(ChartManifest chart, TrackPlayback.Prepared track, double fromBeat, double toBeat, double playerSpeed) {
         return (track.distanceAt(toBeat) - track.distanceAt(fromBeat))
-                * divisionsPerChunk(chart) * normalizedPlayerSpeed(playerSpeed);
+                * divisionsPerChunk(chart) * normalizedPlayerSpeed(playerSpeed) * PLAYBACK_FLOW_MULTIPLIER;
     }
 
     public static double beatAtWorldZ(ChartManifest chart, TrackPlayback.Prepared track, double worldZ, double playerSpeed) {
         double targetDistance = Math.max(0.0, CHART_ORIGIN_Z - worldZ);
-        double factor = divisionsPerChunk(chart) * normalizedPlayerSpeed(playerSpeed);
+        double factor = divisionsPerChunk(chart) * normalizedPlayerSpeed(playerSpeed) * PLAYBACK_FLOW_MULTIPLIER;
         double high = Math.max(1.0, chart == null ? 1.0 : Math.max(chart.totalBeats, chart.chunkCount * 32.0) + 1.0);
         while (track.distanceAt(high) * factor < targetDistance && high < 1_000_000.0) high *= 2.0;
         double low = 0.0;

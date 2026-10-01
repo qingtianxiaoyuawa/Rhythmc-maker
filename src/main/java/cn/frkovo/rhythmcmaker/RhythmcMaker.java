@@ -160,7 +160,7 @@ public final class RhythmcMaker implements ModInitializer {
     // Remove on the judgment line so the model and hit sound stay synchronized.
     private static final double PLAYBACK_DISAPPEAR_Z = PLAYBACK_FRAME_Z;
     private static final int PLAYBACK_DISPLAY_UPDATE_INTERVAL_TICKS = 1;
-    // The maker's base visual flow is five times the previous value: old player speed 5.0 equals new 1.0.
+    // Playback distance uses a 2.5x visual flow multiplier.
 
     private static final int PLAYBACK_START_DELAY_TICKS = 0;
     private static final int SCENE_IMPORT_BLOCKS_PER_TICK = 1024;
@@ -1382,17 +1382,25 @@ public final class RhythmcMaker implements ModInitializer {
         return Math.max(1, chart.chunkCount) * 60.0 / Math.max(1.0, chart.bpm);
     }
     private static void restoreSelectedStartChunk(ServerWorld world, ChartManifest chart, int selectedChunk) {
-        setSelectedStartChunkColumn(world, chart, selectedChunk, Blocks.RED_CONCRETE.getDefaultState());
+        clearSelectedStartChunkColumn(world, chart, selectedChunk);
     }
     private static void markSelectedStartChunk(ServerWorld world, ChartManifest chart, int selectedChunk) {
-        setSelectedStartChunkColumn(world, chart, selectedChunk, Blocks.LIME_CONCRETE.getDefaultState());
+        clearSelectedStartChunkColumn(world, chart, selectedChunk);
+        int z = (int) Math.round(PlaybackCoordinates.editorWorldZAtBeat(chart, Math.max(0, selectedChunk - 1.0)));
+        int left = laneWallLeftX(chart);
+        int right = laneWallRightX(chart);
+        for (int x = left; x <= right; x++) for (int y = 64; y <= 68; y++) {
+            if (x != left && x != right && y != 64 && y != 68) continue;
+            BlockPos pos = new BlockPos(x, y, z);
+            BlockState state = world.getBlockState(pos);
+            if (!isNoteBlock(state.getBlock())) world.setBlockState(pos, Blocks.LIME_CONCRETE.getDefaultState(), 3);
+        }
     }
-    private static void setSelectedStartChunkColumn(ServerWorld world, ChartManifest chart, int selectedChunk, BlockState markerState) {
+    private static void clearSelectedStartChunkColumn(ServerWorld world, ChartManifest chart, int selectedChunk) {
         int z = (int) Math.round(PlaybackCoordinates.editorWorldZAtBeat(chart, Math.max(0, selectedChunk - 1.0)));
         for (int x = laneWallLeftX(chart); x <= laneWallRightX(chart); x++) for (int y = 64; y <= 68; y++) {
             BlockPos pos = new BlockPos(x, y, z);
-            BlockState state = world.getBlockState(pos);
-            if (!isNoteBlock(state.getBlock())) world.setBlockState(pos, markerState, 3);
+            if (world.getBlockState(pos).isOf(Blocks.LIME_CONCRETE)) world.setBlockState(pos, Blocks.RED_CONCRETE.getDefaultState(), 3);
         }
     }
     private static void clearSelectedStartChunkMarkers(ServerWorld world, ChartManifest chart) {

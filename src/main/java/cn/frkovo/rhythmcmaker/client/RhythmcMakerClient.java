@@ -49,6 +49,8 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     private static boolean playbackStopRequested;
     private static double audioDurationSeconds;
     private static double playbackStartSeconds;
+    private static double playbackFrameStartZ;
+    private static double playbackFrameVelocity;
     private static boolean audioAttempted;
     private static Path audioErrorLog;
     private static CompletableFuture<Path> audioPlayerFuture;
@@ -438,8 +440,8 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             Path audio = ClientChartAccess.activeAudioPath();
             if (!Files.isRegularFile(audio)) throw new IOException("音频文件不存在");
             Path player = audioPlayerFuture.join();
-            double startBeat = Math.max(0, startChunk - 1.0);
-            double startSeconds = ChartTiming.beatToSeconds(chart, startBeat);
+            double audioStartBeat = Math.max(0, startChunk - 1.0);
+            double startSeconds = ChartTiming.beatToSeconds(chart, audioStartBeat);
             audioAttempted = true;
             audioErrorLog = Path.of(System.getProperty("java.io.tmpdir"), "rhythmc-maker", "audio-error.log");
             String tempo = tempoFilter(playbackRate);
@@ -453,6 +455,12 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             playbackTrackProfile = PlaybackCoordinates.prepareDefaultTrack(chart);
             playbackTrackSpeed = ClientChartAccess.config().playerSpeed;
             playbackStartSeconds = startSeconds;
+            double startBeat = PlaybackCoordinates.beatAtSongTime(chart, playbackTimingProfile, startSeconds);
+            double sampleSeconds = 1.0 / 20.0;
+            double nextBeat = PlaybackCoordinates.beatAtSongTime(chart, playbackTimingProfile, startSeconds + sampleSeconds);
+            playbackFrameStartZ = PlaybackCoordinates.worldZAtBeat(chart, playbackTrackProfile, startBeat, playbackTrackSpeed);
+            double nextFrameZ = PlaybackCoordinates.worldZAtBeat(chart, playbackTrackProfile, nextBeat, playbackTrackSpeed);
+            playbackFrameVelocity = (nextFrameZ - playbackFrameStartZ) / sampleSeconds;
             audioDurationSeconds = Math.max(0, chart.durationSeconds - startSeconds) / playbackRate;
         } catch (IOException | CompletionException exception) {
             audioAttempted = true;
@@ -485,6 +493,8 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         audioProcess = null;
         audioDurationSeconds = 0;
         playbackStartSeconds = 0;
+        playbackFrameStartZ = 0;
+        playbackFrameVelocity = 0;
         audioStartedAtNanos = 0;
         playbackTimingProfile = null;
         playbackTrackProfile = null;
@@ -509,12 +519,8 @@ public final class RhythmcMakerClient implements ClientModInitializer {
 
         long clockStart = audioStartedAtNanos;
         double elapsed = clockStart <= 0 ? 0.0 : Math.max(0.0, (System.nanoTime() - clockStart) / 1_000_000_000.0) * playbackRate;
-        double currentSeconds = playbackStartSeconds + elapsed;
-        ChartTiming.Prepared timing = playbackTimingProfile;
-        TrackPlayback.Prepared track = playbackTrackProfile;
-        if (timing == null || track == null) return;
-        double beat = PlaybackCoordinates.beatAtSongTime(chart, timing, currentSeconds);
-        double centerZ = PlaybackCoordinates.worldZAtBeat(chart, track, beat, playbackTrackSpeed);
+        if (playbackTimingProfile == null || playbackTrackProfile == null) return;
+        double centerZ = playbackFrameStartZ + playbackFrameVelocity * elapsed;
         int halfWidth = Math.max(0, Math.min(9, chart.laneCount) / 2);
         int left = -halfWidth - 1;
         int right = halfWidth + 1;
