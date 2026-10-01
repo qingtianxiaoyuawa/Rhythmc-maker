@@ -440,7 +440,8 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             Path audio = ClientChartAccess.activeAudioPath();
             if (!Files.isRegularFile(audio)) throw new IOException("音频文件不存在");
             Path player = audioPlayerFuture.join();
-            double audioStartBeat = Math.max(0, startChunk - 1.0);
+            double divisionsPerChunk = Math.max(1.0, Math.min(32.0, chart.divisionsPerChunk));
+            double audioStartBeat = Math.max(0, (startChunk - 1.0) * divisionsPerChunk);
             double startSeconds = ChartTiming.beatToSeconds(chart, audioStartBeat);
             audioAttempted = true;
             audioErrorLog = Path.of(System.getProperty("java.io.tmpdir"), "rhythmc-maker", "audio-error.log");
@@ -455,11 +456,9 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             playbackTrackProfile = PlaybackCoordinates.prepareDefaultTrack(chart);
             playbackTrackSpeed = ClientChartAccess.config().playerSpeed;
             playbackStartSeconds = startSeconds;
-            double startBeat = PlaybackCoordinates.beatAtSongTime(chart, playbackTimingProfile, startSeconds);
             double sampleSeconds = 1.0 / 20.0;
-            double nextBeat = PlaybackCoordinates.beatAtSongTime(chart, playbackTimingProfile, startSeconds + sampleSeconds);
-            playbackFrameStartZ = PlaybackCoordinates.worldZAtBeat(chart, playbackTrackProfile, startBeat, playbackTrackSpeed);
-            double nextFrameZ = PlaybackCoordinates.worldZAtBeat(chart, playbackTrackProfile, nextBeat, playbackTrackSpeed);
+            playbackFrameStartZ = PlaybackCoordinates.editorWorldZAtSongTime(chart, playbackTimingProfile, startSeconds);
+            double nextFrameZ = PlaybackCoordinates.editorWorldZAtSongTime(chart, playbackTimingProfile, startSeconds + sampleSeconds);
             playbackFrameVelocity = (nextFrameZ - playbackFrameStartZ) / sampleSeconds;
             audioDurationSeconds = Math.max(0, chart.durationSeconds - startSeconds) / playbackRate;
         } catch (IOException | CompletionException exception) {

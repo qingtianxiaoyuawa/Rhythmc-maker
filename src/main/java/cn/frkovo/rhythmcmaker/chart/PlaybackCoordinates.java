@@ -49,6 +49,11 @@ public final class PlaybackCoordinates {
         return CHART_ORIGIN_Z - Math.max(0.0, beat) * divisions;
     }
 
+    public static double editorWorldZAtSongTime(ChartManifest chart, ChartTiming.Prepared timing, double songTime) {
+        if (chart == null || timing == null || !Double.isFinite(songTime)) return CHART_ORIGIN_Z;
+        return editorWorldZAtBeat(chart, timing.secondsToBeat(songTime));
+    }
+
     public static double editorBeatAtWorldZ(ChartManifest chart, double worldZ) {
         double divisions = divisionsPerChunk(chart);
         return Math.max(0.0, (CHART_ORIGIN_Z - worldZ) / divisions);
