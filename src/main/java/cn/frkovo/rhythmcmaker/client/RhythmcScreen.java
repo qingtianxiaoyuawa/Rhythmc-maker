@@ -22,22 +22,38 @@ abstract class RhythmcScreen extends BaseOwoScreen<FlowLayout> {
 
     @Override
     protected OwoUIAdapter<FlowLayout> createAdapter() {
-        return OwoUIAdapter.create(this, UIContainers::verticalFlow);
+        return OwoUIAdapter.create(this, () -> UIContainers.verticalFlow(Sizing.fill(), Sizing.fill()));
     }
 
     protected int pageWidth() {
-        return Math.max(280, Math.min(this.width - 18, 760));
+        return Math.max(320, Math.min(this.width - 24, 980));
     }
 
     protected int pageHeight() {
-        return Math.max(220, Math.min(this.height - 18, 430));
+        return Math.max(240, Math.min(this.height - 24, 720));
+    }
+
+    protected FlowLayout scrollPage(FlowLayout page) {
+        int viewportWidth = Math.max(320, Math.min(pageWidth(), this.width - 24));
+        int viewportHeight = Math.max(180, Math.min(pageHeight(), this.height - 24));
+        return UIContainers.verticalScroll(Sizing.fixed(viewportWidth), Sizing.fixed(viewportHeight), page);
     }
 
     protected static FlowLayout layout(FlowLayout layout, int padding, int gap, int background, int outline) {
-        layout.padding(Insets.of(padding));
-        layout.gap(gap);
+        layout.padding(Insets.of(Math.max(7, padding - 2)));
+        layout.gap(Math.max(5, gap - 1));
         layout.surface(Surface.flat(background).and(Surface.outline(outline)));
         return layout;
+    }
+
+    protected static FlowLayout menuHeader(String title, String subtitle, int width) {
+        FlowLayout header = UIContainers.verticalFlow(Sizing.fixed(width), Sizing.content());
+        header.gap(2);
+        header.child(UIComponents.label(Text.literal(title)).shadow(true));
+        if (subtitle != null && !subtitle.isBlank()) {
+            header.child(UIComponents.label(Text.literal(subtitle)));
+        }
+        return header;
     }
 
     protected static FlowLayout spaced(FlowLayout layout, int gap) {
@@ -88,10 +104,10 @@ abstract class RhythmcScreen extends BaseOwoScreen<FlowLayout> {
     }
 
     protected static FlowLayout panel(int width) {
-        return layout(UIContainers.verticalFlow(Sizing.fixed(width), Sizing.content()), 9, 6, 0xDD182332, 0xFF4A607C);
+        return layout(UIContainers.verticalFlow(Sizing.fixed(width), Sizing.content()), 8, 6, 0xE0182635, 0xFF3B526D);
     }
 
     protected static FlowLayout panelFill() {
-        return layout(UIContainers.verticalFlow(Sizing.fill(), Sizing.content()), 9, 6, 0xDD182332, 0xFF4A607C);
+        return layout(UIContainers.verticalFlow(Sizing.fill(), Sizing.content()), 8, 6, 0xE0182635, 0xFF3B526D);
     }
 }

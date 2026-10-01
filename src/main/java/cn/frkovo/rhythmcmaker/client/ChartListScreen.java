@@ -35,15 +35,15 @@ final class ChartListScreen extends RhythmcScreen {
         int pageHeight = pageHeight();
         int listWidth = Math.max(200, Math.min(280, pageWidth * 40 / 100));
         int infoWidth = pageWidth - listWidth - 34;
-        FlowLayout page = layout(UIContainers.horizontalFlow(Sizing.fixed(pageWidth), Sizing.fixed(pageHeight)), 10, 8, 0xEE0E1620, 0xFF5B7596);
+        FlowLayout page = layout(UIContainers.horizontalFlow(Sizing.fixed(pageWidth), Sizing.fixed(pageHeight)), 12, 10, 0xF00E1620, 0xFF344A63);
         page.child(buildListPanel(listWidth));
         page.child(buildWelcomePanel(infoWidth));
         root.child(centered(UIContainers.horizontalFlow(Sizing.fill(), Sizing.fill())).child(page));
     }
 
     private FlowLayout buildListPanel(int width) {
-        FlowLayout panel = layout(UIContainers.verticalFlow(Sizing.fixed(width), Sizing.fill()), 8, 6, 0xDD182332, 0xFF4A607C);
-        panel.child(UIComponents.label(Text.literal("谱面列表")).shadow(true));
+        FlowLayout panel = layout(UIContainers.verticalFlow(Sizing.fixed(width), Sizing.fill()), 10, 7, 0xE0182635, 0xFF3B526D);
+        panel.child(menuHeader("谱面库", "选择谱面继续编辑", width - 20));
         if (!loadError.isBlank()) panel.child(wrappedLabel("读取失败：" + loadError, width - 20));
         FlowLayout entries = spaced(UIContainers.verticalFlow(Sizing.fixed(width - 22), Sizing.content()), 4);
         if (charts.isEmpty()) {
@@ -63,11 +63,13 @@ final class ChartListScreen extends RhythmcScreen {
     }
 
     private FlowLayout buildWelcomePanel(int width) {
-        FlowLayout panel = layout(UIContainers.verticalFlow(Sizing.fixed(width), Sizing.fill()), 8, 7, 0xDD182332, 0xFF4A607C);
-        panel.child(UIComponents.label(Text.literal("谱面信息")).shadow(true));
-        panel.child(wrappedLabel("欢迎使用Rhythmc Maker", width - 20));
+        FlowLayout panel = layout(UIContainers.verticalFlow(Sizing.fixed(width), Sizing.fill()), 10, 7, 0xE0182635, 0xFF3B526D);
+        panel.child(menuHeader("工作区", "创建、导入并管理你的谱面", width - 20));
+        panel.child(wrappedLabel("RhythMC Maker", width - 20));
+        panel.child(UIContainers.verticalFlow(Sizing.fill(), Sizing.expand()));
         panel.child(UIComponents.button(Text.literal("导入谱面"), button -> MinecraftClient.getInstance().setScreen(new ImportChartScreen()))
                 .horizontalSizing(Sizing.fill()).verticalSizing(Sizing.fixed(32)));
         return panel;
     }
 }
+

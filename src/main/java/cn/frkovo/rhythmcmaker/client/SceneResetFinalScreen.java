@@ -15,7 +15,7 @@ final class SceneResetFinalScreen extends RhythmcScreen {
     @Override protected void build(FlowLayout root) {
         root.surface(Surface.VANILLA_TRANSLUCENT);
         FlowLayout page = layout(UIContainers.verticalFlow(Sizing.fixed(pageWidth()), Sizing.content()), 10, 8, 0xEE0E1620, 0xFF5B7596);
-        page.child(UIComponents.label(Text.literal("最后确认")).shadow(true));
+        page.child(menuHeader("最后确认", "重置前请确认当前场景不再需要保留", pageWidth() - 24));
         page.child(wrappedLabel("这是第二次确认。确认后将立即重置 " + scene.name + "。", pageWidth() - 24));
         page.child(UIComponents.button(Text.literal("确认重置"), button -> { ClientSceneAccess.reset(scene.index); close(); }).horizontalSizing(Sizing.fill()));
         page.child(UIComponents.button(Text.literal("返回"), button -> MinecraftClient.getInstance().setScreen(new SceneEditScreen(scene))).horizontalSizing(Sizing.fill()));

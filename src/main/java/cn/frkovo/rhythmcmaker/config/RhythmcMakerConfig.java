@@ -19,6 +19,8 @@ public final class RhythmcMakerConfig {
     public double playerSpeed = 1.0;
     public double musicVolumeMultiplier = 1.0;
     public double noteJudgementVolumeMultiplier = 1.0;
+    public String playbackMode = "formal";
+    public double playbackSpeed = 1.0;
     public boolean preventChunkDisplacement = true;
     public String lobbySidebarContent = "可以在设置修改此处显示内容~";
 
@@ -57,8 +59,16 @@ public final class RhythmcMakerConfig {
         defaultDivisionsPerChunk = Math.max(1, Math.min(32, defaultDivisionsPerChunk));
         playerSpeed = Double.isFinite(playerSpeed) ? Math.max(0.1, Math.min(5.0, playerSpeed)) : 1.0;
         musicVolumeMultiplier = Double.isFinite(musicVolumeMultiplier) ? Math.max(0.1, Math.min(2.0, musicVolumeMultiplier)) : 1.0;
-        noteJudgementVolumeMultiplier = Double.isFinite(noteJudgementVolumeMultiplier) ? Math.max(0.1, Math.min(2.0, noteJudgementVolumeMultiplier)) : 1.0;
+        noteJudgementVolumeMultiplier = Double.isFinite(noteJudgementVolumeMultiplier) ? Math.max(0.1, Math.min(5.0, noteJudgementVolumeMultiplier)) : 1.0;
+        playbackSpeed = Double.isFinite(playbackSpeed) ? normalizePlaybackSpeed(playbackSpeed) : 1.0;
+        if (!"scroll".equals(playbackMode)) playbackMode = "formal";
         if (lobbySidebarContent == null || lobbySidebarContent.isBlank()) lobbySidebarContent = "可以在设置修改此处显示内容~";
         if (lobbySidebarContent.length() > 120) lobbySidebarContent = lobbySidebarContent.substring(0, 120);
+    }
+    private static double normalizePlaybackSpeed(double value) {
+        double[] choices = {0.25, 0.5, 0.75, 1.0, 1.5, 2.0};
+        double nearest = choices[0];
+        for (double choice : choices) if (Math.abs(choice - value) < Math.abs(nearest - value)) nearest = choice;
+        return nearest;
     }
 }

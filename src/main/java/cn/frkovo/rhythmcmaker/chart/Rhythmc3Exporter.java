@@ -85,8 +85,9 @@ public final class Rhythmc3Exporter {
     }
 
     private static void writeChart(Path folder, ChartManifest chart, String arenaKey) throws IOException {
-        double endBeat = Math.max(8.0, chart.totalBeats);
-        if (chart.notes != null) for (ChartManifest.Note note : chart.notes) if (note != null) endBeat = Math.max(endBeat, note.beat + 8.0);
+        ChartTiming.Prepared timing = ChartTiming.prepare(chart);
+        double endBeat = Math.max(8.0, timing.secondsToBeat(Math.max(0.0, chart.durationSeconds)));
+        if (chart.notes != null) for (ChartManifest.Note note : chart.notes) if (note != null) endBeat = Math.max(endBeat, exportBeat(note) + 8.0);
         JsonObject root = new JsonObject();
         JsonObject meta = new JsonObject();
         JsonArray charters = new JsonArray();
@@ -95,48 +96,65 @@ public final class Rhythmc3Exporter {
         meta.addProperty("level", chart.level);
         meta.addProperty("offset", chart.offsetMillis);
         meta.addProperty("uid", positiveId(chart.id) * 10 + difficultyIndex(chart.difficulty));
-        meta.addProperty("initialArena", arenaKey);
+        meta.addProperty("initialArena", chart.initialArena == null || chart.initialArena.isBlank() ? arenaKey : chart.initialArena);
         meta.add("comments", new JsonArray());
         JsonArray bpms = new JsonArray();
-        JsonObject bpm = new JsonObject();
-        bpm.addProperty("beat", 0.0);
-        bpm.addProperty("bpm", chart.bpm);
-        bpms.add(bpm);
+        if (chart.bpms == null || chart.bpms.isEmpty()) {
+            JsonObject bpm = new JsonObject();
+            bpm.addProperty("beat", 0.0);
+            bpm.addProperty("bpm", chart.bpm);
+            bpms.add(bpm);
+        } else for (ChartManifest.BpmEvent event : chart.bpms) {
+            if (event == null || event.bpm <= 0) continue;
+            JsonObject bpm = new JsonObject();
+            bpm.addProperty("beat", event.beat);
+            bpm.addProperty("bpm", event.bpm);
+            bpms.add(bpm);
+        }
         meta.add("bpms", bpms);
         root.add("meta", meta);
 
         JsonArray tracks = new JsonArray();
-        JsonObject track = new JsonObject();
-        track.addProperty("id", 0);
-        track.add("speedEvents", speedEventList(chart, endBeat));
-        track.add("xTransformEvents", eventList(0.0, endBeat, 0.0));
-        track.add("yTransformEvents", eventList(0.0, endBeat, 0.0));
-        track.add("zTransformEvents", eventList(0.0, endBeat, 0.0));
-        track.add("xRotateEvents", eventList(0.0, endBeat, 0.0));
-        track.add("yRotateEvents", eventList(0.0, endBeat, 0.0));
-        track.add("zRotateEvents", eventList(0.0, endBeat, 0.0));
-        track.add("xScaleEvents", eventList(0.0, endBeat, 1.0));
-        track.add("yScaleEvents", eventList(0.0, endBeat, 1.0));
-        track.add("zScaleEvents", eventList(0.0, endBeat, 1.0));
-        JsonArray notes = new JsonArray();
-        if (chart.notes != null) for (ChartManifest.Note note : chart.notes) {
-            if (note == null) continue;
-            JsonObject value = new JsonObject();
-            value.addProperty("noteType", Math.max(0, Math.min(3, note.type)));
-            value.addProperty("beat", note.beat);
-            JsonArray position = new JsonArray(); position.add(note.x); position.add(note.y - 66.0); position.add(0.0); value.add("pos", position);
-            JsonArray scale = new JsonArray(); scale.add(1.0); scale.add(1.0); scale.add(1.0); value.add("scale", scale);
-            JsonArray rotation = new JsonArray(); rotation.add(0.0); rotation.add(0.0); rotation.add(0.0); value.add("rotation", rotation);
-            if (note.type == 2) value.addProperty("holdGroup", -1);
-            notes.add(value);
-        }
-        track.add("notes", notes);
-        tracks.add(track);
+        java.util.Map<Integer, ChartManifest.Track> trackDefinitions = new java.util.LinkedHashMap<>();
+        if (chart.tracks != null) for (ChartManifest.Track value : chart.tracks) if (value != null) trackDefinitions.put(value.id, value);
+        trackDefinitions.computeIfAbsent(0, ChartManifest.Track::new);
+        if (chart.notes != null) for (ChartManifest.Note note : chart.notes) if (note != null) trackDefinitions.computeIfAbsent(note.trackId, ChartManifest.Track::new);
+        for (ChartManifest.Track definition : trackDefinitions.values()) tracks.add(trackJson(chart, definition, endBeat));
         root.add("tracks", tracks);
         JsonArray effects = new JsonArray();
         if (chart.effects != null) for (JsonObject effect : chart.effects) if (effect != null) effects.add(effect.deepCopy());
         root.add("effects", effects);
         Files.writeString(folder.resolve(difficultyFile(chart.difficulty) + ".rmcc"), GSON.toJson(root), StandardCharsets.UTF_8);
+    }
+
+    private static double exportBeat(ChartManifest.Note note) {
+        if (note == null || !Double.isFinite(note.beat)) return 0.0;
+        return note.beat;
+    }
+
+    private static JsonObject trackJson(ChartManifest chart, ChartManifest.Track track, double endBeat) {
+        JsonObject result = new JsonObject(); result.addProperty("id", track.id);
+        result.add("speedEvents", numEventList(track.speedEvents, track.id == 0 ? speedEventList(chart, endBeat) : eventList(0.0, endBeat, 0.0)));
+        result.add("xTransformEvents", numEventList(track.xTransformEvents, eventList(0.0, endBeat, 0.0)));
+        result.add("yTransformEvents", numEventList(track.yTransformEvents, eventList(0.0, endBeat, 0.0)));
+        result.add("zTransformEvents", numEventList(track.zTransformEvents, eventList(0.0, endBeat, 0.0)));
+        result.add("xRotateEvents", numEventList(track.xRotateEvents, eventList(0.0, endBeat, 0.0)));
+        result.add("yRotateEvents", numEventList(track.yRotateEvents, eventList(0.0, endBeat, 0.0)));
+        result.add("zRotateEvents", numEventList(track.zRotateEvents, eventList(0.0, endBeat, 0.0)));
+        result.add("xScaleEvents", numEventList(track.xScaleEvents, eventList(0.0, endBeat, 1.0)));
+        result.add("yScaleEvents", numEventList(track.yScaleEvents, eventList(0.0, endBeat, 1.0)));
+        result.add("zScaleEvents", numEventList(track.zScaleEvents, eventList(0.0, endBeat, 1.0)));
+        JsonArray notes = new JsonArray(); if (chart.notes != null) for (ChartManifest.Note note : chart.notes) if (note != null && note.trackId == track.id) {
+            JsonObject value = new JsonObject(); value.addProperty("noteType", Math.max(0, Math.min(3, note.type))); value.addProperty("beat", exportBeat(note));
+            JsonArray position = new JsonArray(); position.add(note.sourceX == null ? note.x : note.sourceX); position.add(note.sourceY == null ? note.y - 66.0 : note.sourceY); position.add(note.sourceZ == null ? 0.0 : note.sourceZ); value.add("pos", position);
+            JsonArray scale = new JsonArray(); scale.add(note.scaleX); scale.add(note.scaleY); scale.add(note.scaleZ); value.add("scale", scale);
+            JsonArray rotation = new JsonArray(); rotation.add(note.rotationX); rotation.add(note.rotationY); rotation.add(note.rotationZ); value.add("rotation", rotation); value.addProperty("holdGroup", note.holdGroup); notes.add(value);
+        }
+        result.add("notes", notes); return result;
+    }
+    private static JsonArray numEventList(java.util.List<ChartManifest.NumEvent> events, JsonArray fallback) {
+        if (events == null || events.isEmpty()) return fallback;
+        JsonArray result = new JsonArray(); for (ChartManifest.NumEvent event : events) if (event != null) { JsonObject value = new JsonObject(); value.addProperty("startBeat", event.startBeat); value.addProperty("endBeat", event.endBeat); value.addProperty("startValue", event.startValue); value.addProperty("endValue", event.endValue); value.addProperty("easingType", event.easingType); result.add(value); } return result;
     }
 
     private static JsonArray speedEventList(ChartManifest chart, double endBeat) {
@@ -254,3 +272,5 @@ public final class Rhythmc3Exporter {
         private ExportDeleteException(IOException cause) { this.cause = cause; }
     }
 }
+
+

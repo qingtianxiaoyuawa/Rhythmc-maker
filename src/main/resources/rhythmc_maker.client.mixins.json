@@ -3,7 +3,9 @@
   "package": "cn.frkovo.rhythmcmaker.mixin.client",
   "compatibilityLevel": "JAVA_21",
   "client": [
-    "MouseMixin"
+    "MouseMixin",
+    "KeyboardMixin",
+    "MinecraftClientMixin"
   ],
   "injectors": {
     "defaultRequire": 1

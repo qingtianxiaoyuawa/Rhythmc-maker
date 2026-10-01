@@ -7,9 +7,11 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.registry.Registries;
+import net.minecraft.registry.RegistryKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
+import net.minecraft.world.World;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -18,6 +20,7 @@ import java.util.Locale;
 
 final class ClientChartAccess {
     private static ChartManifest activeChart;
+    private static RegistryKey<World> activeChartWorld;
     private ClientChartAccess() {
     }
 
@@ -42,8 +45,16 @@ final class ClientChartAccess {
     }
 
     static ChartManifest importRhythmc3(Path difficultyFile, Path manifestFile, Path stagedAudio) throws IOException { return ChartStorage.importRhythmc3(server(), difficultyFile, manifestFile, stagedAudio); }
+    static ChartManifest importRhythmc2(Path difficultyFile, Path stagedAudio, double bpm, String difficulty, double level) throws IOException { return ChartStorage.importRhythmc2(server(), difficultyFile, stagedAudio, bpm, difficulty, level); }
+    static ChartManifest importRhythmc3(Path difficultyFile, Path manifestFile, Path stagedAudio, List<ImportedScene> scenes) throws IOException {
+        return ChartStorage.importRhythmc3(server(), difficultyFile, manifestFile, stagedAudio, scenes.stream().map(scene -> new ChartStorage.ImportedScene(scene.schem(), scene.info())).toList());
+    }
+    record ImportedScene(Path schem, Path info) {}
 
-    static void setActiveChart(ChartManifest chart) { activeChart = chart; }
+    static void setActiveChart(ChartManifest chart) {
+        activeChart = chart;
+        activeChartWorld = null;
+    }
 
     static ChartManifest activeChart() { return activeChart; }
 
@@ -52,16 +63,19 @@ final class ClientChartAccess {
         if (client.player == null || client.getServer() == null) return activeChart;
         try {
             var serverPlayer = client.getServer().getPlayerManager().getPlayer(client.player.getUuid());
-            var worldKey = serverPlayer == null ? client.player.getEntityWorld().getRegistryKey() : serverPlayer.getEntityWorld().getRegistryKey();
+            RegistryKey<World> worldKey = serverPlayer == null ? client.player.getEntityWorld().getRegistryKey() : serverPlayer.getEntityWorld().getRegistryKey();
+            if (worldKey.equals(activeChartWorld)) return activeChart;
             if (cn.frkovo.rhythmcmaker.ChartDimensionManager.isChartWorld(worldKey)) {
                 ChartManifest chart = ChartStorage.findByDimensionId(client.getServer(), worldKey.getValue().getPath());
                 if (chart != null) activeChart = chart;
+                activeChartWorld = worldKey;
                 return chart == null ? activeChart : chart;
             }
             int slot = cn.frkovo.rhythmcmaker.ChartDimensionManager.slotOf(worldKey);
             if (slot != 0) {
                 ChartManifest chart = ChartStorage.findByEditorSlot(client.getServer(), slot);
                 if (chart != null) activeChart = chart;
+                activeChartWorld = worldKey;
                 return chart == null ? activeChart : chart;
             }
         } catch (IOException ignored) {
@@ -124,3 +138,5 @@ final class ClientChartAccess {
         if (client.player != null) client.player.sendMessage(Text.literal(message), true);
     }
 }
+
+

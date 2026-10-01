@@ -30,7 +30,7 @@ final class ChartInfoScreen extends RhythmcScreen {
         int pageWidth = pageWidth();
         int innerWidth = pageWidth - 38;
         FlowLayout page = layout(UIContainers.verticalFlow(Sizing.fixed(pageWidth), Sizing.fixed(pageHeight())), 10, 6, 0xEE0F1721, 0xFF55779E);
-        page.child(UIComponents.label(Text.literal("谱面信息")).shadow(true));
+        page.child(menuHeader("谱面信息", "查看并调整谱面的基础资料", innerWidth));
         FlowLayout content = spaced(UIContainers.verticalFlow(Sizing.fixed(innerWidth), Sizing.content()), 6);
         addCover(content, innerWidth);
         addInfo(content, innerWidth);

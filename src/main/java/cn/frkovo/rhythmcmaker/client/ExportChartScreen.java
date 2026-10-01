@@ -30,8 +30,8 @@ final class ExportChartScreen extends RhythmcScreen {
         root.surface(Surface.VANILLA_TRANSLUCENT);
         int pageWidth = pageWidth();
         int innerWidth = pageWidth - 38;
-        FlowLayout page = layout(UIContainers.verticalFlow(Sizing.fixed(pageWidth), Sizing.content()), 10, 6, 0xEE101821, 0xFF6689B3);
-        page.child(UIComponents.label(Text.literal("导出 RhythMC 3.0 谱面")).shadow(true));
+        FlowLayout page = layout(UIContainers.verticalFlow(Sizing.fixed(pageWidth), Sizing.content()), 10, 6, 0xEE0F1721, 0xFF55779E);
+        page.child(menuHeader("导出 RhythMC 3.0 谱面", "确认信息后生成可游玩的谱面文件", innerWidth));
         if (chart == null) {
             page.child(UIComponents.label(Text.literal("当前没有可导出的谱面").formatted(Formatting.RED)));
             page.child(UIComponents.button(Text.literal("关闭"), button -> close()).horizontalSizing(Sizing.fixed(100)));

@@ -93,8 +93,8 @@ final class CreateChartScreen extends RhythmcScreen {
         int pageWidth = pageWidth();
         int pageHeight = pageHeight();
         int innerWidth = pageWidth - 38;
-        FlowLayout page = layout(UIContainers.verticalFlow(Sizing.fixed(pageWidth), Sizing.fixed(pageHeight)), 10, 6, 0xEE0F1721, 0xFF55779E);
-        page.child(UIComponents.label(Text.literal("创建谱面")).shadow(true));
+        FlowLayout page = layout(UIContainers.verticalFlow(Sizing.fixed(pageWidth), Sizing.fixed(pageHeight)), 12, 8, 0xF00E1620, 0xFF344A63);
+        page.child(menuHeader("创建谱面", "填写基本信息并准备音频", innerWidth));
 
         FlowLayout form = spaced(UIContainers.verticalFlow(Sizing.fixed(innerWidth), Sizing.content()), 6);
         addCoverSection(form, innerWidth);

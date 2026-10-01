@@ -20,7 +20,7 @@ These instructions apply to the RhythMC Maker Fabric client mod project.
 
 - At the start of each work conversation, follow the RhythMC Maker collaboration protocol: read the unprocessed joint_maker\planner+*.md files only when the current request asks to apply planner guidance, then prioritize the user's current request.
 - After any actual implementation, build, or repair work, write a joint_maker\maker+yyyyMMdd-HHmmss.md record containing the core work summary, workflow, changed files, validation results, unfinished items, blockers, and next-step suggestions. If no work is performed, do not create a maker record.
-- After a successful build, automatically deploy `build\libs\rhythmc-maker-0.1.0.jar` to `F:\b晴天小雨awa\程序\我的世界PCL\.minecraft\versions\Rhythmc 3.0\mods`, replacing the existing Rhythmc Maker mod. Before replacement, move the existing matching Rhythmc Maker JAR to `F:\b晴天小雨awa\RhythMC\rhythmc maker\bak` with a `bak-yyyyMMdd-HHmmss` timestamp suffix. Do not delete unrelated mods or the five separately installed Arcade JARs unless the user explicitly requests it.
+- After a successful build, automatically deploy `build\libs\rhythmc-maker-0.1.0.jar` to `F:\b晴天小雨awa\程序\我的世界PCL\.minecraft\versions\Rhythmc 3.0\mods`, replacing the existing Rhythmc Maker mod. Before replacement, attempt to move the existing matching Rhythmc Maker JAR to `F:\b晴天小雨awa\RhythMC\rhythmc maker\bak` with a `bak-yyyyMMdd-HHmmss` timestamp suffix. If the backup move fails because the JAR is locked, continue with forced overwrite deployment without waiting for confirmation. Do not delete unrelated mods or the five separately installed Arcade JARs unless the user explicitly requests it.
 - Keep Fabric client responsibilities separate from Paper server responsibilities.
 - Preserve RhythMC 3.0 compatibility for `.rmcc`, scene/arena data, timing, BPM, and speed events.
 - Treat `.rmcc` as runtime chart data, `.rmcd` as editor draft data, and `.schem` as scene/arena structure data.
@@ -29,6 +29,15 @@ These instructions apply to the RhythMC Maker Fabric client mod project.
 - Scene preview must distinguish visual occlusion from gameplay collision.
 - Keep changes focused and avoid unrelated refactors.
 - Do not commit changes or create branches unless explicitly requested.
+## Lean Work Protocol
+
+- Work directly in `F:\b晴天小雨awa\RhythMC\rhythmc maker`; inspect only `git status`, applicable `AGENTS.md`, and files relevant to the current request.
+- Read a specified `planner+*.md` only when the user explicitly asks to apply planning guidance; read it once and do not batch-scan or reread planners.
+- Define the smallest change set and acceptance checks before editing; fix root causes and avoid unrelated refactors.
+- Before adding dependencies, check the local Gradle and Java 21 caches; run targeted compilation before `clean build`, and use network resolution only when offline dependencies are missing.
+- Deploy only after a successful build and only when the artifact changed; attempt the standard backup first, then force overwrite immediately if a lock prevents backup.
+- Write exactly one `joint_maker\\maker+yyyyMMdd-HHmmss.md` after each implementation, build, or repair; record changes, checks, deployment, blockers, and unfinished work. Documentation-only rule changes need no build or deployment.
+- Keep final responses limited to actual changes, validation/deployment results, and unfinished items.
 
 ## Validation
 
@@ -36,3 +45,4 @@ These instructions apply to the RhythMC Maker Fabric client mod project.
 - Prefer targeted Gradle tests or checks for changed modules.
 - Do not fix unrelated failures.
 - Report when validation is not run.
+

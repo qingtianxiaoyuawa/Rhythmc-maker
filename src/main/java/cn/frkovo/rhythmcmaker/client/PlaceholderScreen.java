@@ -1,5 +1,6 @@
 package cn.frkovo.rhythmcmaker.client;
 
+import cn.frkovo.rhythmcmaker.chart.ChartTiming;
 import io.wispforest.owo.ui.component.UIComponents;
 import io.wispforest.owo.ui.component.TextBoxComponent;
 import io.wispforest.owo.ui.container.FlowLayout;
@@ -29,8 +30,9 @@ final class PlaceholderScreen extends RhythmcScreen {
 
     protected void build(FlowLayout root) {
         root.surface(Surface.VANILLA_TRANSLUCENT);
-        FlowLayout page = layout(UIContainers.verticalFlow(Sizing.fixed(420), Sizing.content()), 18, 12, 0xEE101821, 0xFF5B7596);
-        page.child(UIComponents.label(Text.literal(title)).shadow(true));
+        int pageWidth = Math.max(320, Math.min(this.width - 24, 520));
+        FlowLayout page = layout(UIContainers.verticalFlow(Sizing.fixed(pageWidth), Sizing.content()), 12, 7, 0xEE0F1721, 0xFF55779E);
+        page.child(menuHeader(title, "RhythMC Maker 设置与工具", pageWidth - 24));
         if (section.equals("awa-menu")) {
             page.child(UIComponents.texture(
                     Identifier.of("rhythmc_maker", "textures/gui/awa_menu.png"),
@@ -59,30 +61,33 @@ final class PlaceholderScreen extends RhythmcScreen {
                 } catch (Exception exception) {
                     ClientChartAccess.status("显示设置保存失败");
                 }
-            }).horizontalSizing(Sizing.fill()));        } else if (section.equals("volume")) {
+            }).horizontalSizing(Sizing.fill()));
+        } else if (section.equals("volume")) {
             var config = ClientChartAccess.config();
             page.child(UIComponents.label(Text.literal("音乐音量倍率（0.1-2.0）")));
             TextBoxComponent musicVolume = UIComponents.textBox(Sizing.fill(), Double.toString(config.musicVolumeMultiplier));
             page.child(musicVolume);
-            page.child(UIComponents.label(Text.literal("音符判定音量倍率（0.1-2.0）")));
+            page.child(UIComponents.label(Text.literal("音符判定音量倍率（0.1-5.0）")));
             TextBoxComponent noteVolume = UIComponents.textBox(Sizing.fill(), Double.toString(config.noteJudgementVolumeMultiplier));
             page.child(noteVolume);
-            page.child(UIComponents.label(Text.literal("1.0 为默认音量，2.0 为增强音量")));
+            page.child(UIComponents.label(Text.literal("1.0 为默认音量，最高可调至 5.0")));
             page.child(UIComponents.button(Text.literal("保存音量设置"), button -> {
                 try {
                     double music = Double.parseDouble(musicVolume.getText().trim());
                     double note = Double.parseDouble(noteVolume.getText().trim());
-                    if (!Double.isFinite(music) || !Double.isFinite(note) || music < 0.1 || music > 2.0 || note < 0.1 || note > 2.0) throw new NumberFormatException();
+                    if (!Double.isFinite(music) || !Double.isFinite(note) || music < 0.1 || music > 2.0 || note < 0.1 || note > 5.0) throw new NumberFormatException();
                     config.musicVolumeMultiplier = music;
                     config.noteJudgementVolumeMultiplier = note;
                     ClientChartAccess.saveConfig(config);
                     ClientChartAccess.status("音量设置已保存");
                 } catch (Exception exception) {
-                    ClientChartAccess.status("音量设置保存失败：请输入 0.1 至 2.0 的数字");
+                    ClientChartAccess.status("音量设置保存失败：音乐请输入 0.1 至 2.0，判定音效请输入 0.1 至 5.0");
                 }
-            }).horizontalSizing(Sizing.fill()));        } else if (section.equals("keys")) {
+            }).horizontalSizing(Sizing.fill()));
+        } else if (section.equals("keys")) {
             page.child(UIComponents.label(Text.literal("飞行速度快捷键：Ctrl+1（1倍）、Ctrl+2（1.5倍）、Ctrl+3（2倍）、Ctrl+4（4倍）")));
             page.child(UIComponents.label(Text.literal("播放起始 Chunk：按住 Alt + 鼠标滚轮，或按住 Alt 后右键当前 Chunk 任意位置")));
+            page.child(UIComponents.label(Text.literal("播放方式与倍速：按住 Shift + 右键播放，打开菜单选择正式播放或滚动播放及倍速（此处仅作说明）")));
             page.child(UIComponents.button(Text.literal("按键选项"), button -> MinecraftClient.getInstance().setScreen(new ControlsOptionsScreen(this, MinecraftClient.getInstance().options))).horizontalSizing(Sizing.fill()));
         } else if (section.equals("chart-settings")) {
             var chart = ClientChartAccess.resolveActiveChart();
@@ -107,10 +112,6 @@ final class PlaceholderScreen extends RhythmcScreen {
             page.child(UIComponents.label(Text.literal("选择传送目标")));
             page.child(UIComponents.button(Text.literal("按 Chunk 传送"), button -> MinecraftClient.getInstance().setScreen(new PlaceholderScreen("快捷传送", "quick-teleport-chunk"))).horizontalSizing(Sizing.fill()));
             page.child(UIComponents.button(Text.literal("按歌曲时间传送"), button -> MinecraftClient.getInstance().setScreen(new PlaceholderScreen("快捷传送", "quick-teleport-time"))).horizontalSizing(Sizing.fill()));
-            page.child(UIComponents.button(Text.literal("传送到播放场景"), button -> {
-                RhythmcMakerClient.sendChartCommand("rhythmc_teleport_playback_scene");
-                close();
-            }).horizontalSizing(Sizing.fill()));
             page.child(UIComponents.button(Text.literal("传送到制谱器平台"), button -> {
                 RhythmcMakerClient.sendChartCommand("rhythmc_teleport_editor_platform");
                 close();
@@ -132,7 +133,7 @@ final class PlaceholderScreen extends RhythmcScreen {
             }).horizontalSizing(Sizing.fill()));
         } else if (section.equals("quick-teleport-time")) {
             var chart = ClientChartAccess.resolveActiveChart();
-            double totalSeconds = chart == null ? 0.0 : chart.durationSeconds > 0.0 ? chart.durationSeconds : chart.totalBeats > 0.0 && chart.bpm > 0.0 ? chart.totalBeats * 60.0 / chart.bpm : Math.max(1, chart.chunkCount) * 60.0 / Math.max(1.0, chart.bpm);
+            double totalSeconds = chart == null ? 0.0 : chart.durationSeconds > 0.0 ? chart.durationSeconds : chart.totalBeats > 0.0 && chart.bpm > 0.0 ? ChartTiming.beatToSeconds(chart, chart.totalBeats) : Math.max(1, chart.chunkCount) * 60.0 / Math.max(1.0, chart.bpm);
             page.child(UIComponents.label(Text.literal("歌曲时间（秒，0 - " + String.format(java.util.Locale.ROOT, "%.2f", totalSeconds) + "）")));
             TextBoxComponent time = UIComponents.textBox(Sizing.fill(), "0");
             numericOnly(time); page.child(time);
@@ -168,7 +169,8 @@ final class PlaceholderScreen extends RhythmcScreen {
                 } catch (Exception exception) {
                     ClientChartAccess.status("设置失败：每Chunk分数为 1-32，轨道宽度为 1/3/5/7/9");
                 }
-            }).horizontalSizing(Sizing.fill()));        } else if (section.equals("editor")) {
+            }).horizontalSizing(Sizing.fill()));
+        } else if (section.equals("editor")) {
             var config = ClientChartAccess.config();
             page.child(UIComponents.label(Text.literal("自动保存间隔（秒）")));
             TextBoxComponent autosave = UIComponents.textBox(Sizing.fill(), Double.toString(config.autosaveIntervalSeconds));
@@ -207,7 +209,7 @@ final class PlaceholderScreen extends RhythmcScreen {
             page.child(UIComponents.label(Text.literal("暂时什么都没有哦")));
         }
         page.child(UIComponents.button(Text.literal("关闭"), button -> close()).horizontalSizing(Sizing.fixed(100)));
-        var scroll = UIContainers.verticalScroll(Sizing.fixed(420), Sizing.fixed(Math.max(180, this.height - 30)), page);
+        var scroll = UIContainers.verticalScroll(Sizing.fixed(pageWidth), Sizing.fixed(Math.max(180, this.height - 30)), page);
         root.child(centered(UIContainers.horizontalFlow(Sizing.fill(), Sizing.fill())).child(scroll));
     }
 
