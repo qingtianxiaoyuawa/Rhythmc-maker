@@ -1,3 +1,5 @@
 # Rhythmc maker
 
-Fabric mod for Minecraft 1.21.11. The first milestone adds a `制谱器` world preset: a void overworld with a temporary bedrock spawn platform at (0, 64, 0).
+Fabric mod for Minecraft 1.21.11.
+
+A useful tool to make Rhythmc3.0 chart
