@@ -23,3 +23,10 @@ hs_err_pid*
 !libs/
 !libs/*.jar
 !gradle/wrapper/gradle-wrapper.jar
+
+# Machine-local and agent context; keep these out of source publishing.
+/AGENTS.md
+/CONTEXT.md
+/_ref137-client-bytecode.txt
+/compile-errors.txt
+/patch.txt

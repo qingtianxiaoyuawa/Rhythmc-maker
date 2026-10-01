@@ -15,6 +15,7 @@ repositories {
     maven { name = "Wisp Forest"; url = "https://maven.wispforest.io/releases/" }
     mavenCentral()
     maven { name = "JitPack"; url = "https://jitpack.io" }
+    maven { name = "EngineHub"; url = "https://maven.enginehub.org/repo/" }
     flatDir { dirs "libs" }
 }
 
@@ -23,16 +24,16 @@ dependencies {
     mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
-    modImplementation "io.wispforest:owo-lib:${project.owo_version}"
+    include modImplementation("io.wispforest:owo-lib:${project.owo_version}")
+    include implementation("org.yaml:snakeyaml:2.4")
+    include implementation("com.github.luben:zstd-jni:1.5.7-6")
+    modCompileOnly "com.sk89q.worldedit:worldedit-fabric-mc1.21.11:7.4.2"
+    compileOnly "org.jetbrains.kotlin:kotlin-stdlib:2.4.20"
     include modImplementation(group: "net.casual.arcade", name: "arcade-dimensions", version: "0.8.1-beta.8")
     include modImplementation(group: "net.casual.arcade", name: "arcade-event-registry", version: "0.8.1-beta.8")
     include modImplementation(group: "net.casual.arcade", name: "arcade-events-server", version: "0.8.1-beta.8")
     include modImplementation(group: "net.casual.arcade", name: "arcade-extensions", version: "0.8.1-beta.8")
     include modImplementation(group: "net.casual.arcade", name: "arcade-utils", version: "0.8.1-beta.8")
-    modLocalRuntime files("libs/fabric-language-kotlin.jar")
-    runtimeOnly "org.jetbrains.kotlin:kotlin-stdlib:2.4.20"
-    runtimeOnly "org.jetbrains.kotlin:kotlin-reflect:2.4.20"
-    compileOnly files("libs/kotlin-stdlib.jar", "libs/kotlin-reflect.jar")
 }
 
 processResources {

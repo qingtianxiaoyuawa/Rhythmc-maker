@@ -71,13 +71,6 @@ final class ClientChartAccess {
                 activeChartWorld = worldKey;
                 return chart == null ? activeChart : chart;
             }
-            int slot = cn.frkovo.rhythmcmaker.ChartDimensionManager.slotOf(worldKey);
-            if (slot != 0) {
-                ChartManifest chart = ChartStorage.findByEditorSlot(client.getServer(), slot);
-                if (chart != null) activeChart = chart;
-                activeChartWorld = worldKey;
-                return chart == null ? activeChart : chart;
-            }
         } catch (IOException ignored) {
         }
         return activeChart;

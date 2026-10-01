@@ -20,13 +20,25 @@ final class ClientSceneAccess {
     static SceneEditStorage.Scene create() throws IOException {
         var player = MinecraftClient.getInstance().player;
         String icon = player == null || player.getMainHandStack().isEmpty() ? null : Registries.ITEM.getId(player.getMainHandStack().getItem()).toString();
-        return RhythmcMaker.createSceneEditor(server(), chartId(), icon);
+        return RhythmcMaker.createSceneEditor(server(), chartId(), icon, player == null ? null : player.getUuid());
     }
     static void save(SceneEditStorage.Scene scene) throws IOException { RhythmcMaker.saveSceneEditor(server(), chartId(), scene); }
     static void reset(int index) { RhythmcMakerClient.sendChartCommand("rhythmc_scene_reset " + index); }
     static void teleport(int index) { RhythmcMakerClient.sendChartCommand("rhythmc_scene_editor " + index); }
     static void delete(int index) { RhythmcMakerClient.sendChartCommand("rhythmc_scene_delete " + index); }
     static void status(String message) { ClientChartAccess.status(message); }
+    static boolean operationBusy() {
+        var player = MinecraftClient.getInstance().player;
+        return player != null && RhythmcMaker.isSceneOperationBusy(player.getUuid());
+    }
+    static String operationStatus() {
+        var player = MinecraftClient.getInstance().player;
+        return player == null ? null : RhythmcMaker.sceneOperationStatus(player.getUuid());
+    }
+    static String consumeOperationNotice() {
+        var player = MinecraftClient.getInstance().player;
+        return player == null ? null : RhythmcMaker.consumeSceneOperationNotice(player.getUuid());
+    }
     private static String chartId() throws IOException {
         var chart = ClientChartAccess.resolveActiveChart();
         if (chart == null || chart.id == null || chart.id.isBlank()) throw new IOException("请先进入谱面维度");

@@ -5,6 +5,7 @@ import io.wispforest.owo.ui.component.LabelComponent;
 import io.wispforest.owo.ui.component.TextBoxComponent;
 import io.wispforest.owo.ui.component.UIComponents;
 import io.wispforest.owo.ui.container.FlowLayout;
+import io.wispforest.owo.ui.container.ScrollContainer;
 import io.wispforest.owo.ui.container.UIContainers;
 import io.wispforest.owo.ui.core.HorizontalAlignment;
 import io.wispforest.owo.ui.core.Insets;
@@ -22,7 +23,7 @@ abstract class RhythmcScreen extends BaseOwoScreen<FlowLayout> {
 
     @Override
     protected OwoUIAdapter<FlowLayout> createAdapter() {
-        return OwoUIAdapter.create(this, () -> UIContainers.verticalFlow(Sizing.fill(), Sizing.fill()));
+        return OwoUIAdapter.create(this, UIContainers::verticalFlow);
     }
 
     protected int pageWidth() {
@@ -33,7 +34,7 @@ abstract class RhythmcScreen extends BaseOwoScreen<FlowLayout> {
         return Math.max(240, Math.min(this.height - 24, 720));
     }
 
-    protected FlowLayout scrollPage(FlowLayout page) {
+    protected ScrollContainer<FlowLayout> scrollPage(FlowLayout page) {
         int viewportWidth = Math.max(320, Math.min(pageWidth(), this.width - 24));
         int viewportHeight = Math.max(180, Math.min(pageHeight(), this.height - 24));
         return UIContainers.verticalScroll(Sizing.fixed(viewportWidth), Sizing.fixed(viewportHeight), page);

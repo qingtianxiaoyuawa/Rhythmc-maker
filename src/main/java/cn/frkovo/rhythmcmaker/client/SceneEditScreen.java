@@ -24,22 +24,24 @@ final class SceneEditScreen extends RhythmcScreen {
 
     @Override protected void build(FlowLayout root) {
         root.surface(Surface.VANILLA_TRANSLUCENT);
-        int viewportHeight = Math.max(180, pageHeight() - 12);
-        FlowLayout page = layout(UIContainers.verticalFlow(Sizing.fixed(pageWidth()), Sizing.fixed(pageHeight())), 10, 8, 0xEE0E1620, 0xFF5B7596);
-        FlowLayout content = UIContainers.verticalFlow(Sizing.fill(), Sizing.content());
-        content.child(menuHeader("场景编辑", "管理场景、图标与搭建入口", pageWidth() - 24));
+        int viewportHeight = Math.max(180, pageHeight() - 24);
+        int contentWidth = pageWidth() - 24;
+        FlowLayout page = layout(UIContainers.verticalFlow(Sizing.fixed(pageWidth()), Sizing.fixed(pageHeight())), 12, 12, 0xEE0E1620, 0xFF5B7596);
+        FlowLayout content = UIContainers.verticalFlow(Sizing.fixed(contentWidth), Sizing.content());
+        content.gap(10);
+        content.child(menuHeader("场景编辑", "管理场景、图标与搭建入口", contentWidth));
         if (selected == null) {
-            content.child(wrappedLabel("新建场景后，使用主手物品作为场景图标。", pageWidth() - 24));
+            content.child(wrappedLabel("新建场景后，使用主手物品作为场景图标。", contentWidth));
             content.child(UIComponents.button(Text.literal("新建场景"), button -> create()).horizontalSizing(Sizing.fill()));
             try {
                 List<SceneEditStorage.Scene> scenes = ClientSceneAccess.list();
-                if (scenes.isEmpty()) content.child(wrappedLabel("暂无场景，请先新建场景。", pageWidth() - 24));
+                if (scenes.isEmpty()) content.child(wrappedLabel("暂无场景，请先新建场景。", contentWidth));
                 for (SceneEditStorage.Scene scene : scenes) {
                     String status = scene.saved ? "已保存" : "未保存";
                     content.child(UIComponents.button(Text.literal(scene.name + "  [" + scene.icon + "]  " + status), button -> MinecraftClient.getInstance().setScreen(new SceneEditScreen(scene))).horizontalSizing(Sizing.fill()));
                 }
             } catch (IOException exception) {
-                content.child(wrappedLabel("读取场景失败：" + exception.getMessage(), pageWidth() - 24));
+                content.child(wrappedLabel("读取场景失败：" + exception.getMessage(), contentWidth));
             }
         } else {
             content.child(UIComponents.label(Text.literal("场景 " + selected.index + " 设置")).shadow(true));
@@ -62,8 +64,8 @@ final class SceneEditScreen extends RhythmcScreen {
     private void create() {
         try {
             SceneEditStorage.Scene scene = ClientSceneAccess.create();
-            ClientSceneAccess.status("已新建 " + scene.name + "，图标使用主手物品");
-            MinecraftClient.getInstance().setScreen(new SceneEditScreen());
+            ClientSceneAccess.status("场景正在生成或重置中，期间请勿进行其他操作");
+            MinecraftClient.getInstance().setScreen(null);
         } catch (IOException exception) { ClientSceneAccess.status("新建场景失败：" + exception.getMessage()); }
     }
 

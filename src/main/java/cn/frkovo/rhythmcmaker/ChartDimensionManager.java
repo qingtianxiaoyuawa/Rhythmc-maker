@@ -22,7 +22,6 @@ import java.util.Locale;
 
 public final class ChartDimensionManager {
     private static final String CHART_PREFIX = "chart_";
-    private static final String LEGACY_SLOT_PREFIX = "chart_slot_";
 
     private ChartDimensionManager() {
     }
@@ -31,9 +30,8 @@ public final class ChartDimensionManager {
         if (chart == null || chart.id == null || chart.id.isBlank()) {
             throw new IOException("谱面没有有效编号");
         }
-        if (chart.dimensionId == null || chart.dimensionId.isBlank()) {
-            chart.dimensionId = stableDimensionId(chart.id);
-        }
+        String expectedDimensionId = stableDimensionId(chart.id);
+        if (!expectedDimensionId.equals(chart.dimensionId)) chart.dimensionId = expectedDimensionId;
         return RegistryKey.of(RegistryKeys.WORLD, Identifier.of(RhythmcMaker.MOD_ID, chart.dimensionId));
     }
 
@@ -45,31 +43,7 @@ public final class ChartDimensionManager {
     public static boolean isChartWorld(RegistryKey<World> key) {
         if (key == null || !RhythmcMaker.MOD_ID.equals(key.getValue().getNamespace())) return false;
         String path = key.getValue().getPath();
-        return path.startsWith(CHART_PREFIX) && !path.startsWith(LEGACY_SLOT_PREFIX);
-    }
-
-    public static boolean isSlotWorld(RegistryKey<World> key) {
-        if (key == null || !RhythmcMaker.MOD_ID.equals(key.getValue().getNamespace())) return false;
-        String path = key.getValue().getPath();
-        if (!path.startsWith(LEGACY_SLOT_PREFIX)) return false;
-        try {
-            return Integer.parseInt(path.substring(LEGACY_SLOT_PREFIX.length())) >= 1;
-        } catch (NumberFormatException ignored) {
-            return false;
-        }
-    }
-
-    public static int slotOf(RegistryKey<World> key) {
-        if (!isSlotWorld(key)) return 0;
-        try {
-            return Integer.parseInt(key.getValue().getPath().substring(LEGACY_SLOT_PREFIX.length()));
-        } catch (NumberFormatException ignored) {
-            return 0;
-        }
-    }
-
-    public static boolean assignSlot(MinecraftServer server, ChartManifest chart) {
-        return false;
+        return path.startsWith(CHART_PREFIX) && !path.startsWith("chart_slot_");
     }
 
     public static ServerWorld getOrCreate(MinecraftServer server, ChartManifest chart) throws IOException {
@@ -97,8 +71,9 @@ public final class ChartDimensionManager {
         try {
             for (ChartManifest chart : ChartStorage.list(server)) {
                 if (chart.id == null || chart.id.isBlank()) continue;
-                boolean migrated = chart.dimensionId == null || chart.dimensionId.isBlank();
+                String previousDimensionId = chart.dimensionId;
                 key(chart);
+                boolean migrated = !chart.dimensionId.equals(previousDimensionId);
                 if (migrated) ChartStorage.update(server, chart);
                 ServerWorld world = getOrCreate(server, chart);
                 RhythmcMaker.LOGGER.info("Loaded Rhythmc chart dimension {} -> {} ({})",

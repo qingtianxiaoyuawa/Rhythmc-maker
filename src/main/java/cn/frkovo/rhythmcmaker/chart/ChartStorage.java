@@ -111,7 +111,7 @@ public final class ChartStorage {
                         }
                         note.x = note.sourceX == null ? 0.0 : note.sourceX;
                         note.y = type == 2 ? 65.0 : (note.sourceY == null ? 0.0 : note.sourceY) + 66.0;
-                        note.z = -3.0 - note.beat * chart.divisionsPerChunk;
+                        note.z = PlaybackCoordinates.editorWorldZAtBeat(chart, note.beat);
                         chart.notes.add(note);
                         chart.totalBeats = Math.max(chart.totalBeats, note.beat);
                     }
@@ -233,7 +233,7 @@ public final class ChartStorage {
             readVector(noteSource, "pos", values -> { note.sourceX = values[0]; note.sourceY = values[1]; note.sourceZ = values[2]; note.x = values[0]; note.y = values[1] + 66; });
             readVector(noteSource, "scale", values -> { note.scaleX = values[0]; note.scaleY = values[1]; note.scaleZ = values[2]; });
             readVector(noteSource, "rotation", values -> { note.rotationX = values[0]; note.rotationY = values[1]; note.rotationZ = values[2]; });
-            note.z = -3.0 - note.beat * chart.divisionsPerChunk; chart.notes.add(note); chart.totalBeats = Math.max(chart.totalBeats, note.beat);
+            note.z = PlaybackCoordinates.editorWorldZAtBeat(chart, note.beat); chart.notes.add(note); chart.totalBeats = Math.max(chart.totalBeats, note.beat);
         }
     }
     private interface VectorConsumer { void accept(double[] values); }
@@ -399,18 +399,10 @@ public final class ChartStorage {
         return GSON.fromJson(Files.readString(path, StandardCharsets.UTF_8), CHART_TYPE);
     }
 
-    public static ChartManifest findByEditorSlot(MinecraftServer server, int editorSlot) throws IOException {
-        if (editorSlot < 1) return null;
-        for (ChartManifest chart : list(server)) {
-            if (chart.editorSlot == editorSlot) return chart;
-        }
-        return null;
-    }
-
     public static ChartManifest findByDimensionId(MinecraftServer server, String dimensionId) throws IOException {
         if (dimensionId == null || dimensionId.isBlank()) return null;
         for (ChartManifest chart : list(server)) {
-            if (dimensionId.equals(chart.dimensionId)) return chart;
+            if (cn.frkovo.rhythmcmaker.ChartDimensionManager.stableDimensionId(chart.id).equals(dimensionId)) return chart;
         }
         return null;
     }

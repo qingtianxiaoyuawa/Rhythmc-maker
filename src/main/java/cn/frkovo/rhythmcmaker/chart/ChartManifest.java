@@ -27,8 +27,6 @@ public final class ChartManifest {
     public double totalBeats;
     public int chunkCount;
     public int trackLength;
-    /** Legacy static editor-dimension slot retained for old manifests. */
-    public int editorSlot;
     /** Persisted stable dynamic editor-dimension path. */
     public String dimensionId;
     /** Persisted playback start chunk for this chart. */

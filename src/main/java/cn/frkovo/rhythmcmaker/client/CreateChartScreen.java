@@ -80,8 +80,7 @@ final class CreateChartScreen extends RhythmcScreen {
         copy.totalBeats = source.totalBeats;
         copy.chunkCount = source.chunkCount;
         copy.trackLength = source.trackLength;
-        copy.editorSlot = source.editorSlot;
-        copy.dimensionId = source.dimensionId;
+        copy.dimensionId = null;
         copy.selectedStartChunk = source.selectedStartChunk;
         copy.notes = new java.util.ArrayList<>(source.notes);
         return copy;

@@ -32,7 +32,7 @@ final class PlaceholderScreen extends RhythmcScreen {
         root.surface(Surface.VANILLA_TRANSLUCENT);
         int pageWidth = Math.max(320, Math.min(this.width - 24, 520));
         FlowLayout page = layout(UIContainers.verticalFlow(Sizing.fixed(pageWidth), Sizing.content()), 12, 7, 0xEE0F1721, 0xFF55779E);
-        page.child(menuHeader(title, "RhythMC Maker 设置与工具", pageWidth - 24));
+        page.child(menuHeader(title, section.equals("awa-menu") ? null : "RhythMC Maker 设置与工具", pageWidth - 24));
         if (section.equals("awa-menu")) {
             page.child(UIComponents.texture(
                     Identifier.of("rhythmc_maker", "textures/gui/awa_menu.png"),
