@@ -1928,8 +1928,8 @@ private static void showSceneBoundary(MinecraftServer server) {
                     if (display == null) continue;
                     display.addCommandTag("rhythmc_preview:" + player.getUuid());
                     display.setGlowing(true);
-                    session.updateGlowTeam();
                     session.displays.put(note.id, display);
+                    session.updateGlowTeam();
                     preloadedThisTick++;
                 }
             }
@@ -2011,13 +2011,13 @@ private static void showSceneBoundary(MinecraftServer server) {
         double y = effectDouble(effect, "y", PLAYBACK_PLATFORM_Y + 1.5);
         double z = effectDouble(effect, "z", PLAYBACK_PLATFORM_Z + 0.5);
         switch (type) {
-            case "GLOW_COLOR" -> { session.noteGlowColor = effectFormatting(effect, "color", Formatting.WHITE); session.updateGlowTeam(); }
+            case "GLOW_COLOR" -> session.updateGlowTeam();
             case "HIDE_NOTES" -> session.updateHiddenNotes(effect);
             case "TITLE", "ACTIONBAR", "MESSAGE" -> { if (!text.isBlank()) player.sendMessage(Text.literal(text), "CHAT".equalsIgnoreCase(effectString(effect, "type", "ACTIONBAR")) ? false : true); }
             case "TEXT_DISPLAY", "TEXT_DISPLAY_EFFECT", "TEXT_DISPLAY_SYNC_TRACK", "TEXT_DISPLAY_DESYNC_TRACK", "TEXT_DISPLAY_REMOVE", "HOLOGRAM", "REMOVE_HOLOGRAM" -> session.applyTextEffect(effect);
             case "EFFECT" -> session.applyPotionProxy(player, effect);
             case "CLEAR_EFFECT" -> player.clearStatusEffects();
-            case "TIME" -> session.applyTime(effect);
+            case "TIME" -> session.applyTime(player, effect);
             case "WEATHER" -> session.applyWeather(effect);
             case "ARENA", "CHANGE_ARENA" -> session.applyArena(effect);
             case "FIREWORK" -> session.launchFirework(x, y, z);
@@ -2076,6 +2076,7 @@ private static void showSceneBoundary(MinecraftServer server) {
     private static JsonObject effectProperties(JsonObject effect) { return effect != null && effect.has("properties") && effect.get("properties").isJsonObject() ? effect.getAsJsonObject("properties") : new JsonObject(); }
     private static void stopPlayback(MinecraftServer server, ServerPlayerEntity player, boolean returnPlayer) {
         ScrollJudgementSession scrollSession = SCROLL_JUDGEMENT_SESSIONS.remove(player.getUuid());
+        player.clearStatusEffects();
         if (scrollSession != null) return;
         PlaybackSession session = PLAYBACK_SESSIONS.remove(player.getUuid());
         if (session == null) return;
@@ -2156,8 +2157,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final java.util.List<JsonObject> effects;
         private final Set<Integer> hiddenNoteTypes = new java.util.HashSet<>();
         private final Set<Integer> hiddenTracks = new java.util.HashSet<>();
-        private Formatting noteGlowColor = Formatting.WHITE;
-        private Team glowTeam;
+        private final Map<Integer, Team> glowTeams = new java.util.HashMap<>();
         private final Map<String, ChartManifest.Note> notesById = new java.util.HashMap<>();
         private final Map<String, Double> noteTimes = new java.util.HashMap<>();
 
@@ -2249,25 +2249,30 @@ private static void showSceneBoundary(MinecraftServer server) {
             }
         }
         private void updateGlowTeam() {
-            if (glowTeam == null) {
-                glowTeam = world.getScoreboard().getTeam("rhythmc_preview_glow");
-                if (glowTeam == null) glowTeam = world.getScoreboard().addTeam("rhythmc_preview_glow");
-            }
-            glowTeam.setColor(noteGlowColor);
-            for (DisplayEntity.BlockDisplayEntity display : displays.values()) {
+            for (var entry : displays.entrySet()) {
+                DisplayEntity.BlockDisplayEntity display = entry.getValue();
+                ChartManifest.Note note = notesById.get(entry.getKey());
+                Team team = glowTeams.computeIfAbsent(note == null ? 0 : note.type, this::createGlowTeam);
+                for (Team existing : glowTeams.values()) world.getScoreboard().removeScoreHolderFromTeam(display.getNameForScoreboard(), existing);
                 display.setGlowing(true);
-                world.getScoreboard().addScoreHolderToTeam(display.getNameForScoreboard(), glowTeam);
+                world.getScoreboard().addScoreHolderToTeam(display.getNameForScoreboard(), team);
             }
         }
+        private Team createGlowTeam(int type) {
+            String suffix = type == 3 ? "red" : type == 2 ? "diamond" : "white";
+            String name = "rhythmc_preview_glow_" + suffix;
+            Team team = world.getScoreboard().getTeam(name);
+            if (team == null) team = world.getScoreboard().addTeam(name);
+            team.setColor(type == 3 ? Formatting.RED : type == 2 ? Formatting.AQUA : Formatting.WHITE);
+            return team;
+        }
         private void clearGlowTeam() {
-            if (glowTeam != null) {
-                for (DisplayEntity.BlockDisplayEntity display : displays.values()) {
-                    world.getScoreboard().removeScoreHolderFromTeam(display.getNameForScoreboard(), glowTeam);
-                    display.setGlowing(false);
-                }
-                if (world.getScoreboard().getTeam(glowTeam.getName()) == glowTeam) world.getScoreboard().removeTeam(glowTeam);
-                glowTeam = null;
+            for (DisplayEntity.BlockDisplayEntity display : displays.values()) {
+                for (Team team : glowTeams.values()) world.getScoreboard().removeScoreHolderFromTeam(display.getNameForScoreboard(), team);
+                display.setGlowing(false);
             }
+            for (Team team : glowTeams.values()) if (world.getScoreboard().getTeam(team.getName()) == team) world.getScoreboard().removeTeam(team);
+            glowTeams.clear();
         }
         private void applyPotionProxy(ServerPlayerEntity player, JsonObject effect) {
             String type = effectString(effect, "type", effectString(effect, "effect", effectString(effect, "potion", "UNKNOWN")));
@@ -2289,9 +2294,13 @@ private static void showSceneBoundary(MinecraftServer server) {
             } catch (RuntimeException exception) {
                 LOGGER.warn("Failed to apply RhythMC potion effect '{}'", type, exception);
             }
-        }        private void applyTime(JsonObject effect) {
-            long time = (long) effectDouble(effect, "time", effectDouble(effect, "timeOfDay", effectDouble(effect, "worldTime", effectDouble(effect, "value", world.getTimeOfDay()))));
-            world.setTimeOfDay(Math.max(0L, time));
+        }
+        private void applyTime(ServerPlayerEntity player, JsonObject effect) {
+            long time = Math.max(0L, (long) effectDouble(effect, "time", effectDouble(effect, "timeOfDay", effectDouble(effect, "worldTime", effectDouble(effect, "value", world.getTimeOfDay())))));
+            boolean clientOnly = effectBoolean(effect, "client", false);
+            if (!clientOnly) world.setTimeOfDay(time);
+            player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.WorldTimeUpdateS2CPacket(
+                    world.getTime(), time, true));
         }
         private void applyWeather(JsonObject effect) {
             String weather = effectString(effect, "weather", effectString(effect, "type", "clear")).toLowerCase(java.util.Locale.ROOT);
@@ -2301,6 +2310,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private double calculateEndSeconds() {
             double end = chart.durationSeconds + chart.offsetMillis / 1000.0;
             for (double noteTime : noteTimes.values()) if (Double.isFinite(noteTime)) end = Math.max(end, noteTime);
+            for (JsonObject effect : effects) end = Math.max(end, effectSeconds(effect));
             return Math.max(0.0, end) + 0.1;
         }
         private double effectSeconds(JsonObject effect) {

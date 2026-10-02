@@ -71,7 +71,7 @@ public final class ChartStorage {
         chart.coverItemId = coverItemId("minecraft:note_block");
         chart.difficulty = difficulty;
         chart.bpm = bpm;
-        chart.divisionsPerChunk = 12;
+        chart.divisionsPerChunk = RhythmcMaker.defaultDivisionsPerChunk();
         chart.bpms.add(new ChartManifest.BpmEvent(0, chart.bpm));
         chart.offsetMillis = Math.round(jsonNumber(meta, "offset", 0).doubleValue() * 50.0);
         chart.level = level;
@@ -210,7 +210,7 @@ public final class ChartStorage {
         create(server, chart, stagedAudio); return chart;
     }
     private static int readDivisionsPerChunk(JsonObject meta) {
-        int divisions = jsonNumber(meta, "divisionsPerChunk", jsonNumber(meta, "beatsPerChunk", jsonNumber(meta, "divisions", 4))).intValue();
+        int divisions = jsonNumber(meta, "divisionsPerChunk", jsonNumber(meta, "beatsPerChunk", jsonNumber(meta, "divisions", RhythmcMaker.defaultDivisionsPerChunk()))).intValue();
         return Math.max(1, Math.min(32, divisions));
     }
     private static void importRhythmc3Track(ChartManifest chart, ChartTiming.Prepared timing, JsonObject source) {
@@ -253,9 +253,9 @@ public final class ChartStorage {
         return result;
     }
     private static JsonObject convertRhythmc2Effect(JsonObject old, double bpm, int divisions) {
-        String legacy = firstJsonString(old, "effect-type", "eventType", firstJsonString(old, "type", "", "")).toUpperCase(java.util.Locale.ROOT).replace(" ", "").replace("_", "").replace("-", "");
+        String legacy = firstJsonString(old, "effect-type", "eventType", firstJsonString(old, "effectType", "type", "")).toUpperCase(java.util.Locale.ROOT).replace(" ", "").replace("_", "").replace("-", "");
         if (legacy.equals("SPEED") || legacy.equals("JUDGEDOT")) return null;
-        String type = switch (legacy) { case "REMOVEHOLOGRAM" -> "REMOVE_HOLOGRAM"; case "INVERT", "POTION", "POTIONEFFECT", "STATUSEFFECT" -> "EFFECT"; case "CLREFFECT" -> "CLEAR_EFFECT"; case "COLOR" -> "GLOW_COLOR"; case "VISIBLE" -> "HIDE_NOTES"; case "TEXT" -> "TEXT_DISPLAY"; case "TRANSFORMATIONS" -> "TEXT_DISPLAY_EFFECT"; case "CLIENTTIME", "WORLDTIME", "SETTIME" -> "TIME"; default -> legacy; };
+        String type = switch (legacy) { case "REMOVEHOLOGRAM" -> "REMOVE_HOLOGRAM"; case "INVERT", "POTION", "POTIONEFFECT", "STATUSEFFECT" -> "EFFECT"; case "CLREFFECT" -> "CLEAR_EFFECT"; case "COLOR" -> "GLOW_COLOR"; case "VISIBLE" -> "HIDE_NOTES"; case "TEXT" -> "TEXT_DISPLAY"; case "TRANSFORMATIONS" -> "TEXT_DISPLAY_EFFECT"; case "CLIENTTIME", "SETCLIENTTIME", "TIMECLIENT", "WORLDTIME", "SETWORLDTIME", "SETTIME" -> "TIME"; default -> legacy; };
         if (type.isBlank()) return null;
         JsonObject converted = new JsonObject(); converted.addProperty("eventType", type);
         double tick = jsonNumber(old, "start-tick", jsonNumber(old, "beat", 0)).doubleValue(); converted.addProperty("beat", snapLegacyBeat(Math.max(0.0, tick / 20.0) * bpm / 60.0, divisions));
@@ -265,8 +265,9 @@ public final class ChartStorage {
             String potion = firstJsonString(old, "effect", "potion", firstJsonString(old, "effect-id", "potion-effect", "UNKNOWN"));
             properties.addProperty("type", potion);
         }
+        if (type.equals("TIME") && (legacy.contains("CLIENTTIME") || legacy.contains("TIMECLIENT"))) properties.addProperty("client", true);
         if (type.equals("TIME") && !properties.has("time")) {
-            Number time = jsonNumber(old, "time-of-day", jsonNumber(old, "world-time", jsonNumber(old, "value", 1000)));
+            Number time = jsonNumber(old, "time-of-day", jsonNumber(old, "world-time", jsonNumber(old, "client-time", jsonNumber(old, "clientTime", jsonNumber(old, "value", 1000)))));
             properties.addProperty("time", time);
         }
         if (legacy.equals("VISIBLE")) properties.addProperty("hidden", !old.has("visible") || !old.get("visible").getAsBoolean());
@@ -331,6 +332,7 @@ public final class ChartStorage {
         if (chart.difficulty == null || chart.difficulty.isBlank()) throw new IOException("必须选择难度");
         if (chart.bpm <= 0) throw new IOException("BPM 必须大于 0");
         if (chart.level < 0) throw new IOException("定数不能小于 0");
+        if (chart.divisionsPerChunk <= 0) chart.divisionsPerChunk = RhythmcMaker.defaultDivisionsPerChunk();
         if (stagedAudio == null || !Files.exists(stagedAudio)) throw new IOException("必须上传歌曲文件");
 
         String extension = extensionOf(stagedAudio.getFileName().toString());
