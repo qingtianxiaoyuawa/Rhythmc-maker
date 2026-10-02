@@ -110,7 +110,12 @@ public final class ChartStorage {
                             note.sourceY = 0.0;
                         }
                         note.x = note.sourceX == null ? 0.0 : note.sourceX;
-                        note.y = type == 2 ? 65.0 : (note.sourceY == null ? 0.0 : note.sourceY) + 66.0;
+                        if (type == 2) {
+                            note.sourceY = -1.0;
+                            note.y = 65.0;
+                        } else {
+                            note.y = (note.sourceY == null ? 0.0 : note.sourceY) + 66.0;
+                        }
                         note.z = PlaybackCoordinates.editorWorldZAtBeat(chart, note.beat);
                         chart.notes.add(note);
                         chart.totalBeats = Math.max(chart.totalBeats, note.beat);
@@ -248,14 +253,22 @@ public final class ChartStorage {
         return result;
     }
     private static JsonObject convertRhythmc2Effect(JsonObject old, double bpm, int divisions) {
-        String legacy = firstJsonString(old, "effect-type", "eventType", firstJsonString(old, "type", "", "")).toUpperCase(java.util.Locale.ROOT).replace(" ", "");
+        String legacy = firstJsonString(old, "effect-type", "eventType", firstJsonString(old, "type", "", "")).toUpperCase(java.util.Locale.ROOT).replace(" ", "").replace("_", "").replace("-", "");
         if (legacy.equals("SPEED") || legacy.equals("JUDGEDOT")) return null;
-        String type = switch (legacy) { case "REMOVEHOLOGRAM" -> "REMOVE_HOLOGRAM"; case "INVERT" -> "EFFECT"; case "CLREFFECT" -> "CLEAR_EFFECT"; case "COLOR" -> "GLOW_COLOR"; case "VISIBLE" -> "HIDE_NOTES"; case "TEXT" -> "TEXT_DISPLAY"; case "TRANSFORMATIONS" -> "TEXT_DISPLAY_EFFECT"; default -> legacy; };
+        String type = switch (legacy) { case "REMOVEHOLOGRAM" -> "REMOVE_HOLOGRAM"; case "INVERT", "POTION", "POTIONEFFECT", "STATUSEFFECT" -> "EFFECT"; case "CLREFFECT" -> "CLEAR_EFFECT"; case "COLOR" -> "GLOW_COLOR"; case "VISIBLE" -> "HIDE_NOTES"; case "TEXT" -> "TEXT_DISPLAY"; case "TRANSFORMATIONS" -> "TEXT_DISPLAY_EFFECT"; case "CLIENTTIME", "WORLDTIME", "SETTIME" -> "TIME"; default -> legacy; };
         if (type.isBlank()) return null;
         JsonObject converted = new JsonObject(); converted.addProperty("eventType", type);
         double tick = jsonNumber(old, "start-tick", jsonNumber(old, "beat", 0)).doubleValue(); converted.addProperty("beat", snapLegacyBeat(Math.max(0.0, tick / 20.0) * bpm / 60.0, divisions));
         JsonObject properties = old.deepCopy(); properties.remove("effect-type"); properties.remove("start-tick"); properties.remove("beat");
         if (legacy.equals("INVERT")) properties.addProperty("type", "BLINDNESS");
+        if (type.equals("EFFECT") && !properties.has("type")) {
+            String potion = firstJsonString(old, "effect", "potion", firstJsonString(old, "effect-id", "potion-effect", "UNKNOWN"));
+            properties.addProperty("type", potion);
+        }
+        if (type.equals("TIME") && !properties.has("time")) {
+            Number time = jsonNumber(old, "time-of-day", jsonNumber(old, "world-time", jsonNumber(old, "value", 1000)));
+            properties.addProperty("time", time);
+        }
         if (legacy.equals("VISIBLE")) properties.addProperty("hidden", !old.has("visible") || !old.get("visible").getAsBoolean());
         converted.add("properties", properties); return converted;
     }

@@ -431,7 +431,7 @@ public final class RhythmcMaker implements ModInitializer {
         world.getGameRules().setValue(GameRules.RESPAWN_RADIUS, 0, server);
         cleanupOrphanedPlaybackDisplays(world);
         world.getGameRules().setValue(GameRules.TNT_EXPLODES, false, server);
-        world.getGameRules().setValue(GameRules.ADVANCE_TIME, false, server);
+        world.getGameRules().setValue(GameRules.ADVANCE_TIME, true, server);
         world.setTimeOfDay(1000L);
         ((ServerWorldProperties) world.getLevelProperties()).setGameMode(GameMode.CREATIVE);
         world.setSpawnPoint(WorldProperties.SpawnPoint.create(world.getRegistryKey(), EDITOR_SPAWN, 0.0f, 0.0f));
@@ -2069,6 +2069,10 @@ private static void showSceneBoundary(MinecraftServer server) {
         try { JsonObject properties = effectProperties(effect); return effect != null && effect.has(key) ? effect.get(key).getAsFloat() : properties.has(key) ? properties.get(key).getAsFloat() : fallback; }
         catch (RuntimeException ignored) { return fallback; }
     }
+    private static boolean effectBoolean(JsonObject effect, String key, boolean fallback) {
+        try { JsonObject properties = effectProperties(effect); return effect != null && effect.has(key) ? effect.get(key).getAsBoolean() : properties.has(key) ? properties.get(key).getAsBoolean() : fallback; }
+        catch (RuntimeException ignored) { return fallback; }
+    }
     private static JsonObject effectProperties(JsonObject effect) { return effect != null && effect.has("properties") && effect.get("properties").isJsonObject() ? effect.getAsJsonObject("properties") : new JsonObject(); }
     private static void stopPlayback(MinecraftServer server, ServerPlayerEntity player, boolean returnPlayer) {
         ScrollJudgementSession scrollSession = SCROLL_JUDGEMENT_SESSIONS.remove(player.getUuid());
@@ -2266,10 +2270,27 @@ private static void showSceneBoundary(MinecraftServer server) {
             }
         }
         private void applyPotionProxy(ServerPlayerEntity player, JsonObject effect) {
-            player.sendMessage(Text.literal("药水效果：" + effectString(effect, "type", "UNKNOWN")), true);
-        }
-        private void applyTime(JsonObject effect) {
-            long time = (long) effectDouble(effect, "time", effectDouble(effect, "value", world.getTimeOfDay()));
+            String type = effectString(effect, "type", effectString(effect, "effect", effectString(effect, "potion", "UNKNOWN")));
+            if (type.isBlank() || type.equalsIgnoreCase("UNKNOWN")) {
+                LOGGER.warn("Skipping RhythMC potion effect without a type: {}", effect);
+                return;
+            }
+            try {
+                net.minecraft.util.Identifier id = net.minecraft.util.Identifier.of(type.contains(":") ? type : "minecraft:" + type.toLowerCase(java.util.Locale.ROOT));
+                var entry = net.minecraft.registry.Registries.STATUS_EFFECT.getEntry(id).orElse(null);
+                if (entry == null) {
+                    LOGGER.warn("Unknown RhythMC potion effect '{}': {}", type, effect);
+                    return;
+                }
+                int amplifier = Math.max(0, Math.min(255, effectInt(effect, "amplifier", effectInt(effect, "level", 0))));
+                int duration = Math.max(1, effectInt(effect, "duration", 100));
+                player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(entry, duration, amplifier,
+                        effectBoolean(effect, "ambient", false), effectBoolean(effect, "particles", true), true));
+            } catch (RuntimeException exception) {
+                LOGGER.warn("Failed to apply RhythMC potion effect '{}'", type, exception);
+            }
+        }        private void applyTime(JsonObject effect) {
+            long time = (long) effectDouble(effect, "time", effectDouble(effect, "timeOfDay", effectDouble(effect, "worldTime", effectDouble(effect, "value", world.getTimeOfDay()))));
             world.setTimeOfDay(Math.max(0L, time));
         }
         private void applyWeather(JsonObject effect) {
