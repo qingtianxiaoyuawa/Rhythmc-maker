@@ -739,6 +739,7 @@ public final class RhythmcMaker implements ModInitializer {
             repositionNotes(chart);
             chart.trackLength = calculateTrackLength(chart);
             saveChart(source.getServer(), chart);
+            if (editor != null) CHART_CACHE_BY_WORLD.put(editor.getRegistryKey(), chart);
             if (editor != null) {
                 EDITOR_TRACK_REBUILD_TASKS.put(editor.getRegistryKey(), new EditorTrackRebuildTask(
                         editor.getRegistryKey(), 0, previousTrackLength, chart.trackLength,
@@ -3102,8 +3103,6 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
     }
 }
-
-
 
 
 

@@ -76,6 +76,29 @@ final class ClientChartAccess {
         return activeChart;
     }
 
+    static boolean refreshActiveChartIfChanged() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.player == null || client.getServer() == null) return false;
+        try {
+            var serverPlayer = client.getServer().getPlayerManager().getPlayer(client.player.getUuid());
+            RegistryKey<World> worldKey = serverPlayer == null ? client.player.getEntityWorld().getRegistryKey() : serverPlayer.getEntityWorld().getRegistryKey();
+            if (!cn.frkovo.rhythmcmaker.ChartDimensionManager.isChartWorld(worldKey)) return false;
+            ChartManifest fresh = ChartStorage.findByDimensionId(client.getServer(), worldKey.getValue().getPath());
+            if (fresh == null) return false;
+            boolean changed = activeChart == null
+                    || !fresh.id.equals(activeChart.id)
+                    || fresh.divisionsPerChunk != activeChart.divisionsPerChunk
+                    || fresh.laneCount != activeChart.laneCount
+                    || fresh.trackLength != activeChart.trackLength
+                    || fresh.chunkCount != activeChart.chunkCount;
+            activeChart = fresh;
+            activeChartWorld = worldKey;
+            return changed;
+        } catch (IOException ignored) {
+            return false;
+        }
+    }
+
     static Path activeAudioPath() throws IOException { return ChartStorage.audioPath(server(), resolveActiveChart()); }
 
     static cn.frkovo.rhythmcmaker.chart.BpmDetector.TimingAnalysis analyzeTiming(Path audio) throws IOException { return ChartStorage.analyzeTiming(audio); }

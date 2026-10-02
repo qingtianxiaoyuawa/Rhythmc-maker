@@ -134,6 +134,12 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             return ActionResult.FAIL;
         });
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            if (client.player != null && client.world != null && client.world.getTime() % 5L == 0L
+                    && ClientChartAccess.refreshActiveChartIfChanged()) {
+                sidebarRefreshRequested = true;
+                syncSelectedPlaybackChunk(ClientChartAccess.activeChart());
+                if (playbackAudioRequested || audioProcess != null) finishPlayback(client, true);
+            }
             String operationNotice = ClientSceneAccess.consumeOperationNotice();
             if (operationNotice != null) ClientSceneAccess.status(operationNotice);
             if (ClientSceneAccess.operationBusy() && client.currentScreen != null) client.setScreen(null);
