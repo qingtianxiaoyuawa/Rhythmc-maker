@@ -15,8 +15,12 @@ import net.minecraft.world.World;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 final class ClientChartAccess {
     private static ChartManifest activeChart;
@@ -24,6 +28,16 @@ final class ClientChartAccess {
     private static MinecraftServer activeChartServer;
     private static java.nio.file.attribute.FileTime activeChartModifiedTime;
     private static long activeChartFileSize = -1L;
+    private static final ExecutorService REFRESH_EXECUTOR = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "rhythmc-maker-chart-refresh");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private static Future<?> refreshTask;
+    private static volatile RefreshResult completedRefresh;
+    private static volatile long refreshGeneration;
+    private static String lastRefreshRequest;
+    private static String lastRefreshError;
     private ClientChartAccess() {
     }
 
@@ -55,6 +69,10 @@ final class ClientChartAccess {
     record ImportedScene(Path schem, Path info) {}
 
     static void setActiveChart(ChartManifest chart) {
+        refreshGeneration++;
+        completedRefresh = null;
+        lastRefreshRequest = null;
+        lastRefreshError = null;
         activeChart = chart;
         activeChartWorld = null;
         activeChartModifiedTime = null;
@@ -86,33 +104,79 @@ final class ClientChartAccess {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player == null || client.getServer() == null) return false;
         synchronizeServer(client.getServer());
+        boolean changed = applyCompletedRefresh(client.getServer());
         try {
             var serverPlayer = client.getServer().getPlayerManager().getPlayer(client.player.getUuid());
             RegistryKey<World> worldKey = serverPlayer == null ? client.player.getEntityWorld().getRegistryKey() : serverPlayer.getEntityWorld().getRegistryKey();
-            if (!cn.frkovo.rhythmcmaker.ChartDimensionManager.isChartWorld(worldKey)) return false;
+            if (!cn.frkovo.rhythmcmaker.ChartDimensionManager.isChartWorld(worldKey)) return changed;
             boolean sameChart = activeChart != null && worldKey.equals(activeChartWorld);
-            java.nio.file.attribute.BasicFileAttributes attributes = sameChart
-                    ? ChartStorage.manifestAttributes(client.getServer(), activeChart.id) : null;
-            if (attributes != null && attributes.lastModifiedTime().equals(activeChartModifiedTime)
-                    && attributes.size() == activeChartFileSize) return false;
-            ChartManifest fresh = sameChart ? ChartStorage.find(client.getServer(), activeChart.id)
-                    : ChartStorage.findByDimensionId(client.getServer(), worldKey.getValue().getPath());
-            if (fresh == null) return false;
-            boolean changed = activeChart == null
-                    || !fresh.id.equals(activeChart.id)
-                    || fresh.divisionsPerChunk != activeChart.divisionsPerChunk
-                    || fresh.laneCount != activeChart.laneCount
-                    || fresh.trackLength != activeChart.trackLength
-                    || fresh.chunkCount != activeChart.chunkCount;
-            activeChart = fresh;
-            activeChartWorld = worldKey;
-            if (attributes == null) attributes = ChartStorage.manifestAttributes(client.getServer(), fresh.id);
-            activeChartModifiedTime = attributes.lastModifiedTime();
-            activeChartFileSize = attributes.size();
+            FileTime modified = null;
+            long size = -1L;
+            if (sameChart) {
+                var attributes = ChartStorage.manifestAttributes(client.getServer(), activeChart.id);
+                modified = attributes.lastModifiedTime();
+                size = attributes.size();
+                if (modified.equals(activeChartModifiedTime) && size == activeChartFileSize) return changed;
+            }
+            String request = worldKey.getValue().getPath() + "|" + (sameChart ? activeChart.id : "") + "|" + modified + "|" + size;
+            if (refreshTask == null || refreshTask.isDone()) {
+                if (!request.equals(lastRefreshRequest) && !request.equals(lastRefreshError)) {
+                    long generation = ++refreshGeneration;
+                    lastRefreshRequest = request;
+                    MinecraftServer server = client.getServer();
+                    String chartId = sameChart ? activeChart.id : null;
+                    FileTime requestedModified = modified;
+                    long requestedSize = size;
+                    refreshTask = REFRESH_EXECUTOR.submit(() -> loadRefresh(server, worldKey, chartId, requestedModified, requestedSize, generation, request));
+                }
+            }
             return changed;
         } catch (IOException ignored) {
+            return changed;
+        }
+    }
+
+    private static void loadRefresh(MinecraftServer server, RegistryKey<World> worldKey, String chartId, FileTime modified, long size, long generation, String request) {
+        try {
+            ChartManifest fresh = chartId == null
+                    ? ChartStorage.findByDimensionId(server, worldKey.getValue().getPath())
+                    : ChartStorage.find(server, chartId);
+            if (fresh == null) {
+                completedRefresh = new RefreshResult(generation, null, worldKey, null, -1L, request, "未找到对应谱面文件");
+                return;
+            }
+            var attributes = ChartStorage.manifestAttributes(server, fresh.id);
+            completedRefresh = new RefreshResult(generation, fresh, worldKey, attributes.lastModifiedTime(), attributes.size(), request, null);
+        } catch (Exception exception) {
+            String message = exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
+            completedRefresh = new RefreshResult(generation, null, worldKey, modified, size, request, message);
+        }
+    }
+
+    private static boolean applyCompletedRefresh(MinecraftServer server) {
+        RefreshResult result = completedRefresh;
+        if (result == null || result.generation != refreshGeneration) return false;
+        completedRefresh = null;
+        if (result.error != null) {
+            if (!result.request.equals(lastRefreshError)) {
+                lastRefreshError = result.request;
+                status("谱面刷新失败，已保留当前谱面：" + result.error);
+            }
             return false;
         }
+        lastRefreshError = null;
+        if (result.chart == null) return false;
+        boolean changed = activeChart == null
+                || !result.chart.id.equals(activeChart.id)
+                || result.chart.divisionsPerChunk != activeChart.divisionsPerChunk
+                || result.chart.laneCount != activeChart.laneCount
+                || result.chart.trackLength != activeChart.trackLength
+                || result.chart.chunkCount != activeChart.chunkCount;
+        activeChart = result.chart;
+        activeChartWorld = result.worldKey;
+        activeChartModifiedTime = result.modified;
+        activeChartFileSize = result.size;
+        return changed;
     }
 
     static Path activeAudioPath() throws IOException { return ChartStorage.audioPath(server(), resolveActiveChart()); }
@@ -120,11 +184,20 @@ final class ClientChartAccess {
     private static void synchronizeServer(MinecraftServer server) {
         if (activeChartServer == server) return;
         activeChartServer = server;
+        refreshGeneration++;
+        completedRefresh = null;
+        if (refreshTask != null) refreshTask.cancel(false);
+        refreshTask = null;
+        lastRefreshRequest = null;
+        lastRefreshError = null;
         activeChart = null;
         activeChartWorld = null;
         activeChartModifiedTime = null;
         activeChartFileSize = -1L;
     }
+
+    private record RefreshResult(long generation, ChartManifest chart, RegistryKey<World> worldKey,
+                                 FileTime modified, long size, String request, String error) {}
 
     static cn.frkovo.rhythmcmaker.chart.BpmDetector.TimingAnalysis analyzeTiming(Path audio) throws IOException { return ChartStorage.analyzeTiming(audio); }
 

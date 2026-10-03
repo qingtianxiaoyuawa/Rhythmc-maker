@@ -20,6 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -420,6 +421,9 @@ public final class ChartStorage {
         return executable;
     }
     public static void update(MinecraftServer server, ChartManifest chart) throws IOException {
+        if (chart == null || chart.id == null || chart.id.isBlank() || !chart.id.matches("[a-zA-Z0-9_-]+")) {
+            throw new IOException("谱面编号无效");
+        }
         writeManifest(manifestPath(server, chart.id), chart);
         writeChartDocument(chartDocumentPath(server, chart.id), chart);
         Files.createDirectories(effectScenesDirectory(server, chart.id));
@@ -427,8 +431,28 @@ public final class ChartStorage {
 
     public static ChartManifest find(MinecraftServer server, String chartId) throws IOException {
         Path path = manifestPath(server, chartId);
-        if (!Files.exists(path)) return null;
-        return GSON.fromJson(Files.readString(path, StandardCharsets.UTF_8), CHART_TYPE);
+        if (!Files.exists(path)) {
+            Path backup = backupPath(path);
+            if (!Files.exists(backup)) return null;
+            try {
+                return parseManifest(backup);
+            } catch (IOException | RuntimeException exception) {
+                throw chartReadException(path, exception, null);
+            }
+        }
+        try {
+            return parseManifest(path);
+        } catch (IOException | RuntimeException exception) {
+            Path backup = backupPath(path);
+            if (!Files.exists(backup)) throw chartReadException(path, exception, null);
+            try {
+                ChartManifest recovered = parseManifest(backup);
+                if (recovered == null) throw new IOException("备份谱面为空");
+                return recovered;
+            } catch (IOException | RuntimeException backupException) {
+                throw chartReadException(path, exception, backupException);
+            }
+        }
     }
 
     public static ChartManifest findByDimensionId(MinecraftServer server, String dimensionId) throws IOException {
@@ -508,19 +532,59 @@ public final class ChartStorage {
 
     private static void readManifest(Path path, List<ChartManifest> charts) {
         try {
-            ChartManifest chart = GSON.fromJson(Files.readString(path, StandardCharsets.UTF_8), CHART_TYPE);
+            ChartManifest chart = parseManifest(path);
             if (chart != null && chart.id != null) charts.add(chart);
-        } catch (IOException | RuntimeException ignored) {
+        } catch (IOException | RuntimeException exception) {
+            try {
+                ChartManifest backup = parseManifest(backupPath(path));
+                if (backup != null && backup.id != null) charts.add(backup);
+            } catch (IOException | RuntimeException ignored) {
+            }
         }
     }
 
     private static void writeManifest(Path path, ChartManifest chart) throws IOException {
-        Files.writeString(path, GSON.toJson(chart), StandardCharsets.UTF_8);
+        writeJsonAtomically(path, GSON.toJson(chart));
     }
 
     private static void writeChartDocument(Path path, ChartManifest chart) throws IOException {
         String document = GSON.toJson(new ChartDocument(chart));
-        Files.writeString(path, document, StandardCharsets.UTF_8);
+        writeJsonAtomically(path, document);
+    }
+
+    private static ChartManifest parseManifest(Path path) throws IOException {
+        return GSON.fromJson(Files.readString(path, StandardCharsets.UTF_8), CHART_TYPE);
+    }
+
+    private static Path backupPath(Path path) {
+        return path.resolveSibling(path.getFileName() + ".bak");
+    }
+
+    private static IOException chartReadException(Path path, Exception primary, Exception backup) {
+        String message = "谱面文件解析失败：" + path;
+        if (primary.getMessage() != null && !primary.getMessage().isBlank()) message += "（" + primary.getMessage() + "）";
+        if (backup != null) message += "；备份也无法恢复：" + (backup.getMessage() == null ? backup.getClass().getSimpleName() : backup.getMessage());
+        return new IOException(message, primary);
+    }
+
+    private static void writeJsonAtomically(Path path, String json) throws IOException {
+        JsonParser.parseString(json);
+        Files.createDirectories(path.getParent());
+        Path temporary = path.resolveSibling(path.getFileName() + ".tmp-" + UUID.randomUUID());
+        try {
+            Files.writeString(temporary, json, StandardCharsets.UTF_8);
+            JsonParser.parseString(Files.readString(temporary, StandardCharsets.UTF_8));
+            if (Files.exists(path)) Files.copy(path, backupPath(path), StandardCopyOption.REPLACE_EXISTING);
+            try {
+                Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException exception) {
+                Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (RuntimeException exception) {
+            throw new IOException("谱面 JSON 校验失败：" + path, exception);
+        } finally {
+            Files.deleteIfExists(temporary);
+        }
     }
 
     public static boolean isSupportedAudioExtension(String extension) {
