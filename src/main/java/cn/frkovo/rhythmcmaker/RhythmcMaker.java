@@ -161,7 +161,7 @@ public final class RhythmcMaker implements ModInitializer {
     // Remove on the judgment line so the model and hit sound stay synchronized.
     private static final double PLAYBACK_DISAPPEAR_Z = PLAYBACK_FRAME_Z;
     private static final int PLAYBACK_DISPLAY_UPDATE_INTERVAL_TICKS = 1;
-    // Playback distance uses a 2.5x visual flow multiplier.
+    // Playback distance uses a 5x visual flow multiplier.
 
     private static final int PLAYBACK_START_DELAY_TICKS = 0;
     private static final int SCENE_IMPORT_BLOCKS_PER_TICK = 1024;
