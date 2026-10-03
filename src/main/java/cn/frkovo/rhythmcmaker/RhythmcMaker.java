@@ -78,6 +78,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public final class RhythmcMaker implements ModInitializer {
     public static final String MOD_ID = "rhythmc_maker";
@@ -127,6 +129,12 @@ public final class RhythmcMaker implements ModInitializer {
     private static final Set<NoteDisplayChunkCleanup> NOTE_DISPLAY_CHUNK_CLEANUP_TASKS = ConcurrentHashMap.newKeySet();
     private static final Map<RegistryKey<World>, EditorNoteDisplaySweepTask> EDITOR_NOTE_DISPLAY_SWEEP_TASKS = new ConcurrentHashMap<>();
     private static final Map<RegistryKey<World>, ChartManifest> CHART_CACHE_BY_WORLD = new ConcurrentHashMap<>();
+    private static final Map<String, CachedChartState> CHART_CACHE_BY_ID = new ConcurrentHashMap<>();
+    private static final ExecutorService CHART_PERSISTENCE_EXECUTOR = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "rhythmc-maker-chart-persistence");
+        thread.setDaemon(true);
+        return thread;
+    });
     private static final ConcurrentLinkedQueue<SceneImportTask> SCENE_IMPORT_TASKS = new ConcurrentLinkedQueue<>();
     private static final Set<String> IMPORTING_CHARTS = ConcurrentHashMap.newKeySet();
     private static final Map<String, Map<Integer, BlockState>> DECORATION_TEMPLATES = Map.of(
@@ -182,11 +190,15 @@ public final class RhythmcMaker implements ModInitializer {
     private static final DustParticleEffect PLAYBACK_FRAME_GLOW = new DustParticleEffect(0x397BFF, 1.8f);
     private static volatile RhythmcMakerConfig config = new RhythmcMakerConfig();
     private static volatile MinecraftServer activeServer;
+    private static volatile MinecraftServer chartCacheServer;
     private static long lastAutosaveTick;
 
     @Override public void onInitialize() {
         ServerLifecycleEvents.SERVER_STARTING.register(server -> {
             activeServer = server;
+            chartCacheServer = server;
+            CHART_CACHE_BY_ID.clear();
+            CHART_CACHE_BY_WORLD.clear();
             config = RhythmcMakerConfig.load(server);
             Path root = server.getSavePath(net.minecraft.util.WorldSavePath.ROOT).toAbsolutePath().normalize();
             installHubMap(root);
@@ -246,12 +258,7 @@ public final class RhythmcMaker implements ModInitializer {
             if (tick % ticksForSeconds(config.sidebarRefreshIntervalSeconds) == 0) refreshEditorSidebar(server);
             if (tick - lastAutosaveTick < ticksForSeconds(config.autosaveIntervalSeconds)) return;
             lastAutosaveTick = server.getTicks();
-            Set<String> savedChartIds = new java.util.HashSet<>();
-            for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
-                String chartId = ACTIVE_CHARTS.get(player.getUuid());
-                if (chartId == null || !savedChartIds.add(chartId)) continue;
-                if (saveActiveChart(server, player)) player.sendMessage(Text.literal("保存成功！").formatted(Formatting.GREEN), true);
-            }
+            for (CachedChartState state : CHART_CACHE_BY_ID.values()) if (state.dirty) queueChartSave(server, state);
         });
         UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
             if (!(world instanceof ServerWorld serverWorld) || !isEditorWorld(world) || !(player instanceof ServerPlayerEntity serverPlayer)) return ActionResult.PASS;
@@ -532,12 +539,13 @@ public final class RhythmcMaker implements ModInitializer {
         try {
             chart = ChartStorage.find(source.getServer(), chartId);
             if (chart == null) { player.sendMessage(Text.literal("找不到谱面：" + chartId), false); return 0; }
+            cacheChart(source.getServer(), chart);
             if (IMPORTING_CHARTS.contains(chart.id)) { player.sendMessage(Text.literal("该谱面的场景仍在导入，请稍后重试"), true); return 0; }
             chart.trackLength = calculateTrackLength(chart);
-            ChartStorage.update(source.getServer(), chart);
+            saveChart(source.getServer(), chart);
             String previousDimensionId = chart.dimensionId;
             ChartDimensionManager.key(chart);
-            if (!chart.dimensionId.equals(previousDimensionId)) ChartStorage.update(source.getServer(), chart);
+            if (!chart.dimensionId.equals(previousDimensionId)) saveChart(source.getServer(), chart);
             ServerWorld editor = ChartDimensionManager.getOrCreate(source.getServer(), chart);
             String validationError = validateEditorEntry(source.getServer(), player, chart, editor);
             if (validationError != null) {
@@ -546,7 +554,7 @@ public final class RhythmcMaker implements ModInitializer {
             }
             String previousChartId = ACTIVE_CHARTS.get(player.getUuid());
             if (previousChartId != null && !previousChartId.equals(chartId)) {
-                ChartManifest previousChart = ChartStorage.find(source.getServer(), previousChartId);
+                ChartManifest previousChart = cachedChart(source.getServer(), previousChartId);
                 if (previousChart != null) clearChartNoteBlocks(editor, previousChart);
             }
             EDITOR_AREA_TASKS.remove(editor.getRegistryKey());
@@ -563,7 +571,7 @@ public final class RhythmcMaker implements ModInitializer {
             if (!chart.sceneInitialized) {
                 buildPlaybackArea(editor, laneCount(chart));
                 chart.sceneInitialized = true;
-                ChartStorage.update(source.getServer(), chart);
+                saveChart(source.getServer(), chart);
             }
             markSelectedStartChunk(editor, chart, selectedStartChunk(player, chart));
             // Queue note updates so the dimension-change packet is not delayed by a full-chart refresh.
@@ -606,7 +614,7 @@ public final class RhythmcMaker implements ModInitializer {
             if (player == null || !entry.getValue().equals(ACTIVE_CHARTS.get(player.getUuid()))) continue;
             if (!DIMENSION_TRAVEL_READY.contains(player.getUuid())) continue;
             try {
-                ChartManifest chart = ChartStorage.find(server, entry.getValue());
+                ChartManifest chart = cachedChart(server, entry.getValue());
                 if (chart == null) continue;
                 ServerWorld editor = ChartDimensionManager.getOrCreate(server, chart);
                 String validationError = validateEditorEntry(server, player, chart, editor);
@@ -653,10 +661,11 @@ public final class RhythmcMaker implements ModInitializer {
         String chartId = ACTIVE_CHARTS.get(player.getUuid());
         if (chartId != null) {
             try {
-                ChartManifest chart = ChartStorage.find(source.getServer(), chartId);
+                ChartManifest chart = cachedChart(source.getServer(), chartId);
                 if (chart != null) {
                     chart.lastEdited = LocalDateTime.now().format(LAST_EDITED_FORMAT);
-                    ChartStorage.update(source.getServer(), chart);
+                    saveChart(source.getServer(), chart);
+                    queueChartSave(source.getServer(), CHART_CACHE_BY_ID.get(chart.id));
                 }
             } catch (IOException exception) {
                 LOGGER.warn("Failed to record chart return time for {}", chartId, exception);
@@ -777,9 +786,30 @@ public final class RhythmcMaker implements ModInitializer {
         }
     }
 
-    private static boolean saveActiveChart(MinecraftServer server, ServerPlayerEntity player) { String id = ACTIVE_CHARTS.get(player.getUuid()); if (id == null) return false; try { ChartManifest chart = ChartStorage.find(server, id); if (chart == null) return false; saveChart(server, chart); return true; } catch (IOException ignored) { return false; } }
-    private static void saveChart(MinecraftServer server, ChartManifest chart) throws IOException { ChartStorage.update(server, chart); }
+    private static boolean saveActiveChart(MinecraftServer server, ServerPlayerEntity player) {
+        String id = ACTIVE_CHARTS.get(player.getUuid());
+        if (id == null) return false;
+        CachedChartState state = CHART_CACHE_BY_ID.get(id);
+        if (state == null) {
+            try { state = cacheChart(server, ChartStorage.find(server, id)); } catch (IOException ignored) { return false; }
+        }
+        return state != null && queueChartSave(server, state);
+    }
+    private static void saveChart(MinecraftServer server, ChartManifest chart) throws IOException {
+        CachedChartState state = cacheChart(server, chart);
+        if (state == null) throw new IOException("谱面缓存无效");
+        synchronized (state) {
+            state.revision++;
+            state.dirty = true;
+        }
+    }
     public static void saveCurrentChart(MinecraftServer server, ServerPlayerEntity player) { saveActiveChart(server, player); }
+    public static void updateChart(MinecraftServer server, ChartManifest chart) throws IOException {
+        CachedChartState state = cacheChart(server, chart);
+        synchronized (state) { state.chart = chart; }
+        saveChart(server, chart);
+        if (state != null) queueChartSave(server, state);
+    }
     public static String activeChart(ServerPlayerEntity player) { return ACTIVE_CHARTS.get(player.getUuid()); }
     private static boolean rejectEditorTrackAdjustment(ServerPlayerEntity player) {
         if (!EDITOR_TRACK_ADJUSTMENTS.contains(player.getUuid())) return false;
@@ -794,13 +824,71 @@ public final class RhythmcMaker implements ModInitializer {
     private static ChartManifest loadActiveChart(ServerPlayerEntity player, MinecraftServer server) {
         String id = ACTIVE_CHARTS.get(player.getUuid());
         if (id == null) return null;
-        try { return ChartStorage.find(server, id); } catch (IOException ignored) { return null; }
+        CachedChartState cached = CHART_CACHE_BY_ID.get(id);
+        if (cached != null) return cached.chart;
+        try { return cachedChart(server, id); } catch (IOException ignored) { return null; }
     }
     private static int trackLength(MinecraftServer server, String id) {
-        try { ChartManifest chart = ChartStorage.find(server, id); return chart == null ? 4 : calculateTrackLength(chart); } catch (IOException ignored) { return 4; }
+        ChartManifest chart = CHART_CACHE_BY_ID.containsKey(id) ? CHART_CACHE_BY_ID.get(id).chart : null;
+        if (chart == null) try { chart = cachedChart(server, id); } catch (IOException ignored) { }
+        return chart == null ? 4 : calculateTrackLength(chart);
     }
     private static int chartBeats(MinecraftServer server, String id) {
-        try { ChartManifest chart = ChartStorage.find(server, id); return chart == null ? 4 : divisionsPerChunk(chart); } catch (IOException ignored) { return 4; }
+        ChartManifest chart = CHART_CACHE_BY_ID.containsKey(id) ? CHART_CACHE_BY_ID.get(id).chart : null;
+        if (chart == null) try { chart = cachedChart(server, id); } catch (IOException ignored) { }
+        return chart == null ? 4 : divisionsPerChunk(chart);
+    }
+
+    private static CachedChartState cacheChart(MinecraftServer server, ChartManifest chart) {
+        if (chart == null || chart.id == null || chart.id.isBlank()) return null;
+        if (chartCacheServer != server) {
+            chartCacheServer = server;
+            CHART_CACHE_BY_ID.clear();
+            CHART_CACHE_BY_WORLD.clear();
+        }
+        return CHART_CACHE_BY_ID.computeIfAbsent(chart.id, ignored -> new CachedChartState(chart));
+    }
+
+    private static ChartManifest cachedChart(MinecraftServer server, String chartId) throws IOException {
+        if (chartId == null || chartId.isBlank()) return null;
+        CachedChartState cached = CHART_CACHE_BY_ID.get(chartId);
+        if (cached != null) return cached.chart;
+        ChartManifest chart = ChartStorage.find(server, chartId);
+        return chart == null ? null : cacheChart(server, chart).chart;
+    }
+
+    private static boolean queueChartSave(MinecraftServer server, CachedChartState state) {
+        long revision;
+        synchronized (state) {
+            if (!state.dirty || state.saving) return false;
+            state.saving = true;
+            revision = state.revision;
+        }
+        CHART_PERSISTENCE_EXECUTOR.submit(() -> {
+            try {
+                ChartStorage.update(server, state.chart);
+                server.execute(() -> {
+                    synchronized (state) {
+                        if (state.revision == revision) state.dirty = false;
+                        state.saving = false;
+                    }
+                });
+            } catch (IOException exception) {
+                server.execute(() -> {
+                    synchronized (state) { state.saving = false; }
+                    LOGGER.warn("Failed to persist chart {}", state.chart.id, exception);
+                });
+            }
+        });
+        return true;
+    }
+
+    private static final class CachedChartState {
+        private ChartManifest chart;
+        private long revision;
+        private boolean dirty;
+        private boolean saving;
+        private CachedChartState(ChartManifest chart) { this.chart = chart; }
     }
     private static int calculateTrackLength(ChartManifest chart) {
         double beats = chart.durationSeconds > 0 && chart.bpm > 0 ? ChartTiming.secondsToBeat(chart, chart.durationSeconds) : 8.0;
@@ -986,7 +1074,7 @@ public final class RhythmcMaker implements ModInitializer {
         return createSceneEditor(server, chartId, iconId, null);
     }
     public static SceneEditStorage.Scene createSceneEditor(MinecraftServer server, String chartId, String iconId, UUID operationPlayerId) throws IOException {
-        ChartManifest chart = ChartStorage.find(server, chartId);
+        ChartManifest chart = cachedChart(server, chartId);
         java.util.List<SceneEditStorage.Scene> scenes = SceneEditStorage.list(server, chartId);
         int index = scenes.stream().mapToInt(scene -> scene.index).max().orElse(0) + 1;
         SceneEditStorage.Scene scene = new SceneEditStorage.Scene(index);
@@ -1059,7 +1147,7 @@ public final class RhythmcMaker implements ModInitializer {
             queueSceneEditorArea(world, scene.x, laneCount(chart), chart.id, scene.index);
         }
         SceneEditStorage.save(server, chart.id, scenes);
-        ChartStorage.update(server, chart);
+        saveChart(server, chart);
     }
     private static boolean isCompleteImportedScene(ImportedScene scene) {
         return scene != null && scene.schem() != null && scene.info() != null
@@ -1254,7 +1342,7 @@ public final class RhythmcMaker implements ModInitializer {
         if (SCENE_CAPTURE_PENDING.contains(player.getUuid())) { player.sendMessage(Text.literal("场景正在保存，请稍候"), true); return 0; }
         String chartId = ACTIVE_SCENE_CHARTS.get(player.getUuid());
         ChartManifest chart;
-        try { chart = chartId == null ? null : ChartStorage.find(source.getServer(), chartId); }
+        try { chart = chartId == null ? null : cachedChart(source.getServer(), chartId); }
         catch (IOException exception) { chart = null; }
         if (chart == null) {
             ACTIVE_SCENE_EDITORS.remove(player.getUuid());
@@ -1538,7 +1626,7 @@ public final class RhythmcMaker implements ModInitializer {
                 ServerPlayerEntity player = server.getPlayerManager().getPlayer(pending.getKey());
                 if (player == null || task.chartId == null) continue;
                 try {
-                    ChartManifest chart = ChartStorage.find(server, task.chartId);
+                    ChartManifest chart = cachedChart(server, task.chartId);
                     SceneEditStorage.Scene scene = chart == null ? null : SceneEditStorage.list(server, chart.id).stream().filter(value -> value.index == task.sceneIndex).findFirst().orElse(null);
                     if (chart != null && scene != null) {
                         saveSceneHotbar(player);
@@ -1608,7 +1696,7 @@ public final class RhythmcMaker implements ModInitializer {
         String chartId = ACTIVE_SCENE_CHARTS.get(player.getUuid());
         if (sceneIndex == null || sceneIndex == 1 || chartId == null || SCENE_CAPTURE_PENDING.contains(player.getUuid()) || !(player.getEntityWorld() instanceof ServerWorld)) return;
         try {
-            ChartManifest chart = ChartStorage.find(server, chartId);
+            ChartManifest chart = cachedChart(server, chartId);
             if (chart == null) return;
             SceneEditStorage.Scene scene = SceneEditStorage.list(server, chart.id).stream().filter(value -> value.index == sceneIndex).findFirst().orElse(null);
             if (scene != null) queueSceneCapture(ChartDimensionManager.getOrCreate(server, chart), chart.id, scene.index, scene.x, null, false);
@@ -1752,7 +1840,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             int centerX;
             int laneCount;
             try {
-                ChartManifest chart = ChartStorage.find(server, chartId);
+                ChartManifest chart = cachedChart(server, chartId);
                 if (chart == null) continue;
                 SceneEditStorage.Scene scene = SceneEditStorage.list(server, chart.id).stream()
                     .filter(value -> value.index == activeIndex).findFirst().orElse(null);
@@ -1854,8 +1942,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         ChartManifest chart = loadActiveChart(player, source.getServer());
         if (chart == null || !(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world) || chart.bpm <= 0) return 0;
         int startChunk = requestedStartChunk > 0 ? Math.max(1, Math.min(Math.max(1, chart.chunkCount), requestedStartChunk)) : selectedStartChunk(player, chart);
-        double divisionsPerChunk = Math.max(1.0, Math.min(32.0, chart.divisionsPerChunk));
-        double startBeat = (startChunk - 1.0) * divisionsPerChunk;
+        double startBeat = startChunk - 1.0;
         String mode = "scroll".equalsIgnoreCase(requestedMode) ? "scroll" : "formal";
         double rate = normalizePlaybackRate(requestedRate);
         double startSeconds = PlaybackCoordinates.songTimeAtBeat(chart, ChartTiming.prepare(chart), startBeat);
@@ -2053,7 +2140,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             case "TITLE", "ACTIONBAR", "MESSAGE" -> { if (!text.isBlank()) player.sendMessage(Text.literal(text), "CHAT".equalsIgnoreCase(effectString(effect, "type", "ACTIONBAR")) ? false : true); }
             case "TEXT_DISPLAY", "TEXT_DISPLAY_EFFECT", "TEXT_DISPLAY_SYNC_TRACK", "TEXT_DISPLAY_DESYNC_TRACK", "TEXT_DISPLAY_REMOVE", "HOLOGRAM", "REMOVE_HOLOGRAM" -> session.applyTextEffect(effect);
             case "EFFECT" -> session.applyPotionProxy(player, effect);
-            case "CLEAR_EFFECT" -> player.clearStatusEffects();
+            case "CLEAR_EFFECT" -> session.clearPotionEffect(player, effect);
             case "TIME" -> session.applyTime(player, effect);
             case "WEATHER" -> session.applyWeather(effect);
             case "ARENA", "CHANGE_ARENA" -> session.applyArena(effect);
@@ -2111,6 +2198,26 @@ private static void showSceneBoundary(MinecraftServer server) {
         catch (RuntimeException ignored) { return fallback; }
     }
     private static JsonObject effectProperties(JsonObject effect) { return effect != null && effect.has("properties") && effect.get("properties").isJsonObject() ? effect.getAsJsonObject("properties") : new JsonObject(); }
+    private static net.minecraft.util.Identifier potionIdentifier(String value) {
+        String normalized = value == null ? "" : value.trim().toLowerCase(java.util.Locale.ROOT).replace(' ', '_').replace('-', '_');
+        if (normalized.contains(":")) {
+            String namespace = normalized.substring(0, normalized.indexOf(':'));
+            String path = normalized.substring(normalized.indexOf(':') + 1);
+            normalized = path;
+            if (namespace.equals("minecraft")) return net.minecraft.util.Identifier.of(namespace, normalized);
+        }
+        return net.minecraft.util.Identifier.of("minecraft", switch (normalized) {
+            case "jump", "jumpboost", "jump_boost" -> "jump_boost";
+            case "slow", "slowness" -> "slowness";
+            case "nightvision", "night_vision" -> "night_vision";
+            case "invis", "invisible", "invisibility" -> "invisibility";
+            case "blind" -> "blindness";
+            case "dark" -> "darkness";
+            case "levitate" -> "levitation";
+            case "regen" -> "regeneration";
+            default -> normalized;
+        });
+    }
     private static void stopPlayback(MinecraftServer server, ServerPlayerEntity player, boolean returnPlayer) {
         ScrollJudgementSession scrollSession = SCROLL_JUDGEMENT_SESSIONS.remove(player.getUuid());
         if (scrollSession != null) {
@@ -2365,7 +2472,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 return;
             }
             try {
-                net.minecraft.util.Identifier id = net.minecraft.util.Identifier.of(type.contains(":") ? type : "minecraft:" + type.toLowerCase(java.util.Locale.ROOT));
+                net.minecraft.util.Identifier id = potionIdentifier(type);
                 var entry = net.minecraft.registry.Registries.STATUS_EFFECT.getEntry(id).orElse(null);
                 if (entry == null) {
                     LOGGER.warn("Unknown RhythMC potion effect '{}': {}", type, effect);
@@ -2377,6 +2484,20 @@ private static void showSceneBoundary(MinecraftServer server) {
                         effectBoolean(effect, "ambient", false), effectBoolean(effect, "particles", true), true));
             } catch (RuntimeException exception) {
                 LOGGER.warn("Failed to apply RhythMC potion effect '{}'", type, exception);
+            }
+        }
+        private void clearPotionEffect(ServerPlayerEntity player, JsonObject effect) {
+            String type = effectString(effect, "type", effectString(effect, "effect", effectString(effect, "potion", effectString(effect, "effect-id", ""))));
+            if (type.isBlank()) {
+                player.clearStatusEffects();
+                return;
+            }
+            try {
+                var entry = net.minecraft.registry.Registries.STATUS_EFFECT.getEntry(potionIdentifier(type)).orElse(null);
+                if (entry == null) LOGGER.warn("Unknown RhythMC potion effect to clear '{}': {}", type, effect);
+                else player.removeStatusEffect(entry);
+            } catch (RuntimeException exception) {
+                LOGGER.warn("Failed to clear RhythMC potion effect '{}'", type, exception);
             }
         }
         private void applyTime(ServerPlayerEntity player, JsonObject effect) {
@@ -2983,7 +3104,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             if (!task.displaysScheduled) {
                 buildEditorTrackEndBarrier(world, task.x, task.newLength, task.laneCount);
                 ChartManifest chart = null;
-                try { chart = ChartStorage.find(server, ACTIVE_CHARTS.get(task.playerId)); } catch (IOException ignored) { }
+                try { chart = cachedChart(server, ACTIVE_CHARTS.get(task.playerId)); } catch (IOException ignored) { }
                 if (chart != null) {
                     CHART_CACHE_BY_WORLD.put(world.getRegistryKey(), chart);
                     markSelectedStartChunk(world, chart, chart.selectedStartChunk);

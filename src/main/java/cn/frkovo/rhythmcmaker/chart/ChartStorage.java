@@ -267,8 +267,14 @@ public final class ChartStorage {
         properties.remove("effect-type"); properties.remove("start-tick"); properties.remove("beat");
         if (legacy.equals("INVERT")) properties.addProperty("type", "BLINDNESS");
         if (type.equals("EFFECT") && !properties.has("type")) {
-            String potion = firstJsonString(old, "effect", "potion", firstJsonString(old, "effect-id", "potion-effect", "UNKNOWN"));
-            properties.addProperty("type", potion);
+            String potion = firstJsonString(old, "effect", "potion", firstJsonString(old, "effect-id", "potion-effect", ""));
+            if (potion.isBlank()) potion = firstJsonString(properties, "effect", "potion", firstJsonString(properties, "effect-id", "potion-effect", "UNKNOWN"));
+            properties.addProperty("type", normalizePotionEffectId(potion));
+        }
+        if (type.equals("EFFECT") && properties.has("type")) properties.addProperty("type", normalizePotionEffectId(properties.get("type").getAsString()));
+        if (type.equals("CLEAR_EFFECT")) {
+            String effectId = firstJsonString(old, "effect-id", "effect", firstJsonString(properties, "effect-id", "effect", ""));
+            if (!effectId.isBlank()) properties.addProperty("type", normalizePotionEffectId(effectId));
         }
         if (type.equals("TIME") && (legacy.contains("CLIENTTIME") || legacy.contains("TIMECLIENT"))) properties.addProperty("client", true);
         if (type.equals("TIME") && (legacy.contains("WORLDTIME") || legacy.equals("SETTIME"))) properties.addProperty("client", false);
@@ -280,6 +286,44 @@ public final class ChartStorage {
         }
         if (legacy.equals("VISIBLE")) properties.addProperty("hidden", !old.has("visible") || !old.get("visible").getAsBoolean());
         converted.add("properties", properties); return converted;
+    }
+    private static String normalizePotionEffectId(String value) {
+        if (value == null || value.isBlank()) return "UNKNOWN";
+        String normalized = value.trim().toLowerCase(java.util.Locale.ROOT).replace(' ', '_').replace('-', '_');
+        if (normalized.contains(":")) normalized = normalized.substring(normalized.indexOf(':') + 1);
+        return switch (normalized) {
+            case "jump", "jump_boost", "jumpboost" -> "minecraft:jump_boost";
+            case "slow", "slowness" -> "minecraft:slowness";
+            case "nightvision", "night_vision" -> "minecraft:night_vision";
+            case "invis", "invisible", "invisibility" -> "minecraft:invisibility";
+            case "blind" -> "minecraft:blindness";
+            case "dark" -> "minecraft:darkness";
+            case "levitate" -> "minecraft:levitation";
+            case "haste" -> "minecraft:haste";
+            case "mining_fatigue", "miningfatigue" -> "minecraft:mining_fatigue";
+            case "speed" -> "minecraft:speed";
+            case "strength" -> "minecraft:strength";
+            case "instant_health", "instanthealth" -> "minecraft:instant_health";
+            case "instant_damage", "instantdamage" -> "minecraft:instant_damage";
+            case "regeneration", "regen" -> "minecraft:regeneration";
+            case "resistance" -> "minecraft:resistance";
+            case "fire_resistance", "fireresistance" -> "minecraft:fire_resistance";
+            case "water_breathing", "waterbreathing" -> "minecraft:water_breathing";
+            case "absorption" -> "minecraft:absorption";
+            case "saturation" -> "minecraft:saturation";
+            case "health_boost", "healthboost" -> "minecraft:health_boost";
+            case "glowing" -> "minecraft:glowing";
+            case "hunger" -> "minecraft:hunger";
+            case "weakness" -> "minecraft:weakness";
+            case "poison" -> "minecraft:poison";
+            case "wither" -> "minecraft:wither";
+            case "conduit_power", "conduitpower" -> "minecraft:conduit_power";
+            case "dolphins_grace", "dolphinsgrace" -> "minecraft:dolphins_grace";
+            case "bad_omen", "badomen" -> "minecraft:bad_omen";
+            case "hero_of_the_village", "hero_of_village", "heroofthevillage" -> "minecraft:hero_of_the_village";
+            case "darkness" -> "minecraft:darkness";
+            default -> value.contains(":") ? value.toLowerCase(java.util.Locale.ROOT) : "minecraft:" + normalized;
+        };
     }
     private static int oldNoteType(String type) {
         return switch (type == null ? "" : type.toUpperCase(java.util.Locale.ROOT)) {

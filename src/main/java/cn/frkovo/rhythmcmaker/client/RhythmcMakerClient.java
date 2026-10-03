@@ -73,6 +73,10 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     private static double sidebarSnapshotIntervalSeconds = -1.0;
     private static boolean sidebarRefreshRequested = true;
 
+    static void requestSidebarRefresh() {
+        clearSidebarSnapshot();
+    }
+
     @Override public void onInitializeClient() {
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> cn.frkovo.rhythmcmaker.client.render.ImGuiRuntime.dispose());
         WorldRenderEvents.AFTER_ENTITIES.register(RhythmcMakerClient::renderScrollPlaybackBox);
@@ -214,7 +218,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         selectedPlaybackChunk = startChunk;
         playbackStartChunk = startChunk;
         playbackStartBeat = activeChart == null ? 0.0 : Math.max(0.0, (startChunk - 1.0) * Math.max(1.0, Math.min(32.0, activeChart.divisionsPerChunk)));
-        playbackStartSeconds = activeChart == null ? 0.0 : ChartTiming.beatToSeconds(activeChart, playbackStartBeat);
+        playbackStartSeconds = activeChart == null ? 0.0 : PlaybackCoordinates.songTimeAtBeat(activeChart, ChartTiming.prepare(activeChart), playbackStartBeat);
         audioStartedAtNanos = 0;
         playbackTimingProfile = null;
         playbackTrackProfile = null;

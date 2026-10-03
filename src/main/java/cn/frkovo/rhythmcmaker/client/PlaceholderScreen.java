@@ -163,6 +163,7 @@ final class PlaceholderScreen extends RhythmcScreen {
                     int divisionsValue = Integer.parseInt(divisions.getText());
                     int lanesValue = Integer.parseInt(lanes.getText());
                     if (divisionsValue < 1 || divisionsValue > 32 || lanesValue < 1 || lanesValue > 9 || lanesValue % 2 == 0) throw new NumberFormatException();
+                    ClientChartAccess.applyLocalLayout(divisionsValue, lanesValue);
                     RhythmcMakerClient.sendChartCommand("rhythmc_layout_set " + divisionsValue + " " + lanesValue);
                     ClientChartAccess.status("正在应用制谱器轨道：" + lanesValue + " × " + divisionsValue);
                     close();

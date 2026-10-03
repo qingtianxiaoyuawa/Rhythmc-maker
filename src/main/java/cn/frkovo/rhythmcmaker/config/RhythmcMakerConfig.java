@@ -12,8 +12,9 @@ import java.nio.file.Path;
 
 public final class RhythmcMakerConfig {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+    public static final double DEFAULT_AUTOSAVE_INTERVAL_SECONDS = 300.0;
 
-    public double autosaveIntervalSeconds = 30.0;
+    public double autosaveIntervalSeconds = DEFAULT_AUTOSAVE_INTERVAL_SECONDS;
     public double sidebarRefreshIntervalSeconds = 1.0;
     public int defaultDivisionsPerChunk = 4;
     public double playerSpeed = 1.0;

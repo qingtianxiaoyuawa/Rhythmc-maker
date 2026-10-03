@@ -38,6 +38,9 @@ final class ClientChartAccess {
     private static volatile long refreshGeneration;
     private static String lastRefreshRequest;
     private static String lastRefreshError;
+    private static int pendingLayoutDivisions = -1;
+    private static int pendingLayoutLanes = -1;
+    private static long pendingLayoutExpiresAtNanos;
     private ClientChartAccess() {
     }
 
@@ -80,6 +83,20 @@ final class ClientChartAccess {
     }
 
     static ChartManifest activeChart() { return activeChart; }
+
+    static void applyLocalLayout(int divisions, int lanes) {
+        if (activeChart == null) return;
+        activeChart.divisionsPerChunk = Math.max(1, Math.min(32, divisions));
+        activeChart.beatsPerMeasure = 0;
+        activeChart.laneCount = lanes;
+        activeChart.trackLength = Math.max(8, Math.max(1, activeChart.chunkCount) * activeChart.divisionsPerChunk);
+        pendingLayoutDivisions = activeChart.divisionsPerChunk;
+        pendingLayoutLanes = lanes;
+        pendingLayoutExpiresAtNanos = System.nanoTime() + 8_000_000_000L;
+        activeChartModifiedTime = null;
+        activeChartFileSize = -1L;
+        RhythmcMakerClient.requestSidebarRefresh();
+    }
 
     static ChartManifest resolveActiveChart() {
         MinecraftClient client = MinecraftClient.getInstance();
@@ -166,6 +183,22 @@ final class ClientChartAccess {
         }
         lastRefreshError = null;
         if (result.chart == null) return false;
+        if (pendingLayoutDivisions > 0 && System.nanoTime() < pendingLayoutExpiresAtNanos
+                && (result.chart.divisionsPerChunk != pendingLayoutDivisions || result.chart.laneCount != pendingLayoutLanes)) {
+            activeChartModifiedTime = null;
+            activeChartFileSize = -1L;
+            return true;
+        }
+        if (pendingLayoutDivisions > 0 && result.chart.divisionsPerChunk == pendingLayoutDivisions
+                && result.chart.laneCount == pendingLayoutLanes) {
+            pendingLayoutDivisions = -1;
+            pendingLayoutLanes = -1;
+            pendingLayoutExpiresAtNanos = 0L;
+        } else if (pendingLayoutDivisions > 0 && System.nanoTime() >= pendingLayoutExpiresAtNanos) {
+            pendingLayoutDivisions = -1;
+            pendingLayoutLanes = -1;
+            pendingLayoutExpiresAtNanos = 0L;
+        }
         boolean changed = activeChart == null
                 || !result.chart.id.equals(activeChart.id)
                 || result.chart.divisionsPerChunk != activeChart.divisionsPerChunk
@@ -190,6 +223,9 @@ final class ClientChartAccess {
         refreshTask = null;
         lastRefreshRequest = null;
         lastRefreshError = null;
+        pendingLayoutDivisions = -1;
+        pendingLayoutLanes = -1;
+        pendingLayoutExpiresAtNanos = 0L;
         activeChart = null;
         activeChartWorld = null;
         activeChartModifiedTime = null;
@@ -206,7 +242,7 @@ final class ClientChartAccess {
     static void saveConfig(cn.frkovo.rhythmcmaker.config.RhythmcMakerConfig config) throws IOException { cn.frkovo.rhythmcmaker.RhythmcMaker.updateConfig(server(), config); }
 
     static void update(ChartManifest chart) throws IOException {
-        ChartStorage.update(server(), chart);
+        cn.frkovo.rhythmcmaker.RhythmcMaker.updateChart(server(), chart);
     }
     static Path exportRhythmc3(ChartManifest chart) throws IOException {
         return Rhythmc3Exporter.export(server(), chart);
