@@ -208,7 +208,8 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         int startChunk = activeChart == null ? selectedPlaybackChunk : Math.max(1, Math.min(Math.max(1, activeChart.chunkCount), selectedPlaybackChunk));
         selectedPlaybackChunk = startChunk;
         playbackStartChunk = startChunk;
-        playbackStartSeconds = activeChart == null ? 0.0 : ChartTiming.beatToSeconds(activeChart, Math.max(0, startChunk - 1.0));
+        double divisionsPerChunk = activeChart == null ? 1.0 : Math.max(1.0, Math.min(32.0, activeChart.divisionsPerChunk));
+        playbackStartSeconds = activeChart == null ? 0.0 : ChartTiming.beatToSeconds(activeChart, Math.max(0.0, (startChunk - 1.0) * divisionsPerChunk));
         audioStartedAtNanos = 0;
         playbackTimingProfile = null;
         playbackTrackProfile = null;
@@ -337,8 +338,8 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         if (timing == null) timing = ChartTiming.prepare(chart);
         double songBeats = PlaybackCoordinates.beatAtSongTime(chart, timing, currentSeconds);
         int totalChunks = Math.max(1, chart.chunkCount);
-        int currentChunk = Math.max(1, Math.min(totalChunks, (int) Math.floor(songBeats) + 1));
-        int currentDivision = Math.max(1, Math.min(divisions, (int) Math.floor((songBeats - Math.floor(songBeats)) * divisions) + 1));
+        int currentChunk = Math.max(1, Math.min(totalChunks, (int) Math.floor(songBeats / divisions) + 1));
+        int currentDivision = Math.max(1, Math.min(divisions, (int) Math.floor(songBeats % divisions) + 1));
         return new SidebarSnapshot("播放", new String[] {
             "歌曲时间 " + formatHudTime(currentSeconds) + "/" + formatHudTime(totalSeconds),
             "chunk数 " + currentChunk + "/" + totalChunks,
@@ -350,7 +351,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         int divisions = Math.max(1, Math.min(32, chart.divisionsPerChunk > 0 ? chart.divisionsPerChunk : chart.beatsPerMeasure));
         double progress = Math.max(0.0, -client.player.getZ() - 3.0) / divisions;
         int totalChunks = Math.max(1, chart.chunkCount);
-        int currentChunk = Math.max(1, Math.min(totalChunks, (int) Math.floor(progress) + 1));
+        int currentChunk = Math.max(1, Math.min(totalChunks, (int) Math.floor(progress / divisions) + 1));
         double totalSeconds = chart.durationSeconds > 0.0 ? chart.durationSeconds : ChartTiming.beatToSeconds(chart, chart.totalBeats);
         if (!Double.isFinite(totalSeconds) || totalSeconds <= 0.0) totalSeconds = totalChunks * 60.0 / chart.bpm;
         double currentSeconds = Math.max(0.0, Math.min(totalSeconds, ChartTiming.beatToSeconds(chart, progress)));
