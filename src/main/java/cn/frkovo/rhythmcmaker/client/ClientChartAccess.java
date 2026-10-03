@@ -21,6 +21,9 @@ import java.util.Locale;
 final class ClientChartAccess {
     private static ChartManifest activeChart;
     private static RegistryKey<World> activeChartWorld;
+    private static MinecraftServer activeChartServer;
+    private static java.nio.file.attribute.FileTime activeChartModifiedTime;
+    private static long activeChartFileSize = -1L;
     private ClientChartAccess() {
     }
 
@@ -54,6 +57,8 @@ final class ClientChartAccess {
     static void setActiveChart(ChartManifest chart) {
         activeChart = chart;
         activeChartWorld = null;
+        activeChartModifiedTime = null;
+        activeChartFileSize = -1L;
     }
 
     static ChartManifest activeChart() { return activeChart; }
@@ -61,6 +66,7 @@ final class ClientChartAccess {
     static ChartManifest resolveActiveChart() {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player == null || client.getServer() == null) return activeChart;
+        synchronizeServer(client.getServer());
         try {
             var serverPlayer = client.getServer().getPlayerManager().getPlayer(client.player.getUuid());
             RegistryKey<World> worldKey = serverPlayer == null ? client.player.getEntityWorld().getRegistryKey() : serverPlayer.getEntityWorld().getRegistryKey();
@@ -79,11 +85,18 @@ final class ClientChartAccess {
     static boolean refreshActiveChartIfChanged() {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player == null || client.getServer() == null) return false;
+        synchronizeServer(client.getServer());
         try {
             var serverPlayer = client.getServer().getPlayerManager().getPlayer(client.player.getUuid());
             RegistryKey<World> worldKey = serverPlayer == null ? client.player.getEntityWorld().getRegistryKey() : serverPlayer.getEntityWorld().getRegistryKey();
             if (!cn.frkovo.rhythmcmaker.ChartDimensionManager.isChartWorld(worldKey)) return false;
-            ChartManifest fresh = ChartStorage.findByDimensionId(client.getServer(), worldKey.getValue().getPath());
+            boolean sameChart = activeChart != null && worldKey.equals(activeChartWorld);
+            java.nio.file.attribute.BasicFileAttributes attributes = sameChart
+                    ? ChartStorage.manifestAttributes(client.getServer(), activeChart.id) : null;
+            if (attributes != null && attributes.lastModifiedTime().equals(activeChartModifiedTime)
+                    && attributes.size() == activeChartFileSize) return false;
+            ChartManifest fresh = sameChart ? ChartStorage.find(client.getServer(), activeChart.id)
+                    : ChartStorage.findByDimensionId(client.getServer(), worldKey.getValue().getPath());
             if (fresh == null) return false;
             boolean changed = activeChart == null
                     || !fresh.id.equals(activeChart.id)
@@ -93,6 +106,9 @@ final class ClientChartAccess {
                     || fresh.chunkCount != activeChart.chunkCount;
             activeChart = fresh;
             activeChartWorld = worldKey;
+            if (attributes == null) attributes = ChartStorage.manifestAttributes(client.getServer(), fresh.id);
+            activeChartModifiedTime = attributes.lastModifiedTime();
+            activeChartFileSize = attributes.size();
             return changed;
         } catch (IOException ignored) {
             return false;
@@ -100,6 +116,15 @@ final class ClientChartAccess {
     }
 
     static Path activeAudioPath() throws IOException { return ChartStorage.audioPath(server(), resolveActiveChart()); }
+
+    private static void synchronizeServer(MinecraftServer server) {
+        if (activeChartServer == server) return;
+        activeChartServer = server;
+        activeChart = null;
+        activeChartWorld = null;
+        activeChartModifiedTime = null;
+        activeChartFileSize = -1L;
+    }
 
     static cn.frkovo.rhythmcmaker.chart.BpmDetector.TimingAnalysis analyzeTiming(Path audio) throws IOException { return ChartStorage.analyzeTiming(audio); }
 

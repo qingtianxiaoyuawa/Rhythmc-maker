@@ -196,6 +196,7 @@ public final class RhythmcMaker implements ModInitializer {
         });
         registerOptionalWorldEditIntegration();
         ServerChunkEvents.CHUNK_LOAD.register((world, chunk) -> {
+            if (!isEditorWorld(world)) return;
             cleanupStaleNoteDisplays(world, chunk.getPos());
             scheduleNoteDisplayChunkCleanup(world, chunk.getPos(), false);
         });
@@ -1871,6 +1872,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             boolean updateDisplayPositions = session.shouldUpdateDisplayPositions(server.getTicks());
             session.playedTapSoundThisTick = false;
             session.playedLookSoundThisTick = false;
+            session.updateClientTime(player);
             if (session.formal) {
                 while (session.nextEffectIndex < session.effects.size()) {
                     JsonObject effect = session.effects.get(session.nextEffectIndex);
@@ -2010,7 +2012,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         double y = effectDouble(effect, "y", PLAYBACK_PLATFORM_Y + 1.5);
         double z = effectDouble(effect, "z", PLAYBACK_PLATFORM_Z + 0.5);
         switch (type) {
-            case "GLOW_COLOR" -> session.updateGlowTeam();
+            case "GLOW_COLOR" -> session.applyGlowColor(effect);
             case "HIDE_NOTES" -> session.updateHiddenNotes(effect);
             case "TITLE", "ACTIONBAR", "MESSAGE" -> { if (!text.isBlank()) player.sendMessage(Text.literal(text), "CHAT".equalsIgnoreCase(effectString(effect, "type", "ACTIONBAR")) ? false : true); }
             case "TEXT_DISPLAY", "TEXT_DISPLAY_EFFECT", "TEXT_DISPLAY_SYNC_TRACK", "TEXT_DISPLAY_DESYNC_TRACK", "TEXT_DISPLAY_REMOVE", "HOLOGRAM", "REMOVE_HOLOGRAM" -> session.applyTextEffect(effect);
@@ -2080,6 +2082,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         PlaybackSession session = PLAYBACK_SESSIONS.remove(player.getUuid());
         if (session == null) return;
         try {
+            session.resetClientTime(player);
             session.clearGlowTeam();
             for (DisplayEntity.BlockDisplayEntity display : session.displays.values()) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
             for (DisplayEntity.BlockDisplayEntity display : session.displayPool) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
@@ -2157,6 +2160,9 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final Set<Integer> hiddenNoteTypes = new java.util.HashSet<>();
         private final Set<Integer> hiddenTracks = new java.util.HashSet<>();
         private final Map<Integer, Team> glowTeams = new java.util.HashMap<>();
+        private Formatting observerGlowColor = Formatting.WHITE;
+        private Long clientTime;
+        private long clientTimeExpiresAtNanos;
         private final Map<String, ChartManifest.Note> notesById = new java.util.HashMap<>();
         private final Map<String, Double> noteTimes = new java.util.HashMap<>();
 
@@ -2259,12 +2265,18 @@ private static void showSceneBoundary(MinecraftServer server) {
             }
         }
         private Team createGlowTeam(int type) {
-            String suffix = type == 3 ? "red" : type == 2 ? "diamond" : "white";
+            String suffix = type == 3 ? "red" : type == 2 ? "diamond" : type == 1 ? "observer" : "white";
             String name = "rhythmc_preview_glow_" + suffix;
             Team team = world.getScoreboard().getTeam(name);
             if (team == null) team = world.getScoreboard().addTeam(name);
-            team.setColor(type == 3 ? Formatting.RED : type == 2 ? Formatting.AQUA : Formatting.WHITE);
+            team.setColor(type == 3 ? Formatting.RED : type == 2 ? Formatting.AQUA : type == 1 ? observerGlowColor : Formatting.WHITE);
             return team;
+        }
+        private void applyGlowColor(JsonObject effect) {
+            observerGlowColor = effectFormatting(effect, "color", Formatting.WHITE);
+            Team observerTeam = glowTeams.get(1);
+            if (observerTeam != null) observerTeam.setColor(observerGlowColor);
+            updateGlowTeam();
         }
         private void clearGlowTeam() {
             for (DisplayEntity.BlockDisplayEntity display : displays.values()) {
@@ -2297,10 +2309,37 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
         private void applyTime(ServerPlayerEntity player, JsonObject effect) {
             long time = Math.max(0L, (long) effectDouble(effect, "time", effectDouble(effect, "timeOfDay", effectDouble(effect, "worldTime", effectDouble(effect, "value", world.getTimeOfDay())))));
-            boolean clientOnly = effectBoolean(effect, "client", false);
-            if (!clientOnly) world.setTimeOfDay(time);
+            boolean clientOnly = effectBoolean(effect, "client", true);
+            if (!clientOnly) {
+                resetClientTime(player);
+                world.setTimeOfDay(time);
+                player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.WorldTimeUpdateS2CPacket(
+                        world.getTime(), time, world.getGameRules().getValue(GameRules.ADVANCE_TIME)));
+                return;
+            }
+            clientTime = time;
+            double durationMillis = effectDouble(effect, "duration", Double.POSITIVE_INFINITY);
+            double elapsedMillis = Math.max(0.0, (System.nanoTime() - startNanos) / 1_000_000.0 * rate
+                    + (startSeconds - effectSeconds(effect)) * 1000.0);
+            double remainingNanos = Math.max(0.0, durationMillis - elapsedMillis) * 1_000_000.0 / rate;
+            long now = System.nanoTime();
+            clientTimeExpiresAtNanos = remainingNanos >= Long.MAX_VALUE - now ? Long.MAX_VALUE : now + (long) remainingNanos;
+            updateClientTime(player);
+        }
+        private void updateClientTime(ServerPlayerEntity player) {
+            if (clientTime == null) return;
+            if (System.nanoTime() >= clientTimeExpiresAtNanos) {
+                resetClientTime(player);
+                return;
+            }
             player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.WorldTimeUpdateS2CPacket(
-                    world.getTime(), time, true));
+                    world.getTime(), clientTime, false));
+        }
+        private void resetClientTime(ServerPlayerEntity player) {
+            if (clientTime == null) return;
+            clientTime = null;
+            player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.WorldTimeUpdateS2CPacket(
+                    world.getTime(), world.getTimeOfDay(), world.getGameRules().getValue(GameRules.ADVANCE_TIME)));
         }
         private void applyWeather(JsonObject effect) {
             String weather = effectString(effect, "weather", effectString(effect, "type", "clear")).toLowerCase(java.util.Locale.ROOT);
@@ -2551,14 +2590,14 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
     }
     private static ChartManifest chartForWorld(ServerWorld world) {
+        if (!isEditorWorld(world)) return null;
         ChartManifest cached = CHART_CACHE_BY_WORLD.get(world.getRegistryKey());
         if (cached != null) return cached;
         try {
-            for (ChartManifest chart : ChartStorage.list(world.getServer())) {
-                if (chart != null && ChartDimensionManager.key(chart).equals(world.getRegistryKey())) {
-                    CHART_CACHE_BY_WORLD.put(world.getRegistryKey(), chart);
-                    return chart;
-                }
+            ChartManifest chart = ChartStorage.findByDimensionId(world.getServer(), world.getRegistryKey().getValue().getPath());
+            if (chart != null) {
+                CHART_CACHE_BY_WORLD.put(world.getRegistryKey(), chart);
+                return chart;
             }
         } catch (IOException exception) {
             LOGGER.warn("Failed to resolve chart for display cleanup", exception);

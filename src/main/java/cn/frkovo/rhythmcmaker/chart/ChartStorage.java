@@ -86,7 +86,7 @@ public final class ChartStorage {
                 double judgeTick = jsonNumber(frame, "judge-tick", 0).doubleValue();
                 if (!Double.isFinite(judgeTick)) continue;
                 double frameSeconds = Math.max(0.0, judgeTick / 20.0);
-                double frameBeat = snapLegacyBeat(frameSeconds * bpm / 60.0, chart.divisionsPerChunk);
+                double frameBeat = snapImportedBeat(frameSeconds * bpm / 60.0);
                 if (!frame.has("notes") || !frame.get("notes").isJsonArray()) continue;
                 for (JsonElement noteElement : frame.getAsJsonArray("notes")) {
                     if (!noteElement.isJsonObject()) continue;
@@ -99,7 +99,7 @@ public final class ChartStorage {
                         note.id = UUID.randomUUID().toString();
                         note.type = type;
                         double noteSeconds = Math.max(0.0, frameSeconds + hold / 20.0);
-                        note.beat = snapLegacyBeat(noteSeconds * bpm / 60.0, chart.divisionsPerChunk);
+                        note.beat = snapImportedBeat(noteSeconds * bpm / 60.0);
                         note.time = timing.beatToSeconds(note.beat);
                         if (source.has("pos") && source.get("pos").isJsonArray()) {
                             JsonArray pos = source.getAsJsonArray("pos");
@@ -130,7 +130,7 @@ public final class ChartStorage {
                 if (effect == null) continue;
                 if (effect.has("start-tick") && effect.get("start-tick").isJsonPrimitive()) {
                     double startTick = effect.get("start-tick").getAsDouble();
-                    if (Double.isFinite(startTick)) effect.addProperty("beat", snapLegacyBeat(Math.max(0.0, startTick / 20.0) * bpm / 60.0, chart.divisionsPerChunk));
+                    if (Double.isFinite(startTick)) effect.addProperty("beat", snapImportedBeat(Math.max(0.0, startTick / 20.0) * bpm / 60.0));
                 }
                 if ("ARENA".equalsIgnoreCase(effect.has("effect-type") ? effect.get("effect-type").getAsString() : "")
                         && effect.has("arena") && effect.get("arena").isJsonPrimitive()) {
@@ -232,6 +232,7 @@ public final class ChartStorage {
             JsonObject noteSource = sourceElement.getAsJsonObject();
             double beat = jsonNumber(noteSource, "beat", 0).doubleValue();
             if (!Double.isFinite(beat)) continue;
+            beat = snapImportedBeat(beat);
             ChartManifest.Note note = new ChartManifest.Note();
             note.id = UUID.randomUUID().toString(); note.trackId = track.id; note.type = jsonNumber(noteSource, "noteType", 0).intValue();
             note.beat = beat; note.time = timing.beatToSeconds(beat); note.holdGroup = jsonNumber(noteSource, "holdGroup", -1).intValue();
@@ -258,16 +259,22 @@ public final class ChartStorage {
         String type = switch (legacy) { case "REMOVEHOLOGRAM" -> "REMOVE_HOLOGRAM"; case "INVERT", "POTION", "POTIONEFFECT", "STATUSEFFECT" -> "EFFECT"; case "CLREFFECT" -> "CLEAR_EFFECT"; case "COLOR" -> "GLOW_COLOR"; case "VISIBLE" -> "HIDE_NOTES"; case "TEXT" -> "TEXT_DISPLAY"; case "TRANSFORMATIONS" -> "TEXT_DISPLAY_EFFECT"; case "CLIENTTIME", "SETCLIENTTIME", "TIMECLIENT", "WORLDTIME", "SETWORLDTIME", "SETTIME" -> "TIME"; default -> legacy; };
         if (type.isBlank()) return null;
         JsonObject converted = new JsonObject(); converted.addProperty("eventType", type);
-        double tick = jsonNumber(old, "start-tick", jsonNumber(old, "beat", 0)).doubleValue(); converted.addProperty("beat", snapLegacyBeat(Math.max(0.0, tick / 20.0) * bpm / 60.0, divisions));
-        JsonObject properties = old.deepCopy(); properties.remove("effect-type"); properties.remove("start-tick"); properties.remove("beat");
+        double tick = jsonNumber(old, "start-tick", jsonNumber(old, "beat", 0)).doubleValue(); converted.addProperty("beat", snapImportedBeat(Math.max(0.0, tick / 20.0) * bpm / 60.0));
+        JsonObject properties = old.has("properties") && old.get("properties").isJsonObject()
+                ? old.getAsJsonObject("properties").deepCopy() : new JsonObject();
+        for (var entry : old.entrySet()) if (!entry.getKey().equals("properties")) properties.add(entry.getKey(), entry.getValue().deepCopy());
+        properties.remove("effect-type"); properties.remove("start-tick"); properties.remove("beat");
         if (legacy.equals("INVERT")) properties.addProperty("type", "BLINDNESS");
         if (type.equals("EFFECT") && !properties.has("type")) {
             String potion = firstJsonString(old, "effect", "potion", firstJsonString(old, "effect-id", "potion-effect", "UNKNOWN"));
             properties.addProperty("type", potion);
         }
         if (type.equals("TIME") && (legacy.contains("CLIENTTIME") || legacy.contains("TIMECLIENT"))) properties.addProperty("client", true);
+        if (type.equals("TIME") && (legacy.contains("WORLDTIME") || legacy.equals("SETTIME"))) properties.addProperty("client", false);
+        if (type.equals("TIME") && properties.has("duration") && !properties.get("duration").isJsonNull())
+            properties.addProperty("duration", jsonNumber(properties, "duration", 0).doubleValue() * 50.0);
         if (type.equals("TIME") && !properties.has("time")) {
-            Number time = jsonNumber(old, "time-of-day", jsonNumber(old, "world-time", jsonNumber(old, "client-time", jsonNumber(old, "clientTime", jsonNumber(old, "value", 1000)))));
+            Number time = jsonNumber(properties, "time-of-day", jsonNumber(properties, "world-time", jsonNumber(properties, "client-time", jsonNumber(properties, "clientTime", jsonNumber(properties, "value", 1000)))));
             properties.addProperty("time", time);
         }
         if (legacy.equals("VISIBLE")) properties.addProperty("hidden", !old.has("visible") || !old.get("visible").getAsBoolean());
@@ -312,10 +319,20 @@ public final class ChartStorage {
     }
     private static Number jsonNumber(JsonObject object, String key, Number fallback) { try { return object.has(key) ? object.get(key).getAsDouble() : fallback; } catch (RuntimeException ignored) { return fallback; } }
     private static String difficultyFromFile(Path file) { String name = file.getFileName().toString().toLowerCase(); return name.startsWith("nether") ? "NR" : name.startsWith("end") ? "ED" : name.startsWith("void") ? "VO" : "WD"; }
-    private static double snapLegacyBeat(double beat, int divisionsPerChunk) {
+    private static double snapImportedBeat(double beat) {
         if (!Double.isFinite(beat)) return 0.0;
-        int divisions = Math.max(1, Math.min(32, divisionsPerChunk));
-        return Math.max(0.0, Math.rint(beat * divisions) / divisions);
+        double target = Math.max(0.0, beat);
+        double nearest = Math.rint(target);
+        double smallestError = Math.abs(nearest - target);
+        for (int denominator = 2; denominator <= 32; denominator++) {
+            double candidate = Math.rint(target * denominator) / denominator;
+            double error = Math.abs(candidate - target);
+            if (error < smallestError) {
+                nearest = candidate;
+                smallestError = error;
+            }
+        }
+        return nearest;
     }
 
     private static int calculateImportedTrackLength(ChartManifest chart) {
@@ -416,10 +433,18 @@ public final class ChartStorage {
 
     public static ChartManifest findByDimensionId(MinecraftServer server, String dimensionId) throws IOException {
         if (dimensionId == null || dimensionId.isBlank()) return null;
-        for (ChartManifest chart : list(server)) {
-            if (cn.frkovo.rhythmcmaker.ChartDimensionManager.stableDimensionId(chart.id).equals(dimensionId)) return chart;
+        Path manifests = manifestsDirectory(server);
+        try (var files = Files.list(manifests)) {
+            for (Path path : files.filter(file -> file.getFileName().toString().endsWith(".json")).toList()) {
+                String chartId = stripExtension(path.getFileName().toString());
+                if (cn.frkovo.rhythmcmaker.ChartDimensionManager.stableDimensionId(chartId).equals(dimensionId)) return find(server, chartId);
+            }
         }
         return null;
+    }
+
+    public static java.nio.file.attribute.BasicFileAttributes manifestAttributes(MinecraftServer server, String chartId) throws IOException {
+        return Files.readAttributes(manifestPath(server, chartId), java.nio.file.attribute.BasicFileAttributes.class);
     }
 
     public static void delete(MinecraftServer server, ChartManifest chart) throws IOException {
