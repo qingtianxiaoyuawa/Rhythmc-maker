@@ -206,7 +206,7 @@ final class ClientChartAccess {
     static void saveConfig(cn.frkovo.rhythmcmaker.config.RhythmcMakerConfig config) throws IOException { cn.frkovo.rhythmcmaker.RhythmcMaker.updateConfig(server(), config); }
 
     static void update(ChartManifest chart) throws IOException {
-        ChartStorage.update(server(), chart);
+        cn.frkovo.rhythmcmaker.RhythmcMaker.updateChart(server(), chart);
     }
     static Path exportRhythmc3(ChartManifest chart) throws IOException {
         return Rhythmc3Exporter.export(server(), chart);
