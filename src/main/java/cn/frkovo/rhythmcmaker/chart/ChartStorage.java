@@ -151,7 +151,11 @@ public final class ChartStorage {
     }
 
     public static ChartManifest importRhythmc3(MinecraftServer server, Path difficultyFile, Path manifestFile, Path stagedAudio, List<ImportedScene> scenes) throws IOException {
-        ChartManifest chart = importRhythmc3(server, difficultyFile, manifestFile, stagedAudio);
+        return importRhythmc3(server, difficultyFile, manifestFile, null, stagedAudio, scenes);
+    }
+
+    public static ChartManifest importRhythmc3(MinecraftServer server, Path difficultyFile, Path manifestFile, Path layoutFile, Path stagedAudio, List<ImportedScene> scenes) throws IOException {
+        ChartManifest chart = importRhythmc3(server, difficultyFile, manifestFile, layoutFile, stagedAudio);
         if (scenes != null && !scenes.isEmpty()) {
             Path sceneRoot = root(server).resolve("scenes").resolve(chart.id).toAbsolutePath().normalize();
             Files.createDirectories(sceneRoot);
@@ -183,13 +187,17 @@ public final class ChartStorage {
     }
 
     public static ChartManifest importRhythmc3(MinecraftServer server, Path difficultyFile, Path manifestFile, Path stagedAudio) throws IOException {
+        return importRhythmc3(server, difficultyFile, manifestFile, null, stagedAudio);
+    }
+
+    private static ChartManifest importRhythmc3(MinecraftServer server, Path difficultyFile, Path manifestFile, Path layoutFile, Path stagedAudio) throws IOException {
         JsonObject root = JsonParser.parseString(readChartText(difficultyFile)).getAsJsonObject();
         JsonObject meta = root.getAsJsonObject("meta");
         if (meta == null) throw new IOException("3.0 难度文件缺少 meta");
         ChartManifest chart = new ChartManifest();
         Map<String, Object> manifest = readYaml(manifestFile);
         chart.id = UUID.randomUUID().toString(); chart.title = yamlString(manifest, "name", "未命名谱面"); chart.artist = yamlString(manifest, "composer", "Unknown"); chart.charter = yamlString(manifest, "charter", yamlString(manifest, "author", "Unknown")); chart.coverItemId = coverItemId(yamlString(manifest, "icon", yamlString(manifest, "cover", "minecraft:note_block"))); chart.difficulty = difficultyFromFile(difficultyFile);
-        readEditorTrackLayout(meta, difficultyFile).applyTo(chart);
+        readEditorTrackLayout(meta, difficultyFile, layoutFile).applyTo(chart);
         chart.offsetMillis = jsonNumber(meta, "offset", jsonNumber(meta, "offsetMillis", 0)).longValue(); chart.level = jsonNumber(meta, "level", 1).doubleValue();
         if (meta.has("initialArena") && meta.get("initialArena").isJsonPrimitive()) chart.initialArena = meta.get("initialArena").getAsString();
          if ((chart.charter == null || chart.charter.equals("Unknown")) && meta.has("charters") && meta.get("charters").isJsonArray() && meta.getAsJsonArray("charters").size() > 0) chart.charter = meta.getAsJsonArray("charters").get(0).getAsString();
@@ -213,9 +221,13 @@ public final class ChartStorage {
         if (root.has("effects") && root.get("effects").isJsonArray()) for (JsonElement effect : root.getAsJsonArray("effects")) if (effect.isJsonObject()) chart.effects.add(effect.getAsJsonObject().deepCopy());
         create(server, chart, stagedAudio); return chart;
     }
-    private static EditorTrackLayout readEditorTrackLayout(JsonObject meta, Path difficultyFile) throws IOException {
-        Path layoutFile = difficultyFile.resolveSibling(EditorTrackLayoutFile.FILE_NAME);
-        if (Files.isRegularFile(layoutFile)) return EditorTrackLayoutFile.read(layoutFile);
+    private static EditorTrackLayout readEditorTrackLayout(JsonObject meta, Path difficultyFile, Path selectedLayoutFile) throws IOException {
+        if (selectedLayoutFile != null) {
+            if (!Files.isRegularFile(selectedLayoutFile)) throw new IOException("制谱器布局文件不存在：" + selectedLayoutFile.getFileName());
+            return EditorTrackLayoutFile.read(selectedLayoutFile);
+        }
+        Path siblingLayoutFile = difficultyFile.resolveSibling(EditorTrackLayoutFile.FILE_NAME);
+        if (Files.isRegularFile(siblingLayoutFile)) return EditorTrackLayoutFile.read(siblingLayoutFile);
         int divisionsPerChunk = jsonNumber(meta, "divisionsPerChunk", jsonNumber(meta, "beatsPerChunk", jsonNumber(meta, "divisions", RhythmcMaker.defaultDivisionsPerChunk()))).intValue();
         return EditorTrackLayout.of(EditorTrackLayout.DEFAULT_LANE_COUNT, divisionsPerChunk);
     }

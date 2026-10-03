@@ -125,6 +125,7 @@ private void importLegacyMenu(FlowLayout page) {
         page.child(menuHeader("导入 3.0 谱面", "导入现有 RhythMC 3.0 谱面文件", pageWidth() - 24));
         upload(page, "上传难度文件", draft.difficulty, path -> draft.difficulty = path, "难度文件|*.rmcc;*.json");
         upload(page, "上传谱面信息文件", draft.manifest, path -> draft.manifest = path, "谱面信息|manifest.yml;*.yml;*.yaml");
+        upload(page, "上传制谱器布局文件（可选）", draft.layout, path -> draft.layout = path, "制谱器布局|layout.json;*.json");
         upload(page, "上传歌曲文件", draft.song, path -> draft.song = path, "音频文件|*.mp3;*.flac;*.wav;*.ogg;*.m4a;*.aac");
         long completeScenes = draft.scenes.stream().filter(Scene::complete).count();
         page.child(UIComponents.button(Text.literal("上传场景（完整 " + completeScenes + "，未完整 " + (draft.scenes.size() - completeScenes) + "）"), button -> {
@@ -168,6 +169,7 @@ private void importLegacyMenu(FlowLayout page) {
         importing = true;
         Path difficulty = draft.difficulty;
         Path manifest = draft.manifest;
+        Path layout = draft.layout;
         Path song = draft.song;
         List<ClientChartAccess.ImportedScene> completeScenes = draft.scenes.stream()
                 .filter(Scene::complete)
@@ -176,7 +178,7 @@ private void importLegacyMenu(FlowLayout page) {
         ClientChartAccess.status("正在导入 3.0 谱面，请稍候...");
         client.getServer().execute(() -> {
             try {
-                ClientChartAccess.importRhythmc3(difficulty, manifest, ClientChartAccess.stageAudio(song), completeScenes);
+                ClientChartAccess.importRhythmc3(difficulty, manifest, layout, ClientChartAccess.stageAudio(song), completeScenes);
                 client.execute(() -> {
                     importing = false;
                     ClientChartAccess.status("3.0 谱面已导入（完整场景 " + completeScenes.size() + " 个）");
@@ -194,7 +196,7 @@ private void importLegacyMenu(FlowLayout page) {
     private void back(FlowLayout page) { page.child(UIComponents.button(Text.literal("返回"), button -> MinecraftClient.getInstance().setScreen(new ChartListScreen())).horizontalSizing(Sizing.fixed(100))); }
     private void reopen(int index) { MinecraftClient.getInstance().setScreen(new ImportChartScreen(draft, index)); }
 
-    static final class Draft { boolean version2, version3; Path difficulty, manifest, song; String importBpm = "120"; String importDifficulty = "WD"; String importLevel = "1"; final List<Scene> scenes = new ArrayList<>(); }
+    static final class Draft { boolean version2, version3; Path difficulty, manifest, layout, song; String importBpm = "120"; String importDifficulty = "WD"; String importLevel = "1"; final List<Scene> scenes = new ArrayList<>(); }
     static final class Scene {
         Path schem, info;
         boolean complete() { return schem != null && info != null && Files.isRegularFile(schem) && Files.isRegularFile(info); }
