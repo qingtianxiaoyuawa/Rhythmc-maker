@@ -796,8 +796,9 @@ public final class RhythmcMaker implements ModInitializer {
     }
     public static void saveCurrentChart(MinecraftServer server, ServerPlayerEntity player) { saveActiveChart(server, player); }
     public static void updateChart(MinecraftServer server, ChartManifest chart) throws IOException {
+        CachedChartState state = cacheChart(server, chart);
+        synchronized (state) { state.chart = chart; }
         saveChart(server, chart);
-        CachedChartState state = CHART_CACHE_BY_ID.get(chart.id);
         if (state != null) queueChartSave(server, state);
     }
     public static String activeChart(ServerPlayerEntity player) { return ACTIVE_CHARTS.get(player.getUuid()); }
@@ -836,11 +837,7 @@ public final class RhythmcMaker implements ModInitializer {
             CHART_CACHE_BY_ID.clear();
             CHART_CACHE_BY_WORLD.clear();
         }
-        CachedChartState state = CHART_CACHE_BY_ID.computeIfAbsent(chart.id, ignored -> new CachedChartState(chart));
-        if (state.chart != chart) {
-            synchronized (state) { state.chart = chart; }
-        }
-        return state;
+        return CHART_CACHE_BY_ID.computeIfAbsent(chart.id, ignored -> new CachedChartState(chart));
     }
 
     private static ChartManifest cachedChart(MinecraftServer server, String chartId) throws IOException {
