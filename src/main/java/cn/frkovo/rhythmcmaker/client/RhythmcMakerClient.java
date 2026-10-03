@@ -7,6 +7,7 @@ import cn.frkovo.rhythmcmaker.chart.PlaybackCoordinates;
 import cn.frkovo.rhythmcmaker.chart.TrackPlayback;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
 import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderContext;
@@ -49,8 +50,6 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     private static boolean playbackStopRequested;
     private static double audioDurationSeconds;
     private static double playbackStartSeconds;
-    private static double playbackFrameStartZ;
-    private static double playbackFrameVelocity;
     private static boolean audioAttempted;
     private static Path audioErrorLog;
     private static CompletableFuture<Path> audioPlayerFuture;
@@ -58,10 +57,16 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     private static int playbackAudioDelayTicks;
     private static int playbackToggleCooldownTicks;
     private static int playbackStartChunk = 1;
+    private static double playbackStartBeat;
     private static boolean playbackAudioRequested;
     private static String pendingPlaybackCommand;
     private static String playbackMode = "formal";
     private static double playbackRate = 1.0;
+    private static boolean effectEditorPreviewPrepared;
+    private static boolean effectEditorPlaybackRequested;
+    private static boolean effectEditorCameraLocked;
+    private static double effectEditorPlayheadBeat;
+    private static float effectEditorFov = -1.0f;
     private static SidebarSnapshot sidebarSnapshot;
     private static long sidebarSnapshotNanos;
     private static String sidebarSnapshotContext = "";
@@ -73,6 +78,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     }
 
     @Override public void onInitializeClient() {
+        ClientLifecycleEvents.CLIENT_STOPPING.register(client -> cn.frkovo.rhythmcmaker.client.render.ImGuiRuntime.dispose());
         WorldRenderEvents.AFTER_ENTITIES.register(RhythmcMakerClient::renderScrollPlaybackBox);
         var category = KeyBinding.Category.create(net.minecraft.util.Identifier.of("rhythmc_maker", "main"));
         settingsKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.rhythmc_maker.settings", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_H, category));
@@ -157,8 +163,11 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             boolean inChartDimension = client.player != null && isEditorDimension(client);
             if (playbackToggleCooldownTicks > 0) playbackToggleCooldownTicks--;
             if (inChartDimension && playbackAudioDelayTicks > 0) playbackAudioDelayTicks--;
-            if (playbackAudioRequested && playbackAudioDelayTicks <= 0 && audioProcess == null && !audioAttempted) startAudio(playbackStartChunk);
-            if (playbackAudioRequested && pendingPlaybackCommand != null && audioProcess != null && audioProcess.isAlive() && audioStartedAtNanos > 0 && System.nanoTime() - audioStartedAtNanos >= 150_000_000L) {
+            if (playbackAudioRequested && playbackAudioDelayTicks <= 0 && audioProcess == null && !audioAttempted) {
+                if (effectEditorPreviewPrepared) startAudioAtBeat(playbackStartBeat);
+                else startAudio(playbackStartChunk);
+            }
+            if (playbackAudioRequested && pendingPlaybackCommand != null && audioProcess != null && audioProcess.isAlive() && audioStartedAtNanos > 0) {
                 sendCommand(client, pendingPlaybackCommand);
                 pendingPlaybackCommand = null;
             }
@@ -208,7 +217,8 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         int startChunk = activeChart == null ? selectedPlaybackChunk : Math.max(1, Math.min(Math.max(1, activeChart.chunkCount), selectedPlaybackChunk));
         selectedPlaybackChunk = startChunk;
         playbackStartChunk = startChunk;
-        playbackStartSeconds = activeChart == null ? 0.0 : ChartTiming.beatToSeconds(activeChart, Math.max(0.0, startChunk - 1.0));
+        playbackStartBeat = activeChart == null ? 0.0 : Math.max(0.0, (startChunk - 1.0) * Math.max(1.0, Math.min(32.0, activeChart.divisionsPerChunk)));
+        playbackStartSeconds = activeChart == null ? 0.0 : PlaybackCoordinates.songTimeAtBeat(activeChart, ChartTiming.prepare(activeChart), playbackStartBeat);
         audioStartedAtNanos = 0;
         playbackTimingProfile = null;
         playbackTrackProfile = null;
@@ -218,6 +228,141 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             sendCommand(client, pendingPlaybackCommand);
             pendingPlaybackCommand = null;
         }
+    }
+
+    static void prepareEffectEditorPreview() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        ChartManifest chart = ClientChartAccess.resolveActiveChart();
+        if (client.player == null || chart == null || chart.bpm <= 0) return;
+        if (effectEditorPreviewPrepared) return;
+        if (playbackAudioRequested || audioProcess != null) finishPlayback(client, true);
+        syncPlaybackPreference();
+        playbackMode = "scroll";
+        effectEditorPreviewPrepared = true;
+        effectEditorPlaybackRequested = false;
+        effectEditorCameraLocked = false;
+        effectEditorFov = client.options.getFov().getValue().floatValue();
+        effectEditorPlayheadBeat = Math.max(0.0, Math.min(Math.max(0.0, chart.totalBeats), effectEditorPlayheadBeat));
+        playbackStartBeat = effectEditorPlayheadBeat;
+        playbackTimingProfile = ChartTiming.prepare(chart);
+        playbackStartSeconds = PlaybackCoordinates.songTimeAtBeat(chart, playbackTimingProfile, playbackStartBeat);
+        playbackTrackProfile = PlaybackCoordinates.prepareDefaultTrack(chart);
+        sendCommand(client, "rhythmc_effect_preview_prepare");
+    }
+
+    static void toggleEffectEditorPlayback() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        ChartManifest chart = ClientChartAccess.resolveActiveChart();
+        if (client.player == null || chart == null || chart.bpm <= 0) return;
+        if (!effectEditorPreviewPrepared) prepareEffectEditorPreview();
+        if (effectEditorPlaybackRequested && playbackAudioRequested) {
+            effectEditorPlayheadBeat = effectEditorCurrentBeat();
+            stopAudio();
+            playbackAudioRequested = false;
+            effectEditorPlaybackRequested = false;
+            pendingPlaybackCommand = null;
+            sendCommand(client, "rhythmc_effect_preview_prepare");
+            return;
+        }
+        startEffectEditorPlayback(effectEditorPlayheadBeat);
+    }
+
+    static void seekEffectEditorPreview(double beat) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        ChartManifest chart = ClientChartAccess.resolveActiveChart();
+        if (chart == null) return;
+        effectEditorPlayheadBeat = Math.max(0.0, Math.min(Math.max(0.0, chart.totalBeats), beat));
+        playbackStartBeat = effectEditorPlayheadBeat;
+        playbackTimingProfile = ChartTiming.prepare(chart);
+        playbackStartSeconds = PlaybackCoordinates.songTimeAtBeat(chart, playbackTimingProfile, playbackStartBeat);
+        if (!effectEditorPlaybackRequested || !playbackAudioRequested) {
+            if (effectEditorPreviewPrepared) sendCommand(client, "rhythmc_effect_preview_prepare");
+            return;
+        }
+        sendCommand(client, "rhythmc_stop_playback");
+        stopAudio();
+        playbackAudioRequested = true;
+        audioAttempted = false;
+        audioPreparingNoticeShown = false;
+        playbackAudioDelayTicks = 0;
+        pendingPlaybackCommand = null;
+        effectEditorCameraLocked = true;
+        startAudioAtBeat(effectEditorPlayheadBeat);
+        if (audioProcess != null && audioProcess.isAlive() && pendingPlaybackCommand != null) {
+            sendCommand(client, pendingPlaybackCommand);
+            pendingPlaybackCommand = null;
+        }
+    }
+
+    private static void startEffectEditorPlayback(double beat) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        ChartManifest chart = ClientChartAccess.resolveActiveChart();
+        if (chart == null) return;
+        effectEditorPlayheadBeat = Math.max(0.0, Math.min(Math.max(0.0, chart.totalBeats), beat));
+        playbackStartBeat = effectEditorPlayheadBeat;
+        playbackTimingProfile = ChartTiming.prepare(chart);
+        playbackStartSeconds = PlaybackCoordinates.songTimeAtBeat(chart, playbackTimingProfile, playbackStartBeat);
+        playbackAudioRequested = true;
+        effectEditorPlaybackRequested = true;
+        effectEditorCameraLocked = true;
+        playbackStopRequested = false;
+        audioAttempted = false;
+        audioPreparingNoticeShown = false;
+        playbackAudioDelayTicks = 0;
+        pendingPlaybackCommand = null;
+        sendCommand(client, "rhythmc_stop_playback");
+        startAudioAtBeat(effectEditorPlayheadBeat);
+        if (audioProcess != null && audioProcess.isAlive() && pendingPlaybackCommand != null) {
+            sendCommand(client, pendingPlaybackCommand);
+            pendingPlaybackCommand = null;
+        }
+    }
+
+    static void stopEffectEditorPreview() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        boolean active = effectEditorPreviewPrepared || effectEditorPlaybackRequested || playbackAudioRequested || audioProcess != null;
+        effectEditorPreviewPrepared = false;
+        effectEditorPlaybackRequested = false;
+        effectEditorCameraLocked = false;
+        effectEditorFov = -1.0f;
+        pendingPlaybackCommand = null;
+        if (playbackAudioRequested || audioProcess != null) stopAudio();
+        playbackAudioRequested = false;
+        if (active) sendCommand(client, "rhythmc_stop_playback");
+    }
+
+    public static boolean isEffectEditorCameraLocked() {
+        return effectEditorPreviewPrepared && effectEditorCameraLocked;
+    }
+
+    public static Vec3d effectEditorCameraPosition() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        ChartManifest chart = ClientChartAccess.resolveActiveChart();
+        if (chart == null) return new Vec3d(0.0, 72.0, PlaybackCoordinates.CHART_ORIGIN_Z);
+        double beat = effectEditorCurrentBeat();
+        double z = PlaybackCoordinates.editorWorldZAtBeat(chart, beat);
+        return new Vec3d(0.0, 72.0, z);
+    }
+
+    public static float effectEditorCameraFov(float fallback) {
+        return effectEditorFov > 0.0f ? effectEditorFov : fallback;
+    }
+
+    public static double effectEditorCurrentBeat() {
+        ChartManifest chart = ClientChartAccess.resolveActiveChart();
+        if (chart == null || playbackTimingProfile == null || !effectEditorPlaybackRequested || audioStartedAtNanos <= 0) return effectEditorPlayheadBeat;
+        double beat = PlaybackCoordinates.beatAtSongTime(chart, playbackTimingProfile, effectEditorCurrentSongTime());
+        return Math.max(0.0, Math.min(Math.max(0.0, chart.totalBeats), beat));
+    }
+
+    private static double effectEditorCurrentSongTime() {
+        if (audioStartedAtNanos <= 0) return playbackStartSeconds;
+        double elapsed = Math.max(0.0, (System.nanoTime() - audioStartedAtNanos) / 1_000_000_000.0) * playbackRate;
+        return playbackStartSeconds + elapsed;
+    }
+
+    public static boolean isEffectEditorPlaybackActive() {
+        return effectEditorPlaybackRequested && playbackAudioRequested && audioProcess != null && audioProcess.isAlive();
     }
 
     private static void syncPlaybackPreference() {
@@ -433,6 +578,12 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     }
 
     private static void startAudio(int startChunk) {
+        ChartManifest chart = ClientChartAccess.resolveActiveChart();
+        double divisionsPerChunk = chart == null ? 1.0 : Math.max(1.0, Math.min(32.0, chart.divisionsPerChunk));
+        startAudioAtBeat(Math.max(0.0, (startChunk - 1.0) * divisionsPerChunk));
+    }
+
+    private static void startAudioAtBeat(double startBeat) {
         var chart = ClientChartAccess.resolveActiveChart();
         if (chart == null || chart.audioFile == null || chart.audioFile.isBlank() || chart.bpm <= 0) {
             audioAttempted = true;
@@ -450,9 +601,9 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             Path audio = ClientChartAccess.activeAudioPath();
             if (!Files.isRegularFile(audio)) throw new IOException("音频文件不存在");
             Path player = audioPlayerFuture.join();
-            double divisionsPerChunk = Math.max(1.0, Math.min(32.0, chart.divisionsPerChunk));
-            double audioStartBeat = Math.max(0, startChunk - 1.0);
-            double startSeconds = ChartTiming.beatToSeconds(chart, audioStartBeat);
+            playbackStartBeat = Math.max(0.0, Math.min(Math.max(0.0, chart.totalBeats), startBeat));
+            playbackTimingProfile = ChartTiming.prepare(chart);
+            double startSeconds = PlaybackCoordinates.songTimeAtBeat(chart, playbackTimingProfile, playbackStartBeat);
             audioAttempted = true;
             audioErrorLog = Path.of(System.getProperty("java.io.tmpdir"), "rhythmc-maker", "audio-error.log");
             String tempo = tempoFilter(playbackRate);
@@ -462,15 +613,14 @@ public final class RhythmcMakerClient implements ClientModInitializer {
                 .redirectOutput(ProcessBuilder.Redirect.DISCARD)
                 .start();
             audioStartedAtNanos = System.nanoTime();
-            playbackTimingProfile = ChartTiming.prepare(chart);
             playbackTrackProfile = PlaybackCoordinates.prepareDefaultTrack(chart);
             playbackTrackSpeed = ClientChartAccess.config().playerSpeed;
             playbackStartSeconds = startSeconds;
-            double sampleSeconds = 1.0 / 20.0;
-            playbackFrameStartZ = PlaybackCoordinates.editorWorldZAtSongTime(chart, playbackTimingProfile, startSeconds);
-            double nextFrameZ = PlaybackCoordinates.editorWorldZAtSongTime(chart, playbackTimingProfile, startSeconds + sampleSeconds);
-            playbackFrameVelocity = (nextFrameZ - playbackFrameStartZ) / sampleSeconds;
             audioDurationSeconds = Math.max(0, chart.durationSeconds - startSeconds) / playbackRate;
+            if (effectEditorPreviewPrepared) {
+                pendingPlaybackCommand = "rhythmc_effect_preview_play " + String.format(Locale.ROOT, "%.6f", playbackStartBeat)
+                        + " " + String.format(Locale.ROOT, "%.2f", playbackRate);
+            }
         } catch (IOException | CompletionException exception) {
             audioAttempted = true;
             audioProcess = null;
@@ -502,8 +652,6 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         audioProcess = null;
         audioDurationSeconds = 0;
         playbackStartSeconds = 0;
-        playbackFrameStartZ = 0;
-        playbackFrameVelocity = 0;
         audioStartedAtNanos = 0;
         playbackTimingProfile = null;
         playbackTrackProfile = null;
@@ -511,6 +659,11 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     }
 
     private static void finishPlayback(MinecraftClient client, boolean stopServer) {
+        if (effectEditorPlaybackRequested) {
+            effectEditorPlayheadBeat = effectEditorCurrentBeat();
+            effectEditorPlaybackRequested = false;
+            effectEditorCameraLocked = false;
+        }
         stopAudio();
         playbackAudioRequested = false;
         pendingPlaybackCommand = null;
@@ -522,14 +675,22 @@ public final class RhythmcMakerClient implements ClientModInitializer {
 
     private static void renderScrollPlaybackBox(WorldRenderContext context) {
         MinecraftClient client = MinecraftClient.getInstance();
-        if (!playbackAudioRequested || !"scroll".equals(playbackMode) || client.player == null || !isEditorDimension(client)) return;
+        boolean frozenEditorPreview = isEffectEditorCameraLocked() && !playbackAudioRequested;
+        if ((!playbackAudioRequested && !frozenEditorPreview) || !"scroll".equals(playbackMode) || client.player == null || !isEditorDimension(client)) return;
         ChartManifest chart = ClientChartAccess.resolveActiveChart();
         if (chart == null) return;
 
-        long clockStart = audioStartedAtNanos;
-        double elapsed = clockStart <= 0 ? 0.0 : Math.max(0.0, (System.nanoTime() - clockStart) / 1_000_000_000.0) * playbackRate;
-        if (playbackTimingProfile == null || playbackTrackProfile == null) return;
-        double centerZ = playbackFrameStartZ + playbackFrameVelocity * elapsed;
+        double centerZ;
+        if (frozenEditorPreview) {
+            centerZ = effectEditorCameraPosition().z;
+        } else {
+            if (playbackTimingProfile == null || playbackTrackProfile == null) return;
+            double songTime = effectEditorPreviewPrepared
+                    ? effectEditorCurrentSongTime()
+                    : playbackStartSeconds + Math.max(0.0, (System.nanoTime() - audioStartedAtNanos) / 1_000_000_000.0) * playbackRate;
+            double beat = PlaybackCoordinates.beatAtSongTime(chart, playbackTimingProfile, songTime);
+            centerZ = PlaybackCoordinates.editorWorldZAtBeat(chart, beat);
+        }
         int halfWidth = Math.max(0, Math.min(9, chart.laneCount) / 2);
         int left = -halfWidth - 1;
         int right = halfWidth + 1;

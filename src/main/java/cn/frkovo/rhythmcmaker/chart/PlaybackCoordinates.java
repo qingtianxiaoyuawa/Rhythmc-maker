@@ -19,6 +19,11 @@ public final class PlaybackCoordinates {
         return timing.secondsToBeat(songTime - offsetSeconds);
     }
 
+    public static double songTimeAtBeat(ChartManifest chart, ChartTiming.Prepared timing, double beat) {
+        if (chart == null || timing == null || !Double.isFinite(beat)) return 0.0;
+        return timing.beatToSeconds(beat) + chart.offsetMillis / 1000.0;
+    }
+
     public static double distanceAtBeat(ChartManifest chart, TrackPlayback.Prepared track, double beat, double playerSpeed) {
         return track.distanceAt(beat) * normalizedPlayerSpeed(playerSpeed) * PLAYBACK_FLOW_MULTIPLIER;
     }
@@ -51,7 +56,7 @@ public final class PlaybackCoordinates {
 
     public static double editorWorldZAtSongTime(ChartManifest chart, ChartTiming.Prepared timing, double songTime) {
         if (chart == null || timing == null || !Double.isFinite(songTime)) return CHART_ORIGIN_Z;
-        return editorWorldZAtBeat(chart, timing.secondsToBeat(songTime));
+        return editorWorldZAtBeat(chart, beatAtSongTime(chart, timing, songTime));
     }
 
     public static double editorBeatAtWorldZ(ChartManifest chart, double worldZ) {

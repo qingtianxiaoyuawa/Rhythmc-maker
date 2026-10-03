@@ -27,8 +27,14 @@ dependencies {
     include modImplementation("io.wispforest:owo-lib:${project.owo_version}")
     include implementation("org.yaml:snakeyaml:2.4")
     include implementation("com.github.luben:zstd-jni:1.5.7-6")
+    include implementation("io.github.spair:imgui-java-binding:${project.imgui_version}")
+    include implementation("io.github.spair:imgui-java-lwjgl3:${project.imgui_version}")
+    include implementation("io.github.spair:imgui-java-natives-windows:${project.imgui_version}")
     modCompileOnly "com.sk89q.worldedit:worldedit-fabric-mc1.21.11:7.4.2"
     compileOnly "org.jetbrains.kotlin:kotlin-stdlib:2.4.20"
+    modLocalRuntime files("libs/fabric-language-kotlin.jar")
+    runtimeOnly "org.jetbrains.kotlin:kotlin-stdlib:2.4.20"
+    runtimeOnly "org.jetbrains.kotlin:kotlin-reflect:2.4.20"
     include modImplementation(group: "net.casual.arcade", name: "arcade-dimensions", version: "0.8.1-beta.8")
     include modImplementation(group: "net.casual.arcade", name: "arcade-event-registry", version: "0.8.1-beta.8")
     include modImplementation(group: "net.casual.arcade", name: "arcade-events-server", version: "0.8.1-beta.8")
