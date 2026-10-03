@@ -56,6 +56,7 @@ public final class Rhythmc3Exporter {
         Files.createDirectories(chartFolder);
         Files.createDirectories(arenaFolder);
         writeManifest(chartFolder, chart);
+        writeEditorTrackLayout(chartFolder, chart);
         writeChart(chartFolder, chart, arenaKey);
         writeScene(arenaFolder, world, chart, arenaKey);
         copyAudio(server, folder, chart);
@@ -82,6 +83,11 @@ public final class Rhythmc3Exporter {
             + "unlockNether: []\n"
             + "unlockVoid: []\n";
         Files.writeString(folder.resolve("manifest.yml"), yaml, StandardCharsets.UTF_8);
+    }
+
+    /** 制谱器轨道布局旁挂文件：与难度文件同目录，仅供 Maker 再次导入时还原轨道。 */
+    private static void writeEditorTrackLayout(Path folder, ChartManifest chart) throws IOException {
+        EditorTrackLayoutFile.write(folder.resolve(EditorTrackLayoutFile.FILE_NAME), EditorTrackLayout.of(chart));
     }
 
     private static void writeChart(Path folder, ChartManifest chart, String arenaKey) throws IOException {

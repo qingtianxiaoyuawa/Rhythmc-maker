@@ -3,6 +3,7 @@ package cn.frkovo.rhythmcmaker;
 import cn.frkovo.rhythmcmaker.chart.ChartManifest;
 import cn.frkovo.rhythmcmaker.chart.ChartStorage;
 import cn.frkovo.rhythmcmaker.chart.ChartTiming;
+import cn.frkovo.rhythmcmaker.chart.EditorTrackLayout;
 import cn.frkovo.rhythmcmaker.chart.PlaybackCoordinates;
 import cn.frkovo.rhythmcmaker.chart.TrackPlayback;
 import cn.frkovo.rhythmcmaker.config.RhythmcMakerConfig;
@@ -65,7 +66,6 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.ByteArrayOutputStream;
-import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.nio.file.Files;
@@ -174,8 +174,6 @@ public final class RhythmcMaker implements ModInitializer {
     private static final int PLAYBACK_START_DELAY_TICKS = 0;
     private static final int SCENE_IMPORT_BLOCKS_PER_TICK = 1024;
     private static final int SCENE_CAPTURE_BLOCKS_PER_TICK = 8192;
-    private static final int MIN_EDITOR_LANE_COUNT = 1;
-    private static final int MAX_EDITOR_LANE_COUNT = 9;
     private static final int SCENE_MIN_X = PLAYBACK_PLATFORM_X - SCENE_SIZE / 2;
     private static final int SCENE_MAX_X = SCENE_MIN_X + SCENE_SIZE - 1;
     private static final int SCENE_MIN_Y = PLAYBACK_PLATFORM_Y - SCENE_SIZE / 2;
@@ -356,7 +354,7 @@ public final class RhythmcMaker implements ModInitializer {
                 .executes(context -> setBeats(context.getSource(), com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "value")))));
             dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_layout_set")
                 .then(net.minecraft.server.command.CommandManager.argument("divisions", com.mojang.brigadier.arguments.IntegerArgumentType.integer(1, 32))
-                    .then(net.minecraft.server.command.CommandManager.argument("lanes", com.mojang.brigadier.arguments.IntegerArgumentType.integer(MIN_EDITOR_LANE_COUNT, MAX_EDITOR_LANE_COUNT))
+                    .then(net.minecraft.server.command.CommandManager.argument("lanes", com.mojang.brigadier.arguments.IntegerArgumentType.integer(EditorTrackLayout.MIN_LANE_COUNT, EditorTrackLayout.MAX_LANE_COUNT))
                         .executes(context -> setEditorLayout(context.getSource(),
                             com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "divisions"),
                             com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "lanes"))))));
@@ -718,9 +716,9 @@ public final class RhythmcMaker implements ModInitializer {
     private static int updateEditorLayout(net.minecraft.server.command.ServerCommandSource source, ChartManifest chart, int targetDivisions, int targetLaneCount) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayerEntity player = source.getPlayerOrThrow();
         if (rejectEditorTrackAdjustment(player)) return 0;
-        targetDivisions = Math.max(1, Math.min(32, targetDivisions));
-        if (!isSupportedLaneCount(targetLaneCount)) {
-            player.sendMessage(Text.literal("轨道宽度必须是 1 至 " + MAX_EDITOR_LANE_COUNT + " 的奇数"), true);
+        targetDivisions = EditorTrackLayout.boundedDivisionsPerChunk(targetDivisions);
+        if (!EditorTrackLayout.isSupportedLaneCount(targetLaneCount)) {
+            player.sendMessage(Text.literal("轨道宽度必须是 1 至 " + EditorTrackLayout.MAX_LANE_COUNT + " 的奇数"), true);
             return 0;
         }
 
@@ -749,9 +747,7 @@ public final class RhythmcMaker implements ModInitializer {
                 clearNoteBlocks(editor, oldNotePositions);
                 EDITOR_TRACK_REBUILD_TASKS.remove(editor.getRegistryKey());
             }
-            chart.divisionsPerChunk = targetDivisions;
-            chart.beatsPerMeasure = 0;
-            chart.laneCount = targetLaneCount;
+            EditorTrackLayout.of(targetLaneCount, targetDivisions).applyTo(chart);
             ACTIVE_CHART_LANES.put(player.getUuid(), targetLaneCount);
             repositionNotes(chart);
             chart.trackLength = calculateTrackLength(chart);
@@ -770,10 +766,8 @@ public final class RhythmcMaker implements ModInitializer {
         } catch (IOException exception) {
             EDITOR_TRACK_ADJUSTMENTS.remove(player.getUuid());
             EDITOR_TRACK_ADJUSTMENT_NOTICES.remove(player.getUuid());
-            chart.divisionsPerChunk = previousDivisions;
-            chart.laneCount = previousLaneCount;
+            EditorTrackLayout.of(previousLaneCount, previousDivisions).applyTo(chart);
             ACTIVE_CHART_LANES.put(player.getUuid(), previousLaneCount);
-            chart.beatsPerMeasure = 0;
             repositionNotes(chart);
             chart.trackLength = calculateTrackLength(chart);
             if (editor != null) {
@@ -902,10 +896,7 @@ public final class RhythmcMaker implements ModInitializer {
         return Math.max(1, Math.min(32, value > 0 ? value : config.defaultDivisionsPerChunk));
     }
     private static int laneCount(ChartManifest chart) {
-        return chart != null && isSupportedLaneCount(chart.laneCount) ? chart.laneCount : 3;
-    }
-    private static boolean isSupportedLaneCount(int value) {
-        return value >= MIN_EDITOR_LANE_COUNT && value <= MAX_EDITOR_LANE_COUNT && (value & 1) == 1;
+        return chart == null ? EditorTrackLayout.DEFAULT_LANE_COUNT : EditorTrackLayout.supportedLaneCount(chart.laneCount);
     }
     private static int laneMinX(ChartManifest chart) { return -(laneCount(chart) / 2); }
     private static int laneMaxX(ChartManifest chart) { return laneCount(chart) / 2; }
@@ -1515,7 +1506,7 @@ public final class RhythmcMaker implements ModInitializer {
         private static void buildPlaybackArea(ServerWorld world, int laneCount) {
         int laneHalfWidth = laneCount / 2;
         int wallHalfWidth = laneHalfWidth + 1;
-        int maximumHalfWidth = MAX_EDITOR_LANE_COUNT / 2 + 1;
+        int maximumHalfWidth = EditorTrackLayout.MAX_LANE_COUNT / 2 + 1;
         for (int x = -maximumHalfWidth; x <= maximumHalfWidth; x++) for (int y = 65; y <= 69; y++) for (int z = -2; z <= 2; z++) {
             world.setBlockState(new BlockPos(PLAYBACK_PLATFORM_X + x, y, PLAYBACK_PLATFORM_Z + z), Blocks.AIR.getDefaultState(), 3);
         }
@@ -2716,7 +2707,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
     }
     private static boolean isWithinEditorTrackCleanupArea(DisplayEntity.BlockDisplayEntity display, ChartManifest chart) {
-        int maximumHalfWidth = Math.max(MAX_EDITOR_LANE_COUNT / 2 + 1, chart.noteDisplayCleanupLaneCount / 2 + 1);
+        int maximumHalfWidth = Math.max(EditorTrackLayout.MAX_LANE_COUNT / 2 + 1, chart.noteDisplayCleanupLaneCount / 2 + 1);
         int cleanupLength = Math.max(chart.trackLength, chart.noteDisplayCleanupTrackLength);
         return display.getX() >= -maximumHalfWidth && display.getX() <= maximumHalfWidth
                 && display.getY() >= 65.0 && display.getY() <= 68.0
@@ -2744,7 +2735,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
     }
     private static void scheduleNoteDisplaySweep(ServerWorld world, ChartManifest chart) {
-        int maximumHalfWidth = Math.max(MAX_EDITOR_LANE_COUNT / 2 + 1, chart.noteDisplayCleanupLaneCount / 2 + 1);
+        int maximumHalfWidth = Math.max(EditorTrackLayout.MAX_LANE_COUNT / 2 + 1, chart.noteDisplayCleanupLaneCount / 2 + 1);
         int minimumX = -maximumHalfWidth;
         int maximumX = maximumHalfWidth;
         if (chart.notes != null) for (ChartManifest.Note note : chart.notes) {
@@ -2908,7 +2899,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         long nextRevision = Math.max(Math.max(1L, previousRevision + 1L), System.currentTimeMillis());
         chart.noteDisplayRevision = nextRevision;
         chart.noteDisplayCleanupTrackLength = Math.max(Math.max(0, previousTrackLength), Math.max(chart.trackLength, previousCleanupTrackLength));
-        chart.noteDisplayCleanupLaneCount = Math.max(Math.max(MIN_EDITOR_LANE_COUNT, previousLaneCount), Math.max(laneCount(chart), previousCleanupLaneCount));
+        chart.noteDisplayCleanupLaneCount = Math.max(Math.max(EditorTrackLayout.MIN_LANE_COUNT, previousLaneCount), Math.max(laneCount(chart), previousCleanupLaneCount));
         try {
             saveChart(world.getServer(), chart);
             return nextRevision;
@@ -2984,7 +2975,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         int laneHalfWidth = laneCount / 2;
         int leftWall = -laneHalfWidth - 1;
         int rightWall = laneHalfWidth + 1;
-        int maximumHalfWidth = MAX_EDITOR_LANE_COUNT / 2 + 1;
+        int maximumHalfWidth = EditorTrackLayout.MAX_LANE_COUNT / 2 + 1;
         for (int dx = -maximumHalfWidth; dx <= maximumHalfWidth; dx++) for (int y = 64; y <= 69; y++) for (int z = -2; z <= 2; z++) {
             world.setBlockState(new BlockPos(x + dx, y, z), Blocks.AIR.getDefaultState(), 2);
         }
@@ -3032,8 +3023,8 @@ private static void showSceneBoundary(MinecraftServer server) {
 
     private static void extendEditorArea(ServerWorld world, int x, int length, int divisions, int laneCount) {
         int totalBeats = Math.max(8, length);
-        divisions = Math.max(1, Math.min(32, divisions));
-        if (!isSupportedLaneCount(laneCount)) laneCount = 3;
+        divisions = EditorTrackLayout.boundedDivisionsPerChunk(divisions);
+        laneCount = EditorTrackLayout.supportedLaneCount(laneCount);
         final int targetDivisions = divisions;
         final int targetLaneCount = laneCount;
         EDITOR_AREA_TASKS.compute(world.getRegistryKey(), (key, existing) -> {
@@ -3093,7 +3084,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 int slot = task.clearCursor++;
                 if (slot < task.newLength) continue;
                 int z = -3 - slot;
-                for (int dx = -(MAX_EDITOR_LANE_COUNT / 2 + 1); dx <= MAX_EDITOR_LANE_COUNT / 2 + 1; dx++) {
+                for (int dx = -(EditorTrackLayout.MAX_LANE_COUNT / 2 + 1); dx <= EditorTrackLayout.MAX_LANE_COUNT / 2 + 1; dx++) {
                     for (int y = 64; y <= 68; y++) {
                         BlockPos pos = new BlockPos(task.x + dx, y, z);
                         if (!isNoteBlock(world.getBlockState(pos).getBlock())) world.setBlockState(pos, Blocks.AIR.getDefaultState(), 2);
@@ -3135,7 +3126,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 .anyMatch(task -> task.worldKey().equals(worldKey) && task.releaseForcedChunk());
     }
     private static void clearEditorTrackColumns(ServerWorld world, int x, int length) {
-        int maximumHalfWidth = MAX_EDITOR_LANE_COUNT / 2 + 1;
+        int maximumHalfWidth = EditorTrackLayout.MAX_LANE_COUNT / 2 + 1;
         for (int slot = 0; slot <= Math.max(0, length); slot++) {
             int z = -3 - slot;
             for (int dx = -maximumHalfWidth; dx <= maximumHalfWidth; dx++) {
@@ -3275,9 +3266,9 @@ private static void showSceneBoundary(MinecraftServer server) {
             this.x = x;
             this.oldLength = Math.max(0, oldLength);
             this.newLength = Math.max(8, newLength);
-            this.divisions = Math.max(1, Math.min(32, divisions));
-            this.laneCount = isSupportedLaneCount(laneCount) ? laneCount : 3;
-            this.previousLaneCount = isSupportedLaneCount(previousLaneCount) ? previousLaneCount : this.laneCount;
+            this.divisions = EditorTrackLayout.boundedDivisionsPerChunk(divisions);
+            this.laneCount = EditorTrackLayout.supportedLaneCount(laneCount);
+            this.previousLaneCount = EditorTrackLayout.isSupportedLaneCount(previousLaneCount) ? previousLaneCount : this.laneCount;
             this.playerId = playerId;
             this.previousChunk = Math.max(1, previousChunk);
         }
@@ -3323,7 +3314,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         int laneHalfWidth = laneCount / 2;
         int leftWall = -laneHalfWidth - 1;
         int rightWall = laneHalfWidth + 1;
-        int maximumHalfWidth = MAX_EDITOR_LANE_COUNT / 2 + 1;
+        int maximumHalfWidth = EditorTrackLayout.MAX_LANE_COUNT / 2 + 1;
         for (int dx = -maximumHalfWidth; dx <= maximumHalfWidth; dx++) {
             for (int y = 64; y <= 68; y++) {
                 BlockPos target = new BlockPos(x + dx, y, targetZ);

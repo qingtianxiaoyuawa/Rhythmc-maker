@@ -148,7 +148,9 @@ public final class ChartStorage {
         writeChartDocument(chartDocumentPath(server, chart.id), chart);
         RhythmcMaker.installDefaultArenaScenes(server, chart, arenaNames);
         return chart;
-    }    public static ChartManifest importRhythmc3(MinecraftServer server, Path difficultyFile, Path manifestFile, Path stagedAudio, List<ImportedScene> scenes) throws IOException {
+    }
+
+    public static ChartManifest importRhythmc3(MinecraftServer server, Path difficultyFile, Path manifestFile, Path stagedAudio, List<ImportedScene> scenes) throws IOException {
         ChartManifest chart = importRhythmc3(server, difficultyFile, manifestFile, stagedAudio);
         if (scenes != null && !scenes.isEmpty()) {
             Path sceneRoot = root(server).resolve("scenes").resolve(chart.id).toAbsolutePath().normalize();
@@ -186,7 +188,8 @@ public final class ChartStorage {
         if (meta == null) throw new IOException("3.0 难度文件缺少 meta");
         ChartManifest chart = new ChartManifest();
         Map<String, Object> manifest = readYaml(manifestFile);
-        chart.id = UUID.randomUUID().toString(); chart.title = yamlString(manifest, "name", "未命名谱面"); chart.artist = yamlString(manifest, "composer", "Unknown"); chart.charter = yamlString(manifest, "charter", yamlString(manifest, "author", "Unknown")); chart.coverItemId = coverItemId(yamlString(manifest, "icon", yamlString(manifest, "cover", "minecraft:note_block"))); chart.difficulty = difficultyFromFile(difficultyFile); chart.divisionsPerChunk = readDivisionsPerChunk(meta);
+        chart.id = UUID.randomUUID().toString(); chart.title = yamlString(manifest, "name", "未命名谱面"); chart.artist = yamlString(manifest, "composer", "Unknown"); chart.charter = yamlString(manifest, "charter", yamlString(manifest, "author", "Unknown")); chart.coverItemId = coverItemId(yamlString(manifest, "icon", yamlString(manifest, "cover", "minecraft:note_block"))); chart.difficulty = difficultyFromFile(difficultyFile);
+        readEditorTrackLayout(meta, difficultyFile).applyTo(chart);
         chart.offsetMillis = jsonNumber(meta, "offset", jsonNumber(meta, "offsetMillis", 0)).longValue(); chart.level = jsonNumber(meta, "level", 1).doubleValue();
         if (meta.has("initialArena") && meta.get("initialArena").isJsonPrimitive()) chart.initialArena = meta.get("initialArena").getAsString();
          if ((chart.charter == null || chart.charter.equals("Unknown")) && meta.has("charters") && meta.get("charters").isJsonArray() && meta.getAsJsonArray("charters").size() > 0) chart.charter = meta.getAsJsonArray("charters").get(0).getAsString();
@@ -210,9 +213,11 @@ public final class ChartStorage {
         if (root.has("effects") && root.get("effects").isJsonArray()) for (JsonElement effect : root.getAsJsonArray("effects")) if (effect.isJsonObject()) chart.effects.add(effect.getAsJsonObject().deepCopy());
         create(server, chart, stagedAudio); return chart;
     }
-    private static int readDivisionsPerChunk(JsonObject meta) {
-        int divisions = jsonNumber(meta, "divisionsPerChunk", jsonNumber(meta, "beatsPerChunk", jsonNumber(meta, "divisions", RhythmcMaker.defaultDivisionsPerChunk()))).intValue();
-        return Math.max(1, Math.min(32, divisions));
+    private static EditorTrackLayout readEditorTrackLayout(JsonObject meta, Path difficultyFile) throws IOException {
+        Path layoutFile = difficultyFile.resolveSibling(EditorTrackLayoutFile.FILE_NAME);
+        if (Files.isRegularFile(layoutFile)) return EditorTrackLayoutFile.read(layoutFile);
+        int divisionsPerChunk = jsonNumber(meta, "divisionsPerChunk", jsonNumber(meta, "beatsPerChunk", jsonNumber(meta, "divisions", RhythmcMaker.defaultDivisionsPerChunk()))).intValue();
+        return EditorTrackLayout.of(EditorTrackLayout.DEFAULT_LANE_COUNT, divisionsPerChunk);
     }
     private static void importRhythmc3Track(ChartManifest chart, ChartTiming.Prepared timing, JsonObject source) {
         ChartManifest.Track track = new ChartManifest.Track(jsonNumber(source, "id", 0).intValue());
@@ -395,6 +400,7 @@ public final class ChartStorage {
         if (chart.bpm <= 0) throw new IOException("BPM 必须大于 0");
         if (chart.level < 0) throw new IOException("定数不能小于 0");
         if (chart.divisionsPerChunk <= 0) chart.divisionsPerChunk = RhythmcMaker.defaultDivisionsPerChunk();
+        EditorTrackLayout.of(chart).applyTo(chart);
         if (stagedAudio == null || !Files.exists(stagedAudio)) throw new IOException("必须上传歌曲文件");
 
         String extension = extensionOf(stagedAudio.getFileName().toString());
