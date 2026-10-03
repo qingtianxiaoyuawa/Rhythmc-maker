@@ -1934,8 +1934,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         ChartManifest chart = loadActiveChart(player, source.getServer());
         if (chart == null || !(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world) || chart.bpm <= 0) return 0;
         int startChunk = requestedStartChunk > 0 ? Math.max(1, Math.min(Math.max(1, chart.chunkCount), requestedStartChunk)) : selectedStartChunk(player, chart);
-        double divisionsPerChunk = Math.max(1.0, Math.min(32.0, chart.divisionsPerChunk));
-        double startBeat = (startChunk - 1.0) * divisionsPerChunk;
+        double startBeat = startChunk - 1.0;
         String mode = "scroll".equalsIgnoreCase(requestedMode) ? "scroll" : "formal";
         double rate = normalizePlaybackRate(requestedRate);
         double startSeconds = ChartTiming.beatToSeconds(chart, startBeat);
