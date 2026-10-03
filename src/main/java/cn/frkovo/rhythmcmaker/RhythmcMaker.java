@@ -657,6 +657,7 @@ public final class RhythmcMaker implements ModInitializer {
                 if (chart != null) {
                     chart.lastEdited = LocalDateTime.now().format(LAST_EDITED_FORMAT);
                     saveChart(source.getServer(), chart);
+                    queueChartSave(source.getServer(), CHART_CACHE_BY_ID.get(chart.id));
                 }
             } catch (IOException exception) {
                 LOGGER.warn("Failed to record chart return time for {}", chartId, exception);
