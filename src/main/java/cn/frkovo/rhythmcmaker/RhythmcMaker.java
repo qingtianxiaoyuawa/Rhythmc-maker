@@ -432,7 +432,6 @@ public final class RhythmcMaker implements ModInitializer {
         cleanupOrphanedPlaybackDisplays(world);
         world.getGameRules().setValue(GameRules.TNT_EXPLODES, false, server);
         world.getGameRules().setValue(GameRules.ADVANCE_TIME, true, server);
-        world.setTimeOfDay(1000L);
         ((ServerWorldProperties) world.getLevelProperties()).setGameMode(GameMode.CREATIVE);
         world.setSpawnPoint(WorldProperties.SpawnPoint.create(world.getRegistryKey(), EDITOR_SPAWN, 0.0f, 0.0f));
     }
@@ -2253,9 +2252,10 @@ private static void showSceneBoundary(MinecraftServer server) {
                 DisplayEntity.BlockDisplayEntity display = entry.getValue();
                 ChartManifest.Note note = notesById.get(entry.getKey());
                 Team team = glowTeams.computeIfAbsent(note == null ? 0 : note.type, this::createGlowTeam);
-                for (Team existing : glowTeams.values()) world.getScoreboard().removeScoreHolderFromTeam(display.getNameForScoreboard(), existing);
                 display.setGlowing(true);
-                world.getScoreboard().addScoreHolderToTeam(display.getNameForScoreboard(), team);
+                if (world.getScoreboard().getScoreHolderTeam(display.getNameForScoreboard()) != team) {
+                    world.getScoreboard().addScoreHolderToTeam(display.getNameForScoreboard(), team);
+                }
             }
         }
         private Team createGlowTeam(int type) {
@@ -2268,7 +2268,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
         private void clearGlowTeam() {
             for (DisplayEntity.BlockDisplayEntity display : displays.values()) {
-                for (Team team : glowTeams.values()) world.getScoreboard().removeScoreHolderFromTeam(display.getNameForScoreboard(), team);
+                world.getScoreboard().clearTeam(display.getNameForScoreboard());
                 display.setGlowing(false);
             }
             for (Team team : glowTeams.values()) if (world.getScoreboard().getTeam(team.getName()) == team) world.getScoreboard().removeTeam(team);
