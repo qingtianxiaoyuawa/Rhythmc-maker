@@ -1,6 +1,7 @@
 package cn.frkovo.rhythmcmaker.client;
 
 import cn.frkovo.rhythmcmaker.chart.ChartTiming;
+import cn.frkovo.rhythmcmaker.chart.EditorTrackLayout;
 import io.wispforest.owo.ui.component.UIComponents;
 import io.wispforest.owo.ui.component.TextBoxComponent;
 import io.wispforest.owo.ui.container.FlowLayout;
@@ -149,8 +150,8 @@ final class PlaceholderScreen extends RhythmcScreen {
             }).horizontalSizing(Sizing.fill()));
         } else if (section.equals("chunk-score")) {
             var chart = ClientChartAccess.resolveActiveChart();
-            int currentDivisions = chart == null ? ClientChartAccess.defaultDivisionsPerChunk() : Math.max(1, chart.divisionsPerChunk);
-            int currentLanes = chart == null || chart.laneCount < 1 || chart.laneCount > 9 || chart.laneCount % 2 == 0 ? 3 : chart.laneCount;
+            int currentDivisions = chart == null ? ClientChartAccess.defaultDivisionsPerChunk() : EditorTrackLayout.boundedDivisionsPerChunk(chart.divisionsPerChunk);
+            int currentLanes = EditorTrackLayout.supportedLaneCount(chart == null ? EditorTrackLayout.DEFAULT_LANE_COUNT : chart.laneCount);
             page.child(UIComponents.label(Text.literal("每Chunk分数（1 - 32）")));
             TextBoxComponent divisions = UIComponents.textBox(Sizing.fill(), Integer.toString(currentDivisions));
             numericIntegerOnly(divisions); page.child(divisions);
@@ -162,10 +163,11 @@ final class PlaceholderScreen extends RhythmcScreen {
                 try {
                     int divisionsValue = Integer.parseInt(divisions.getText());
                     int lanesValue = Integer.parseInt(lanes.getText());
-                    if (divisionsValue < 1 || divisionsValue > 32 || lanesValue < 1 || lanesValue > 9 || lanesValue % 2 == 0) throw new NumberFormatException();
-                    ClientChartAccess.applyLocalLayout(divisionsValue, lanesValue);
-                    RhythmcMakerClient.sendChartCommand("rhythmc_layout_set " + divisionsValue + " " + lanesValue);
-                    ClientChartAccess.status("正在应用制谱器轨道：" + lanesValue + " × " + divisionsValue);
+                    if (!EditorTrackLayout.isSupportedDivisionsPerChunk(divisionsValue) || !EditorTrackLayout.isSupportedLaneCount(lanesValue)) throw new NumberFormatException();
+                    EditorTrackLayout layout = EditorTrackLayout.of(lanesValue, divisionsValue);
+                    ClientChartAccess.applyLocalLayout(layout);
+                    RhythmcMakerClient.sendChartCommand("rhythmc_layout_set " + layout.divisionsPerChunk() + " " + layout.laneCount());
+                    ClientChartAccess.status("正在应用制谱器轨道：" + layout.laneCount() + " × " + layout.divisionsPerChunk());
                     close();
                 } catch (Exception exception) {
                     ClientChartAccess.status("设置失败：每Chunk分数为 1-32，轨道宽度为 1/3/5/7/9");

@@ -2,6 +2,7 @@ package cn.frkovo.rhythmcmaker.client;
 
 import cn.frkovo.rhythmcmaker.chart.ChartManifest;
 import cn.frkovo.rhythmcmaker.chart.ChartStorage;
+import cn.frkovo.rhythmcmaker.chart.EditorTrackLayout;
 import cn.frkovo.rhythmcmaker.chart.Rhythmc3Exporter;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.item.ItemStack;
@@ -84,14 +85,12 @@ final class ClientChartAccess {
 
     static ChartManifest activeChart() { return activeChart; }
 
-    static void applyLocalLayout(int divisions, int lanes) {
+    static void applyLocalLayout(EditorTrackLayout layout) {
         if (activeChart == null) return;
-        activeChart.divisionsPerChunk = Math.max(1, Math.min(32, divisions));
-        activeChart.beatsPerMeasure = 0;
-        activeChart.laneCount = lanes;
+        layout.applyTo(activeChart);
         activeChart.trackLength = Math.max(8, Math.max(1, activeChart.chunkCount) * activeChart.divisionsPerChunk);
-        pendingLayoutDivisions = activeChart.divisionsPerChunk;
-        pendingLayoutLanes = lanes;
+        pendingLayoutDivisions = layout.divisionsPerChunk();
+        pendingLayoutLanes = layout.laneCount();
         pendingLayoutExpiresAtNanos = System.nanoTime() + 8_000_000_000L;
         activeChartModifiedTime = null;
         activeChartFileSize = -1L;
