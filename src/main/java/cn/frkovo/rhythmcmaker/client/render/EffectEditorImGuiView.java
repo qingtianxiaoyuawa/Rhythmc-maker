@@ -149,7 +149,7 @@ public final class EffectEditorImGuiView {
         ImGui.sameLine();
         ImGui.text("特效编辑器");
         ImGui.sameLine(Math.max(210.0f, width - 480.0f));
-        ImGui.text(chart == null ? "未加载谱面" : chartTitle() + "  ·  BPM " + format(chart.bpm));
+        ImGui.text(chart == null ? "未加载谱面" : displayText(chartTitle()) + "  ·  BPM " + format(chart.bpm));
         ImGui.sameLine();
         ImGui.text(dirty ? "● 未保存" : "已保存");
         ImGui.sameLine();
@@ -185,7 +185,7 @@ public final class EffectEditorImGuiView {
         ImGui.separator();
         for (EffectTypeDefinition definition : registry.definitions()) {
             ImGui.pushID(definition.eventType());
-            if (ImGui.selectable(definition.displayName() + "##add", false, ImGuiSelectableFlags.SpanAllColumns)) addEffect(definition);
+            if (ImGui.selectable(displayText(definition.displayName()) + "##add", false, ImGuiSelectableFlags.SpanAllColumns)) addEffect(definition);
             ImGui.popID();
         }
         ImGui.end();
@@ -212,7 +212,7 @@ public final class EffectEditorImGuiView {
             ImGui.textWrapped("从左侧选择一个特效类型，或在下方时间线选择已有事件。");
         } else {
             ImGui.text("播放头 " + formatChunkPosition(playhead[0]));
-            ImGui.text("当前事件：" + eventType(event));
+            ImGui.text("当前事件：" + displayText(eventType(event)));
             ImGui.textWrapped("中心区域透出当前 Minecraft 主摄像机画面；播放时 Camera 会跟随滚动判定线。");
         }
         ImGui.separator();
@@ -239,10 +239,10 @@ public final class EffectEditorImGuiView {
             return;
         }
         EffectTypeDefinition definition = registry.find(eventType(event));
-        ImGui.text("类型：" + eventType(event));
+        ImGui.text("类型：" + displayText(eventType(event)));
         if (definition == null) {
             ImGui.textColored(0xFFFFAA55, "未知类型：只读，保存时原样保留。");
-            ImGui.textWrapped(event.toString());
+            ImGui.textWrapped(displayText(event.toString()));
             ImGui.end();
             return;
         }
@@ -263,7 +263,7 @@ public final class EffectEditorImGuiView {
             if (!sample.values().isEmpty()) {
                 ImGui.separator();
                 ImGui.text("动画采样 Beat " + String.format(Locale.ROOT, "%.3f", sample.beat()));
-                for (var value : sample.values()) ImGui.textDisabled(value.channelName() + "：" + value.value().toJson());
+                for (var value : sample.values()) ImGui.textDisabled(displayText(value.channelName()) + "：" + displayText(value.value().toJson()));
             }
         });
         ImGui.separator();
@@ -278,47 +278,47 @@ public final class EffectEditorImGuiView {
         switch (definition.valueKind()) {
             case TEXT, ENUM -> {
                 ImString field = textFields.computeIfAbsent(name, key -> new ImString(readString(event, key, ""), 512));
-                if (ImGui.inputText(definition.displayName() + "##" + name, field)) {
+                if (ImGui.inputText(displayText(definition.displayName()) + "##" + name, field)) {
                     writeProperty(event, name, field.get());
                     dirty = true;
                 }
             }
             case INTEGER -> {
                 ImInt field = integerFields.computeIfAbsent(name, key -> new ImInt((int) readDouble(event, key, 0.0)));
-                if (ImGui.inputScalar(definition.displayName() + "##" + name, ImGuiDataType.S32, field, 1, 10)) {
+                if (ImGui.inputScalar(displayText(definition.displayName()) + "##" + name, ImGuiDataType.S32, field, 1, 10)) {
                     writeProperty(event, name, field.get());
                     dirty = true;
                 }
             }
             case DECIMAL -> {
                 ImDouble field = decimalFields.computeIfAbsent(name, key -> new ImDouble(readDouble(event, key, 0.0)));
-                if (ImGui.inputScalar(definition.displayName() + "##" + name, ImGuiDataType.Double, field, 0.1, 1.0, "%.3f")) {
+                if (ImGui.inputScalar(displayText(definition.displayName()) + "##" + name, ImGuiDataType.Double, field, 0.1, 1.0, "%.3f")) {
                     writeProperty(event, name, field.get());
                     dirty = true;
                 }
             }
             case BOOLEAN -> {
                 ImBoolean field = booleanFields.computeIfAbsent(name, key -> new ImBoolean(readBoolean(event, key, false)));
-                if (ImGui.checkbox(definition.displayName() + "##" + name, field)) {
+                if (ImGui.checkbox(displayText(definition.displayName()) + "##" + name, field)) {
                     writeProperty(event, name, field.get());
                     dirty = true;
                 }
             }
             case INTEGER_ARRAY -> {
                 ImString field = integerArrayFields.computeIfAbsent(name, key -> new ImString(readIntegerArrayText(event, key), 256));
-                if (ImGui.inputText(definition.displayName() + "##" + name, field)) {
+                if (ImGui.inputText(displayText(definition.displayName()) + "##" + name, field)) {
                     writeProperty(event, name, parseIntegerArray(field.get()));
                     dirty = true;
                 }
             }
             case COLOR -> {
                 float[] field = colorFields.computeIfAbsent(name, key -> readColor(event, key));
-                if (ImGui.colorEdit4(definition.displayName() + "##" + name, field)) {
+                if (ImGui.colorEdit4(displayText(definition.displayName()) + "##" + name, field)) {
                     writeProperty(event, name, packColor(field));
                     dirty = true;
                 }
             }
-            case VECTOR, JSON -> ImGui.textDisabled(definition.displayName() + "：" + readElement(event, name));
+            case VECTOR, JSON -> ImGui.textDisabled(displayText(definition.displayName()) + "：" + displayText(readElement(event, name)));
         }
     }
 
@@ -349,7 +349,7 @@ public final class EffectEditorImGuiView {
         ImGui.text(String.format(Locale.ROOT, "Beat 0     16     32     48     64     %.2f", chart.totalBeats));
         for (int index = 0; index < workingEffects.size(); index++) {
             JsonObject event = workingEffects.get(index);
-            String label = String.format(Locale.ROOT, "%s  ·  Beat %.3f", eventType(event), eventBeat(event));
+            String label = String.format(Locale.ROOT, "%s  ·  Beat %.3f", displayText(eventType(event)), eventBeat(event));
             if (ImGui.selectable(label + "##event-" + index, index == selectedIndex, ImGuiSelectableFlags.SpanAllColumns)) select(index);
         }
         ImGui.end();
@@ -477,8 +477,34 @@ public final class EffectEditorImGuiView {
     }
 
     private static String readString(JsonObject event, String name, String fallback) {
-        try { JsonElement element = readElement(event, name); return element != null && element.isJsonPrimitive() ? element.getAsString() : fallback; }
+        try { JsonElement element = readElement(event, name); return element != null && element.isJsonPrimitive() ? displayText(element.getAsString()) : fallback; }
         catch (RuntimeException ignored) { return fallback; }
+    }
+
+    private static String displayText(JsonElement element) {
+        return element == null ? "" : displayText(element.toString());
+    }
+
+    private static String displayText(String value) {
+        if (value == null || value.isEmpty()) return "";
+        StringBuilder result = new StringBuilder(value.length());
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (character == '\0' || Character.isISOControl(character) && character != '\n' && character != '\t') {
+                result.append('\uFFFD');
+            } else if (Character.isHighSurrogate(character)) {
+                if (index + 1 < value.length() && Character.isLowSurrogate(value.charAt(index + 1))) {
+                    result.append(character).append(value.charAt(++index));
+                } else {
+                    result.append('\uFFFD');
+                }
+            } else if (Character.isLowSurrogate(character)) {
+                result.append('\uFFFD');
+            } else {
+                result.append(character);
+            }
+        }
+        return result.toString();
     }
 
     private static double readDouble(JsonObject event, String name, double fallback) {
