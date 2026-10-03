@@ -68,6 +68,10 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     private static double sidebarSnapshotIntervalSeconds = -1.0;
     private static boolean sidebarRefreshRequested = true;
 
+    static void requestSidebarRefresh() {
+        clearSidebarSnapshot();
+    }
+
     @Override public void onInitializeClient() {
         WorldRenderEvents.AFTER_ENTITIES.register(RhythmcMakerClient::renderScrollPlaybackBox);
         var category = KeyBinding.Category.create(net.minecraft.util.Identifier.of("rhythmc_maker", "main"));
