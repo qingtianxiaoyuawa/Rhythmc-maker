@@ -396,6 +396,14 @@ public final class RhythmcMaker implements ModInitializer {
                     .then(net.minecraft.server.command.CommandManager.argument("mode", com.mojang.brigadier.arguments.StringArgumentType.word())
                         .then(net.minecraft.server.command.CommandManager.argument("rate", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg(0.25, 2.0))
                             .executes(context -> togglePlayback(context.getSource(), com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "startChunk"), com.mojang.brigadier.arguments.StringArgumentType.getString(context, "mode"), com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "rate")))))));
+            dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_effect_preview_prepare")
+                .executes(context -> prepareEffectPreview(context.getSource())));
+            dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_effect_preview_play")
+                .then(net.minecraft.server.command.CommandManager.argument("beat", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg(0.0))
+                    .then(net.minecraft.server.command.CommandManager.argument("rate", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg(0.25, 2.0))
+                        .executes(context -> playEffectPreview(context.getSource(),
+                            com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "beat"),
+                            com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "rate"))))));
         });
     }
 
@@ -1850,16 +1858,36 @@ private static void showSceneBoundary(MinecraftServer server) {
         double startBeat = (startChunk - 1.0) * divisionsPerChunk;
         String mode = "scroll".equalsIgnoreCase(requestedMode) ? "scroll" : "formal";
         double rate = normalizePlaybackRate(requestedRate);
-        double startSeconds = ChartTiming.beatToSeconds(chart, startBeat);
+        double startSeconds = PlaybackCoordinates.songTimeAtBeat(chart, ChartTiming.prepare(chart), startBeat);
         long startNanos = System.nanoTime() + PLAYBACK_START_DELAY_TICKS * 50_000_000L;
         if ("scroll".equals(mode)) {
-            SCROLL_JUDGEMENT_SESSIONS.put(player.getUuid(), new ScrollJudgementSession(world, chart, startSeconds, startNanos, rate));
+            SCROLL_JUDGEMENT_SESSIONS.put(player.getUuid(), new ScrollJudgementSession(world, chart, player, startSeconds, startNanos, rate));
         } else {
             PlaybackSession session = new PlaybackSession(world, player.getX(), player.getY(), player.getZ(), player.getYaw(), player.getPitch(), chart, startSeconds, startNanos, mode, rate);
             PLAYBACK_SESSIONS.put(player.getUuid(), session);
             player.teleport(world, PLAYBACK_PLATFORM_X + 0.5, PLAYBACK_PLATFORM_Y + 1.0, PLAYBACK_PLATFORM_Z + 0.5, Set.of(), 180.0f, 0.0f, false);
         }
         player.sendMessage(Text.literal("开始" + ("scroll".equals(mode) ? "滚动" : "正式") + "播放：Chunk " + startChunk + "，" + rate + "x"), true);
+        return 1;
+    }
+    private static int prepareEffectPreview(net.minecraft.server.command.ServerCommandSource source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayerEntity player = source.getPlayerOrThrow();
+        ChartManifest chart = loadActiveChart(player, source.getServer());
+        if (chart == null || !(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world) || chart.bpm <= 0) return 0;
+        stopPlayback(source.getServer(), player, false);
+        SCROLL_JUDGEMENT_SESSIONS.put(player.getUuid(), new ScrollJudgementSession(world, chart, player));
+        return 1;
+    }
+    private static int playEffectPreview(net.minecraft.server.command.ServerCommandSource source, double requestedBeat, double requestedRate) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayerEntity player = source.getPlayerOrThrow();
+        ChartManifest chart = loadActiveChart(player, source.getServer());
+        if (chart == null || !(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world) || chart.bpm <= 0) return 0;
+        double beat = Math.max(0.0, Math.min(Math.max(0.0, chart.totalBeats), requestedBeat));
+        double rate = normalizePlaybackRate(requestedRate);
+        stopPlayback(source.getServer(), player, false);
+        ScrollJudgementSession session = new ScrollJudgementSession(world, chart, player);
+        SCROLL_JUDGEMENT_SESSIONS.put(player.getUuid(), session);
+        session.start(PlaybackCoordinates.songTimeAtBeat(chart, session.timing, beat), System.nanoTime(), rate, player);
         return 1;
     }
     private static void processPlaybackSessions(MinecraftServer server) {
@@ -1944,11 +1972,19 @@ private static void showSceneBoundary(MinecraftServer server) {
     private static void processScrollJudgementSessions(MinecraftServer server) {
         for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
             ScrollJudgementSession session = SCROLL_JUDGEMENT_SESSIONS.get(player.getUuid());
-            if (session == null || System.nanoTime() < session.startNanos) continue;
+            if (session == null || !session.playing || System.nanoTime() < session.startNanos) continue;
             double songTime = session.startSeconds + (System.nanoTime() - session.startNanos) / 1_000_000_000.0 * session.rate;
             session.playedTapSoundThisTick = false;
             session.playedLookSoundThisTick = false;
             int processed = 0;
+            PlaybackSession effectSession = session.effectSession;
+            if (effectSession != null) effectSession.updateClientTime(player);
+            while (effectSession != null && effectSession.nextEffectIndex < effectSession.effects.size()
+                    && effectSession.effectSeconds(effectSession.effects.get(effectSession.nextEffectIndex)) <= songTime
+                    && processed++ < PLAYBACK_MAX_PRELOADS_PER_TICK) {
+                JsonObject effect = effectSession.effects.get(effectSession.nextEffectIndex++);
+                playTrackEffect(effectSession, player, effect);
+            }
             while (session.nextNoteIndex < session.notes.size()
                     && session.noteTimes.get(session.nextNoteIndex) <= songTime
                     && processed++ < PLAYBACK_MAX_PRELOADS_PER_TICK) {
@@ -2077,10 +2113,13 @@ private static void showSceneBoundary(MinecraftServer server) {
     private static JsonObject effectProperties(JsonObject effect) { return effect != null && effect.has("properties") && effect.get("properties").isJsonObject() ? effect.getAsJsonObject("properties") : new JsonObject(); }
     private static void stopPlayback(MinecraftServer server, ServerPlayerEntity player, boolean returnPlayer) {
         ScrollJudgementSession scrollSession = SCROLL_JUDGEMENT_SESSIONS.remove(player.getUuid());
-        player.clearStatusEffects();
-        if (scrollSession != null) return;
+        if (scrollSession != null) {
+            if (scrollSession.effectSession != null) scrollSession.effectSession.resetClientTime(player);
+            return;
+        }
         PlaybackSession session = PLAYBACK_SESSIONS.remove(player.getUuid());
         if (session == null) return;
+        player.clearStatusEffects();
         try {
             session.resetClientTime(player);
             session.clearGlowTeam();
@@ -2111,28 +2150,52 @@ private static void showSceneBoundary(MinecraftServer server) {
     }
     private static final class ScrollJudgementSession {
         private final ServerWorld world;
-        private final double startSeconds;
-        private final long startNanos;
-        private final double rate;
+        private final ChartManifest chart;
+        private final ChartTiming.Prepared timing;
+        private double startSeconds;
+        private long startNanos;
+        private double rate;
         private final java.util.List<ChartManifest.Note> notes;
         private final java.util.List<Double> noteTimes;
         private final double endSeconds;
         private int nextNoteIndex;
+        private PlaybackSession effectSession;
+        private boolean playing;
         private boolean playedTapSoundThisTick;
         private boolean playedLookSoundThisTick;
 
-        private ScrollJudgementSession(ServerWorld world, ChartManifest chart, double startSeconds, long startNanos, double rate) {
+        private ScrollJudgementSession(ServerWorld world, ChartManifest chart, ServerPlayerEntity owner, double startSeconds, long startNanos, double rate) {
+            this(world, chart, owner);
+            start(startSeconds, startNanos, rate, owner);
+        }
+
+        private ScrollJudgementSession(ServerWorld world, ChartManifest chart, ServerPlayerEntity owner) {
             this.world = world;
-            this.startSeconds = startSeconds;
-            this.startNanos = startNanos;
-            this.rate = rate;
+            this.chart = chart;
+            this.timing = ChartTiming.prepare(chart);
+            this.startSeconds = 0.0;
+            this.startNanos = Long.MAX_VALUE;
+            this.rate = 1.0;
             this.notes = new java.util.ArrayList<>(chart.notes == null ? java.util.List.of() : chart.notes);
             this.notes.removeIf(note -> note == null || note.id == null);
             this.notes.sort(java.util.Comparator.comparingDouble(note -> effectiveNoteTime(note, chart)));
             this.noteTimes = new java.util.ArrayList<>(notes.size());
             for (ChartManifest.Note note : notes) noteTimes.add(effectiveNoteTime(note, chart));
             this.endSeconds = playbackEndTime(chart);
+            this.effectSession = null;
+            this.playing = false;
+        }
+
+        private void start(double startSeconds, long startNanos, double rate, ServerPlayerEntity player) {
+            this.startSeconds = startSeconds;
+            this.startNanos = startNanos;
+            this.rate = rate;
+            this.nextNoteIndex = 0;
+            this.playedTapSoundThisTick = false;
+            this.playedLookSoundThisTick = false;
+            this.effectSession = new PlaybackSession(world, player.getX(), player.getY(), player.getZ(), player.getYaw(), player.getPitch(), chart, startSeconds, startNanos, "scroll", rate);
             while (nextNoteIndex < noteTimes.size() && noteTimes.get(nextNoteIndex) < startSeconds) nextNoteIndex++;
+            this.playing = true;
         }
     }
     private static void cleanupOrphanedPlaybackDisplays(ServerWorld world) {
@@ -2159,6 +2222,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final java.util.List<JsonObject> effects;
         private final Set<Integer> hiddenNoteTypes = new java.util.HashSet<>();
         private final Set<Integer> hiddenTracks = new java.util.HashSet<>();
+        private boolean hiddenAllNotes;
         private final Map<Integer, Team> glowTeams = new java.util.HashMap<>();
         private Formatting observerGlowColor = Formatting.WHITE;
         private Long clientTime;
@@ -2224,14 +2288,21 @@ private static void showSceneBoundary(MinecraftServer server) {
             }
             updateGlowTeam();
         }        private boolean shouldHide(ChartManifest.Note note) {
-            return hiddenNoteTypes.contains(note.type) || hiddenTracks.contains(note.trackId);
+            return hiddenAllNotes || hiddenNoteTypes.contains(note.type) || hiddenTracks.contains(note.trackId);
         }
         private void updateHiddenNotes(JsonObject effect) {
             hiddenNoteTypes.clear();
             hiddenTracks.clear();
+            hiddenAllNotes = false;
             if (effect == null) return;
-            if (effect.has("noteTypes") && effect.get("noteTypes").isJsonArray()) {
-                for (var value : effect.getAsJsonArray("noteTypes")) {
+            JsonObject properties = effectProperties(effect);
+            com.google.gson.JsonElement hidden = effect.has("hidden") ? effect.get("hidden") : properties.get("hidden");
+            if (hidden != null && hidden.isJsonPrimitive()) {
+                try { hiddenAllNotes = hidden.getAsBoolean(); } catch (RuntimeException ignored) { }
+            }
+            com.google.gson.JsonElement noteTypes = effect.has("noteTypes") ? effect.get("noteTypes") : properties.get("noteTypes");
+            if (noteTypes != null && noteTypes.isJsonArray()) {
+                for (var value : noteTypes.getAsJsonArray()) {
                     try {
                         if (value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber()) {
                             hiddenNoteTypes.add(value.getAsInt());
@@ -2247,8 +2318,9 @@ private static void showSceneBoundary(MinecraftServer server) {
                     } catch (RuntimeException ignored) { }
                 }
             }
-            if (effect.has("tracks") && effect.get("tracks").isJsonArray()) {
-                for (var value : effect.getAsJsonArray("tracks")) {
+            com.google.gson.JsonElement tracks = effect.has("tracks") ? effect.get("tracks") : properties.get("tracks");
+            if (tracks != null && tracks.isJsonArray()) {
+                for (var value : tracks.getAsJsonArray()) {
                     try { hiddenTracks.add(value.getAsInt()); } catch (RuntimeException ignored) { }
                 }
             }
