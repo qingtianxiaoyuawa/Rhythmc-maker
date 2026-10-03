@@ -26,9 +26,17 @@ import net.minecraft.block.Blocks;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.SpawnReason;
 import net.minecraft.entity.decoration.DisplayEntity;
+import net.minecraft.entity.projectile.FireworkRocketEntity;
+import net.minecraft.component.DataComponentTypes;
+import net.minecraft.component.type.FireworkExplosionComponent;
+import net.minecraft.component.type.FireworksComponent;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
+import net.minecraft.util.math.AffineTransformation;
+import org.joml.Quaternionf;
+import org.joml.Vector3f;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtIo;
 import net.minecraft.nbt.NbtList;
@@ -1979,6 +1987,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             session.playedTapSoundThisTick = false;
             session.playedLookSoundThisTick = false;
             session.updateClientTime(player);
+            session.updateTextDisplays(songTime);
             if (session.formal) {
                 while (session.nextEffectIndex < session.effects.size()) {
                     JsonObject effect = session.effects.get(session.nextEffectIndex);
@@ -2056,9 +2065,9 @@ private static void showSceneBoundary(MinecraftServer server) {
             session.playedLookSoundThisTick = false;
             int processed = 0;
             PlaybackSession effectSession = session.effectSession;
-            if (effectSession != null) effectSession.updateClientTime(player);
+            if (effectSession != null) { effectSession.updateClientTime(player); effectSession.updateTextDisplays(songTime); }
             while (effectSession != null && effectSession.nextEffectIndex < effectSession.effects.size()
-                    && effectSession.effectSeconds(effectSession.effects.get(effectSession.nextEffectIndex)) <= songTime
+                    && effectSession.effectTimes.get(effectSession.nextEffectIndex) <= songTime
                     && processed++ < PLAYBACK_MAX_PRELOADS_PER_TICK) {
                 JsonObject effect = effectSession.effects.get(effectSession.nextEffectIndex++);
                 playTrackEffect(effectSession, player, effect);
@@ -2128,14 +2137,16 @@ private static void showSceneBoundary(MinecraftServer server) {
         switch (type) {
             case "GLOW_COLOR" -> session.applyGlowColor(effect);
             case "HIDE_NOTES" -> session.updateHiddenNotes(effect);
-            case "TITLE", "ACTIONBAR", "MESSAGE" -> { if (!text.isBlank()) player.sendMessage(Text.literal(text), "CHAT".equalsIgnoreCase(effectString(effect, "type", "ACTIONBAR")) ? false : true); }
+            case "TITLE" -> session.applyTitle(player, effect);
+            case "ACTIONBAR" -> { if (!text.isBlank()) player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.OverlayMessageS2CPacket(Text.literal(text))); }
+            case "MESSAGE" -> { if (!text.isBlank()) player.sendMessage(Text.literal(text), false); }
             case "TEXT_DISPLAY", "TEXT_DISPLAY_EFFECT", "TEXT_DISPLAY_SYNC_TRACK", "TEXT_DISPLAY_DESYNC_TRACK", "TEXT_DISPLAY_REMOVE", "HOLOGRAM", "REMOVE_HOLOGRAM" -> session.applyTextEffect(effect);
             case "EFFECT" -> session.applyPotionProxy(player, effect);
             case "CLEAR_EFFECT" -> session.clearPotionEffect(player, effect);
             case "TIME" -> session.applyTime(player, effect);
             case "WEATHER" -> session.applyWeather(effect);
             case "ARENA", "CHANGE_ARENA" -> session.applyArena(effect);
-            case "FIREWORK" -> session.launchFirework(x, y, z);
+            case "FIREWORK" -> session.launchFirework(x, y, z, effect);
             default -> LOGGER.warn("Ignoring unsupported RhythMC effect '{}' instead of substituting a particle placeholder", type);
         }
     }
@@ -2154,11 +2165,23 @@ private static void showSceneBoundary(MinecraftServer server) {
         Formatting formatting = Formatting.byName(effectString(effect, key, "white").toLowerCase(java.util.Locale.ROOT));
         return formatting == null || !formatting.isColor() ? fallback : formatting;
     }
+    private static int parseEffectColor(String value) {
+        String normalized = value == null ? "" : value.trim();
+        if (normalized.isBlank()) return 0xB77BFF;
+        return switch (normalized.toUpperCase(java.util.Locale.ROOT)) {
+            case "RED" -> 0xFF0000; case "GREEN" -> 0x00FF00; case "BLUE" -> 0x0000FF; case "YELLOW" -> 0xFFFF00;
+            case "WHITE" -> 0xFFFFFF; case "BLACK" -> 0x000000; case "PURPLE" -> 0x800080; case "CYAN" -> 0x00FFFF;
+            case "ORANGE" -> 0xFFA500;
+            default -> normalized.startsWith("#") ? Integer.parseInt(normalized.substring(1), 16) : Integer.decode(normalized);
+        };
+    }
     private static int effectColor(JsonObject effect) {
-        if (effect == null || !effect.has("color")) return 0xB77BFF;
+        JsonObject properties = effectProperties(effect);
+        com.google.gson.JsonElement raw = effect != null && effect.has("color") ? effect.get("color") : properties.get("color");
+        if (raw == null || !raw.isJsonPrimitive()) return 0xB77BFF;
         try {
-            if (effect.get("color").isJsonPrimitive() && effect.get("color").getAsJsonPrimitive().isNumber()) return effect.get("color").getAsInt();
-            String value = effect.get("color").getAsString().trim();
+            if (raw.getAsJsonPrimitive().isNumber()) return raw.getAsInt();
+            String value = raw.getAsString().trim();
             if (value.isBlank()) return 0xB77BFF;
             return switch (value.toUpperCase(java.util.Locale.ROOT)) {
                 case "RED" -> 0xFF0000;
@@ -2175,6 +2198,14 @@ private static void showSceneBoundary(MinecraftServer server) {
         } catch (RuntimeException ignored) {
             return 0xB77BFF;
         }
+    }
+    private static double[] effectVector(JsonObject effect, String key, double[] fallback) {
+        try {
+            JsonObject properties = effectProperties(effect);
+            com.google.gson.JsonElement value = effect != null && effect.has(key) ? effect.get(key) : properties.get(key);
+            if (value == null || !value.isJsonArray() || value.getAsJsonArray().size() < 3) return fallback;
+            return new double[]{value.getAsJsonArray().get(0).getAsDouble(), value.getAsJsonArray().get(1).getAsDouble(), value.getAsJsonArray().get(2).getAsDouble()};
+        } catch (RuntimeException ignored) { return fallback; }
     }
     private static int effectInt(JsonObject effect, String key, int fallback) {
         try { JsonObject properties = effectProperties(effect); return effect != null && effect.has(key) ? effect.get(key).getAsInt() : properties.has(key) ? properties.get(key).getAsInt() : fallback; }
@@ -2197,22 +2228,34 @@ private static void showSceneBoundary(MinecraftServer server) {
             normalized = path;
             if (namespace.equals("minecraft")) return net.minecraft.util.Identifier.of(namespace, normalized);
         }
-        return net.minecraft.util.Identifier.of("minecraft", switch (normalized) {
+        String numeric = switch (normalized) {
+            case "1" -> "speed"; case "2" -> "slowness"; case "3" -> "haste"; case "4" -> "mining_fatigue";
+            case "5" -> "strength"; case "6" -> "instant_health"; case "7" -> "instant_damage"; case "8" -> "jump_boost";
+            case "9" -> "nausea"; case "10" -> "regeneration"; case "11" -> "resistance"; case "12" -> "fire_resistance";
+            case "13" -> "water_breathing"; case "14" -> "invisibility"; case "15" -> "blindness"; case "16" -> "night_vision";
+            case "17" -> "hunger"; case "18" -> "weakness"; case "19" -> "poison"; case "20" -> "wither";
+            case "21" -> "health_boost"; case "22" -> "absorption"; case "23" -> "saturation"; case "24" -> "glowing";
+            case "25" -> "levitation"; case "26" -> "luck"; case "27" -> "unluck"; case "28" -> "slow_falling";
+            case "29" -> "conduit_power"; case "30" -> "dolphins_grace"; case "31" -> "bad_omen";
+            case "32" -> "hero_of_the_village"; case "33" -> "darkness"; default -> normalized;
+        };
+        return net.minecraft.util.Identifier.of("minecraft", switch (numeric) {
             case "jump", "jumpboost", "jump_boost" -> "jump_boost";
             case "slow", "slowness" -> "slowness";
             case "nightvision", "night_vision" -> "night_vision";
             case "invis", "invisible", "invisibility" -> "invisibility";
-            case "blind" -> "blindness";
-            case "dark" -> "darkness";
-            case "levitate" -> "levitation";
-            case "regen" -> "regeneration";
-            default -> normalized;
+            case "blind" -> "blindness"; case "dark" -> "darkness"; case "levitate" -> "levitation";
+            case "regen" -> "regeneration"; default -> numeric;
         });
     }
     private static void stopPlayback(MinecraftServer server, ServerPlayerEntity player, boolean returnPlayer) {
         ScrollJudgementSession scrollSession = SCROLL_JUDGEMENT_SESSIONS.remove(player.getUuid());
         if (scrollSession != null) {
-            if (scrollSession.effectSession != null) scrollSession.effectSession.resetClientTime(player);
+            if (scrollSession.effectSession != null) {
+                scrollSession.effectSession.resetClientTime(player);
+                scrollSession.effectSession.clearTextDisplays();
+                scrollSession.effectSession.clearGlowTeam();
+            }
             return;
         }
         PlaybackSession session = PLAYBACK_SESSIONS.remove(player.getUuid());
@@ -2223,6 +2266,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             session.clearGlowTeam();
             for (DisplayEntity.BlockDisplayEntity display : session.displays.values()) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
             for (DisplayEntity.BlockDisplayEntity display : session.displayPool) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+            session.clearTextDisplays();
             session.displays.clear();
             session.displayPool.clear();
             String tag = "rhythmc_preview:" + player.getUuid();
@@ -2318,6 +2362,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final double rate;
         private final java.util.List<ChartManifest.Note> notes;
         private final java.util.List<JsonObject> effects;
+        private final java.util.List<Double> effectTimes;
         private final Set<Integer> hiddenNoteTypes = new java.util.HashSet<>();
         private final Set<Integer> hiddenTracks = new java.util.HashSet<>();
         private boolean hiddenAllNotes;
@@ -2331,6 +2376,10 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final double endSeconds;
         private int nextNoteIndex;
         private final Map<String, DisplayEntity.BlockDisplayEntity> displays = new java.util.HashMap<>();
+        private final Map<String, DisplayEntity.TextDisplayEntity> textDisplays = new java.util.HashMap<>();
+        private final Map<String, double[]> textDisplayAnchors = new java.util.HashMap<>();
+        private final Map<String, Integer> textDisplayTracks = new java.util.HashMap<>();
+        private final Map<String, Long> textDisplayExpiresAtNanos = new java.util.HashMap<>();
         private final java.util.ArrayDeque<DisplayEntity.BlockDisplayEntity> displayPool = new java.util.ArrayDeque<>();
         private final java.util.Set<String> hitNotes = new java.util.HashSet<>();
         private int nextEffectIndex;
@@ -2357,6 +2406,8 @@ private static void showSceneBoundary(MinecraftServer server) {
             this.notes = new java.util.ArrayList<>(chart.notes == null ? java.util.List.of() : chart.notes);
             this.effects = new java.util.ArrayList<>(chart.effects == null ? java.util.List.of() : chart.effects);
             this.effects.sort(java.util.Comparator.comparingDouble(this::effectSeconds));
+            this.effectTimes = new java.util.ArrayList<>(this.effects.size());
+            for (JsonObject effect : this.effects) this.effectTimes.add(effectSeconds(effect));
             this.notes.removeIf(note -> note == null || note.id == null);
             this.notes.sort(java.util.Comparator.comparingDouble(note -> note.time));
             for (ChartManifest.Note note : this.notes) {
@@ -2457,7 +2508,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             glowTeams.clear();
         }
         private void applyPotionProxy(ServerPlayerEntity player, JsonObject effect) {
-            String type = effectString(effect, "type", effectString(effect, "effect", effectString(effect, "potion", "UNKNOWN")));
+            String type = effectString(effect, "effectId", effectString(effect, "type", effectString(effect, "effect", effectString(effect, "potion", "UNKNOWN"))));
             if (type.isBlank() || type.equalsIgnoreCase("UNKNOWN")) {
                 LOGGER.warn("Skipping RhythMC potion effect without a type: {}", effect);
                 return;
@@ -2470,7 +2521,13 @@ private static void showSceneBoundary(MinecraftServer server) {
                     return;
                 }
                 int amplifier = Math.max(0, Math.min(255, effectInt(effect, "amplifier", effectInt(effect, "level", 0))));
-                int duration = Math.max(1, effectInt(effect, "duration", 100));
+                int duration;
+                if (effectInt(effect, "durationTicks", Integer.MIN_VALUE) != Integer.MIN_VALUE) {
+                    duration = Math.max(1, effectInt(effect, "durationTicks", 100));
+                } else {
+                    long durationMillis = Math.max(50L, (long) effectDouble(effect, "duration", 5000.0));
+                    duration = (int) Math.min(Integer.MAX_VALUE, Math.max(1L, (durationMillis + 49L) / 50L));
+                }
                 player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(entry, duration, amplifier,
                         effectBoolean(effect, "ambient", false), effectBoolean(effect, "particles", true), true));
             } catch (RuntimeException exception) {
@@ -2478,17 +2535,29 @@ private static void showSceneBoundary(MinecraftServer server) {
             }
         }
         private void clearPotionEffect(ServerPlayerEntity player, JsonObject effect) {
+            JsonObject properties = effectProperties(effect);
+            com.google.gson.JsonElement effects = effect != null && effect.has("effects") ? effect.get("effects") : properties.get("effects");
+            if (effects != null && effects.isJsonArray()) {
+                for (com.google.gson.JsonElement value : effects.getAsJsonArray()) {
+                    if (value == null || !value.isJsonPrimitive()) continue;
+                    clearPotionEffectValue(player, value.getAsString());
+                }
+                return;
+            }
             String type = effectString(effect, "type", effectString(effect, "effect", effectString(effect, "potion", effectString(effect, "effect-id", ""))));
             if (type.isBlank()) {
                 player.clearStatusEffects();
                 return;
             }
+            clearPotionEffectValue(player, type);
+        }
+        private void clearPotionEffectValue(ServerPlayerEntity player, String type) {
             try {
                 var entry = net.minecraft.registry.Registries.STATUS_EFFECT.getEntry(potionIdentifier(type)).orElse(null);
-                if (entry == null) LOGGER.warn("Unknown RhythMC potion effect to clear '{}': {}", type, effect);
+                if (entry == null) LOGGER.warn("Unknown RhythMC potion effect to clear '{}': {}", type, type);
                 else player.removeStatusEffect(entry);
             } catch (RuntimeException exception) {
-                LOGGER.warn("Failed to clear RhythMC potion effect '{}'", type, exception);
+                LOGGER.warn("Failed to clear RhythMC potion effect '{}': {}", type, exception);
             }
         }
         private void applyTime(ServerPlayerEntity player, JsonObject effect) {
@@ -2533,7 +2602,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private double calculateEndSeconds() {
             double end = chart.durationSeconds + chart.offsetMillis / 1000.0;
             for (double noteTime : noteTimes.values()) if (Double.isFinite(noteTime)) end = Math.max(end, noteTime);
-            for (JsonObject effect : effects) end = Math.max(end, effectSeconds(effect));
+            for (double effectTime : effectTimes) end = Math.max(end, effectTime);
             return Math.max(0.0, end) + 0.1;
         }
         private double effectSeconds(JsonObject effect) {
@@ -2560,9 +2629,186 @@ private static void showSceneBoundary(MinecraftServer server) {
             double rotatedY = localX * Math.sin(radians) + localY * Math.cos(radians);
             return new double[]{PLAYBACK_PLATFORM_X + rotatedX + pose.x(), PLAYBACK_PLATFORM_Y + 1.0 + rotatedY + pose.y(), displayZ - pose.z()};
         }
-        private void applyTextEffect(JsonObject effect) { String value = effectString(effect, "text", effectString(effect, "content", "")); if (!value.isBlank()) LOGGER.info("RhythMC text effect: {}", value); }
-        private void applyArena(JsonObject effect) { String arena = effectString(effect, "arena", ""); if (!arena.isBlank()) LOGGER.info("RhythMC arena effect requested: {}", arena); }
-        private void launchFirework(double x, double y, double z) { world.playSound(null, x, y, z, net.minecraft.sound.SoundEvents.ENTITY_FIREWORK_ROCKET_LAUNCH, net.minecraft.sound.SoundCategory.PLAYERS, 1.0f, 1.0f); }
+        private void applyTitle(ServerPlayerEntity player, JsonObject effect) {
+            String title = effectString(effect, "title", effectString(effect, "text", ""));
+            String subtitle = effectString(effect, "subtitle", "");
+            int fadeIn = Math.max(0, Math.min(200, effectInt(effect, "fadeIn", 10)));
+            int stay = Math.max(0, Math.min(600, effectInt(effect, "stay", 40)));
+            int fadeOut = Math.max(0, Math.min(200, effectInt(effect, "fadeOut", 10)));
+            player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.TitleFadeS2CPacket(fadeIn, stay, fadeOut));
+            if (!title.isBlank()) player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.TitleS2CPacket(Text.literal(title)));
+            if (!subtitle.isBlank()) player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.SubtitleS2CPacket(Text.literal(subtitle)));
+        }
+        private void clearTextDisplays() {
+            for (DisplayEntity.TextDisplayEntity display : textDisplays.values()) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+            textDisplays.clear();
+            textDisplayAnchors.clear();
+            textDisplayTracks.clear();
+            textDisplayExpiresAtNanos.clear();
+        }
+        private void updateTextDisplays(double songTime) {
+            long now = System.nanoTime();
+            for (var iterator = textDisplays.entrySet().iterator(); iterator.hasNext();) {
+                var entry = iterator.next();
+                String id = entry.getKey();
+                DisplayEntity.TextDisplayEntity display = entry.getValue();
+                Long expires = textDisplayExpiresAtNanos.get(id);
+                if (expires != null && now >= expires) {
+                    display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+                    iterator.remove();
+                    textDisplayAnchors.remove(id);
+                    textDisplayTracks.remove(id);
+                    textDisplayExpiresAtNanos.remove(id);
+                    continue;
+                }
+                Integer track = textDisplayTracks.get(id);
+                double[] anchor = textDisplayAnchors.get(id);
+                if (track != null && anchor != null) {
+                    TrackPlayback.Pose pose = trackProfiles.getOrDefault(track, trackProfiles.get(0)).poseAt(timing.secondsToBeat(songTime - chart.offsetMillis / 1000.0));
+                    display.setPosition(anchor[0] + pose.x(), anchor[1] + pose.y(), anchor[2] - pose.z());
+                }
+            }
+        }
+        private void applyTextEffect(JsonObject effect) {
+            String type = effectType(effect);
+            String id = effectString(effect, "id", effectString(effect, "displayId", "rhythmc_effect_" + textDisplays.size()));
+            if (type.equals("TEXT_DISPLAY_REMOVE") || type.equals("REMOVE_HOLOGRAM")) {
+                DisplayEntity.TextDisplayEntity display = textDisplays.remove(id);
+                if (display != null) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+                textDisplayAnchors.remove(id);
+                textDisplayTracks.remove(id);
+                textDisplayExpiresAtNanos.remove(id);
+                return;
+            }
+            if (type.equals("TEXT_DISPLAY_EFFECT")) {
+                applyTextDisplayTransformation(id, effect);
+                return;
+            }
+            if (type.equals("TEXT_DISPLAY_DESYNC_TRACK")) {
+                textDisplayTracks.remove(id);
+                return;
+            }
+            if (type.equals("TEXT_DISPLAY_SYNC_TRACK")) {
+                int track = effectInt(effect, "track", 0);
+                textDisplayTracks.put(id, track);
+                long duration = Math.max(0L, (long) effectDouble(effect, "duration", 31_536_000_000L));
+                textDisplayExpiresAtNanos.put(id, System.nanoTime() + duration * 1_000_000L);
+                return;
+            }
+            String value = effectString(effect, "text", effectString(effect, "content", ""));
+            if (value.isBlank() && effect != null && effect.has("contents") && effect.get("contents").isJsonArray()) {
+                StringBuilder lines = new StringBuilder();
+                for (var element : effect.getAsJsonArray("contents")) {
+                    if (lines.length() > 0) lines.append('\n');
+                    if (element.isJsonPrimitive()) lines.append(element.getAsString());
+                }
+                value = lines.toString();
+            }
+            if (value.isBlank()) return;
+            double[] position = effectVector(effect, "position", new double[]{effectDouble(effect, "x", PLAYBACK_PLATFORM_X + 0.5), effectDouble(effect, "y", PLAYBACK_PLATFORM_Y + 1.5), effectDouble(effect, "z", PLAYBACK_PLATFORM_Z + 0.5)});
+            double x = position[0], y = position[1], z = position[2];
+            DisplayEntity.TextDisplayEntity display = textDisplays.get(id);
+            if (display == null || display.isRemoved()) {
+                display = new DisplayEntity.TextDisplayEntity(EntityType.TEXT_DISPLAY, world);
+                display.addCommandTag("rhythmc_effect:" + chart.id);
+                textDisplays.put(id, display);
+                world.spawnEntity(display);
+            }
+            display.setText(Text.literal(value).styled(style -> style.withColor(effectColor(effect))));
+            display.setPosition(x, y, z);
+            textDisplayAnchors.put(id, new double[]{x, y, z});
+            long duration = (long) effectDouble(effect, "duration", 0.0);
+            if (duration > 0) textDisplayExpiresAtNanos.put(id, System.nanoTime() + duration * 1_000_000L);
+            display.setLineWidth(Math.max(1, Math.min(4096, effectInt(effect, "lineWidth", 200))));
+            display.setTextOpacity((byte) Math.max(-128, Math.min(127, effectInt(effect, "opacity", 255))));
+            display.setBackground(effectInt(effect, "background", 0x40000000));
+            display.setDisplayWidth(Math.max(0.1f, Math.min(64.0f, effectFloat(effect, "scale", 1.0f) * 2.0f)));
+            display.setDisplayHeight(Math.max(0.1f, Math.min(64.0f, effectFloat(effect, "scale", 1.0f) * 2.0f)));
+            display.setBillboardMode(DisplayEntity.BillboardMode.CENTER);
+            display.setInterpolationDuration(1);
+        }
+        private void applyTextDisplayTransformation(String id, JsonObject effect) {
+            DisplayEntity.TextDisplayEntity display = textDisplays.get(id);
+            if (display == null || display.isRemoved()) return;
+            String transformation = effectString(effect, "type", "").toUpperCase(java.util.Locale.ROOT);
+            switch (transformation) {
+                case "TEXT" -> display.setText(Text.literal(effectString(effect, "text", "")).styled(style -> style.withColor(effectColor(effect))));
+                case "SHADOW" -> display.setDisplayFlags((byte) (effectBoolean(effect, "shadowed", true) ? (display.getDisplayFlags() | 1) : (display.getDisplayFlags() & ~1)));
+                case "OPACITY" -> display.setTextOpacity((byte) Math.max(-128, Math.min(127, effectInt(effect, "targetOpacity", effectInt(effect, "opacity", 255)))));
+                case "BACKGROUND_COLOR" -> display.setBackground(effectInt(effect, "background", effectColor(effect)));
+                case "GLOWING" -> display.setGlowing(true);
+                case "LINEAR_TRANSFORMATION" -> {
+                    double[] position = effectVector(effect, "position", new double[]{0.0, 0.0, 0.0});
+                    double[] rotation = effectVector(effect, "rotation", new double[]{0.0, 0.0, 0.0});
+                    double[] scale = effectVector(effect, "scale", new double[]{1.0, 1.0, 1.0});
+                    display.setTransformation(new AffineTransformation(new Vector3f((float) position[0], (float) position[1], (float) position[2]), new Quaternionf().rotationXYZ((float) rotation[0], (float) rotation[1], (float) rotation[2]), new Vector3f((float) scale[0], (float) scale[1], (float) scale[2]), new Quaternionf()));
+                }
+                default -> LOGGER.warn("Unknown RhythMC text display transformation '{}'", transformation);
+            }
+        }
+        private void applyArena(JsonObject effect) {
+            String arena = effectString(effect, "arena", "").trim();
+            if (arena.isBlank()) return;
+            String binding = chart.arenaBindings.get(arena);
+            if (binding == null || binding.isBlank()) {
+                LOGGER.warn("RhythMC arena effect has no binding: {}", arena);
+                return;
+            }
+            try {
+                Path sceneFile;
+                if (binding.startsWith("scene-editor:")) {
+                    int sceneIndex = Integer.parseInt(binding.substring("scene-editor:".length()));
+                    sceneFile = SceneEditStorage.schematicPath(world.getServer(), chart.id, sceneIndex);
+                } else {
+                    sceneFile = Path.of(binding);
+                }
+                if (!Files.isRegularFile(sceneFile)) {
+                    LOGGER.warn("RhythMC arena schematic does not exist: {}", sceneFile);
+                    return;
+                }
+                SCENE_IMPORT_TASKS.offer(new SceneImportTask(chart, sceneFile, PLAYBACK_PLATFORM_X, PLAYBACK_PLATFORM_Y, PLAYBACK_PLATFORM_Z));
+                IMPORTING_CHARTS.add(chart.id);
+            } catch (IOException | RuntimeException exception) {
+                LOGGER.warn("Failed to queue RhythMC arena effect '{}'", arena, exception);
+            }
+        }
+        private void launchFirework(double x, double y, double z, JsonObject effect) {
+            int color = effectColor(effect);
+            ItemStack stack = new ItemStack(Items.FIREWORK_ROCKET);
+            IntArrayList colors = new IntArrayList();
+            com.google.gson.JsonElement colorValues = effect != null && effect.has("colors") ? effect.get("colors") : effectProperties(effect).get("colors");
+            if (colorValues != null && colorValues.isJsonArray()) {
+                for (com.google.gson.JsonElement value : colorValues.getAsJsonArray()) {
+                    try { colors.add(value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber() ? value.getAsInt() & 0xFFFFFF : parseEffectColor(value.getAsString())); }
+                    catch (RuntimeException ignored) { }
+                }
+            }
+            if (colors.isEmpty()) colors.add(color & 0xFFFFFF);
+            IntArrayList fadeColors = new IntArrayList();
+            com.google.gson.JsonElement fadeValues = effect != null && effect.has("fadeColors") ? effect.get("fadeColors") : effectProperties(effect).get("fadeColors");
+            if (fadeValues != null && fadeValues.isJsonArray()) {
+                for (com.google.gson.JsonElement value : fadeValues.getAsJsonArray()) {
+                    try { fadeColors.add(value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber() ? value.getAsInt() & 0xFFFFFF : parseEffectColor(value.getAsString())); }
+                    catch (RuntimeException ignored) { }
+                }
+            }
+            String shape = effectString(effect, "shape", effectString(effect, "type", "BURST")).toUpperCase(java.util.Locale.ROOT);
+            FireworkExplosionComponent.Type explosionType;
+            try { explosionType = FireworkExplosionComponent.Type.valueOf(shape); }
+            catch (IllegalArgumentException ignored) { explosionType = FireworkExplosionComponent.Type.BURST; }
+
+            FireworkExplosionComponent explosion = new FireworkExplosionComponent(
+                    explosionType, colors, fadeColors, effectBoolean(effect, "trail", true), effectBoolean(effect, "flicker", true));
+            int power = Math.max(0, Math.min(127, effectInt(effect, "power", 1)));
+            int count = Math.max(1, Math.min(16, effectInt(effect, "count", 1)));
+            stack.set(DataComponentTypes.FIREWORKS, new FireworksComponent(power, java.util.List.of(explosion)));
+            FireworkRocketEntity rocket = new FireworkRocketEntity(world, x, y, z, stack);
+            world.spawnEntity(rocket);
+            for (int index = 1; index < count; index++) {
+                FireworkRocketEntity extra = new FireworkRocketEntity(world, x + (index * 0.17), y, z + (index * 0.17), stack.copy());
+                world.spawnEntity(extra);
+            }
+        }
 
         private boolean shouldUpdateDisplayPositions(long serverTick) {
             if (lastDisplayUpdateTick != Long.MIN_VALUE
