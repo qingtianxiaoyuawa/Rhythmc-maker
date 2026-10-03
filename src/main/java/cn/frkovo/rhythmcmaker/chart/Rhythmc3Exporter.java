@@ -5,6 +5,8 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.github.luben.zstd.ZstdOutputStream;
+import java.io.OutputStream;
 import net.minecraft.block.BlockState;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtIo;
@@ -130,7 +132,10 @@ public final class Rhythmc3Exporter {
         JsonArray effects = new JsonArray();
         if (chart.effects != null) for (JsonObject effect : chart.effects) if (effect != null) effects.add(effect.deepCopy());
         root.add("effects", effects);
-        Files.writeString(folder.resolve(difficultyFile(chart.difficulty) + ".rmcc"), GSON.toJson(root), StandardCharsets.UTF_8);
+        Path difficultyPath = folder.resolve(difficultyFile(chart.difficulty) + ".rmcc");
+        try (OutputStream output = new ZstdOutputStream(Files.newOutputStream(difficultyPath))) {
+            output.write(GSON.toJson(root).getBytes(StandardCharsets.UTF_8));
+        }
     }
 
     private static double exportBeat(ChartManifest.Note note) {
@@ -173,7 +178,7 @@ public final class Rhythmc3Exporter {
             value.addProperty("endBeat", event.endBeat);
             value.addProperty("startValue", event.startValue);
             value.addProperty("endValue", event.endValue);
-            value.addProperty("easing", event.easing);
+            value.addProperty("easingType", event.easing);
             events.add(value);
         }
         return events.isEmpty() ? eventList(0.0, endBeat, 1.0) : events;

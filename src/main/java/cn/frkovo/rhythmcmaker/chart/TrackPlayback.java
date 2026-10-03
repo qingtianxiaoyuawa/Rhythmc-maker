@@ -26,6 +26,7 @@ public final class TrackPlayback {
         private final List<ChartManifest.NumEvent> xScale;
         private final List<ChartManifest.NumEvent> yScale;
         private final List<ChartManifest.NumEvent> zScale;
+        private final double[] speedPrefix;
 
         private Prepared(ChartManifest.Track track, List<ChartManifest.SpeedEvent> legacySpeedEvents) {
             speed = events(track == null ? null : track.speedEvents, legacySpeedEvents);
@@ -38,16 +39,15 @@ public final class TrackPlayback {
             xScale = events(track == null ? null : track.xScaleEvents, null);
             yScale = events(track == null ? null : track.yScaleEvents, null);
             zScale = events(track == null ? null : track.zScaleEvents, null);
+            speedPrefix = buildSpeedPrefix(speed);
         }
 
         public double distanceAt(double beat) {
             if (speed.isEmpty()) return beat;
-            double distance = 0.0;
-            for (ChartManifest.NumEvent event : speed) {
-                if (event.startBeat > beat) break;
-                distance += eventDistance(event, beat);
-            }
-            return distance;
+            int index = upperBound(speed, beat) - 1;
+            if (index < 0) return 0.0;
+            ChartManifest.NumEvent event = speed.get(index);
+            return speedPrefix[index] + eventDistance(event, beat);
         }
 
         public Pose poseAt(double beat) {
@@ -77,16 +77,33 @@ public final class TrackPlayback {
     }
 
     private static double valueAt(List<ChartManifest.NumEvent> events, double beat, double fallback) {
-        double value = fallback;
-        for (ChartManifest.NumEvent event : events) {
-            if (event.startBeat > beat) break;
-            if (event.endBeat <= event.startBeat || beat >= event.endBeat) {
-                value = event.endValue;
-                continue;
-            }
-            return interpolate(event, (beat - event.startBeat) / (event.endBeat - event.startBeat));
+        int index = upperBound(events, beat) - 1;
+        if (index < 0) return fallback;
+        ChartManifest.NumEvent event = events.get(index);
+        if (event.endBeat <= event.startBeat || beat >= event.endBeat) return event.endValue;
+        return interpolate(event, (beat - event.startBeat) / (event.endBeat - event.startBeat));
+    }
+
+    private static int upperBound(List<ChartManifest.NumEvent> events, double beat) {
+        int low = 0;
+        int high = events.size();
+        while (low < high) {
+            int middle = (low + high) >>> 1;
+            if (events.get(middle).startBeat <= beat) low = middle + 1;
+            else high = middle;
         }
-        return value;
+        return low;
+    }
+
+    private static double[] buildSpeedPrefix(List<ChartManifest.NumEvent> events) {
+        double[] prefix = new double[events.size()];
+        double distance = 0.0;
+        for (int index = 0; index < events.size(); index++) {
+            prefix[index] = distance;
+            ChartManifest.NumEvent event = events.get(index);
+            distance += eventDistance(event, event.endBeat);
+        }
+        return prefix;
     }
 
     private static double eventDistance(ChartManifest.NumEvent event, double beat) {

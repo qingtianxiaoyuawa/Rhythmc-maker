@@ -662,9 +662,9 @@ public final class ChartStorage {
         return filename.substring(index + 1).toLowerCase();
     }
 
-    private record ChartDocument(ChartManifest meta, List<ChartManifest.Note> tracks, List<com.google.gson.JsonObject> effects) {
+    private record ChartDocument(ChartManifest meta, List<ChartManifest.Track> tracks, List<ChartManifest.Note> notes, List<com.google.gson.JsonObject> effects) {
         private ChartDocument(ChartManifest meta) {
-            this(meta, meta.notes == null ? List.of() : meta.notes, meta.effects == null ? List.of() : meta.effects);
+            this(meta, meta.tracks == null ? List.of() : meta.tracks, meta.notes == null ? List.of() : meta.notes, meta.effects == null ? List.of() : meta.effects);
         }
     }
 }
