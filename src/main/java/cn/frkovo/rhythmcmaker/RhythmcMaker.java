@@ -2105,7 +2105,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             case "TITLE", "ACTIONBAR", "MESSAGE" -> { if (!text.isBlank()) player.sendMessage(Text.literal(text), "CHAT".equalsIgnoreCase(effectString(effect, "type", "ACTIONBAR")) ? false : true); }
             case "TEXT_DISPLAY", "TEXT_DISPLAY_EFFECT", "TEXT_DISPLAY_SYNC_TRACK", "TEXT_DISPLAY_DESYNC_TRACK", "TEXT_DISPLAY_REMOVE", "HOLOGRAM", "REMOVE_HOLOGRAM" -> session.applyTextEffect(effect);
             case "EFFECT" -> session.applyPotionProxy(player, effect);
-            case "CLEAR_EFFECT" -> player.clearStatusEffects();
+            case "CLEAR_EFFECT" -> session.clearPotionEffect(player, effect);
             case "TIME" -> session.applyTime(player, effect);
             case "WEATHER" -> session.applyWeather(effect);
             case "ARENA", "CHANGE_ARENA" -> session.applyArena(effect);
@@ -2163,6 +2163,26 @@ private static void showSceneBoundary(MinecraftServer server) {
         catch (RuntimeException ignored) { return fallback; }
     }
     private static JsonObject effectProperties(JsonObject effect) { return effect != null && effect.has("properties") && effect.get("properties").isJsonObject() ? effect.getAsJsonObject("properties") : new JsonObject(); }
+    private static net.minecraft.util.Identifier potionIdentifier(String value) {
+        String normalized = value == null ? "" : value.trim().toLowerCase(java.util.Locale.ROOT).replace(' ', '_').replace('-', '_');
+        if (normalized.contains(":")) {
+            String namespace = normalized.substring(0, normalized.indexOf(':'));
+            String path = normalized.substring(normalized.indexOf(':') + 1);
+            normalized = path;
+            if (namespace.equals("minecraft")) return net.minecraft.util.Identifier.of(namespace, normalized);
+        }
+        return net.minecraft.util.Identifier.of("minecraft", switch (normalized) {
+            case "jump", "jumpboost", "jump_boost" -> "jump_boost";
+            case "slow", "slowness" -> "slowness";
+            case "nightvision", "night_vision" -> "night_vision";
+            case "invis", "invisible", "invisibility" -> "invisibility";
+            case "blind" -> "blindness";
+            case "dark" -> "darkness";
+            case "levitate" -> "levitation";
+            case "regen" -> "regeneration";
+            default -> normalized;
+        });
+    }
     private static void stopPlayback(MinecraftServer server, ServerPlayerEntity player, boolean returnPlayer) {
         ScrollJudgementSession scrollSession = SCROLL_JUDGEMENT_SESSIONS.remove(player.getUuid());
         player.clearStatusEffects();
@@ -2381,7 +2401,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 return;
             }
             try {
-                net.minecraft.util.Identifier id = net.minecraft.util.Identifier.of(type.contains(":") ? type : "minecraft:" + type.toLowerCase(java.util.Locale.ROOT));
+                net.minecraft.util.Identifier id = potionIdentifier(type);
                 var entry = net.minecraft.registry.Registries.STATUS_EFFECT.getEntry(id).orElse(null);
                 if (entry == null) {
                     LOGGER.warn("Unknown RhythMC potion effect '{}': {}", type, effect);
@@ -2393,6 +2413,20 @@ private static void showSceneBoundary(MinecraftServer server) {
                         effectBoolean(effect, "ambient", false), effectBoolean(effect, "particles", true), true));
             } catch (RuntimeException exception) {
                 LOGGER.warn("Failed to apply RhythMC potion effect '{}'", type, exception);
+            }
+        }
+        private void clearPotionEffect(ServerPlayerEntity player, JsonObject effect) {
+            String type = effectString(effect, "type", effectString(effect, "effect", effectString(effect, "potion", effectString(effect, "effect-id", ""))));
+            if (type.isBlank()) {
+                player.clearStatusEffects();
+                return;
+            }
+            try {
+                var entry = net.minecraft.registry.Registries.STATUS_EFFECT.getEntry(potionIdentifier(type)).orElse(null);
+                if (entry == null) LOGGER.warn("Unknown RhythMC potion effect to clear '{}': {}", type, effect);
+                else player.removeStatusEffect(entry);
+            } catch (RuntimeException exception) {
+                LOGGER.warn("Failed to clear RhythMC potion effect '{}'", type, exception);
             }
         }
         private void applyTime(ServerPlayerEntity player, JsonObject effect) {
