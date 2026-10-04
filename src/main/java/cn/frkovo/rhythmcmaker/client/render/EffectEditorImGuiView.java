@@ -1,6 +1,7 @@
 package cn.frkovo.rhythmcmaker.client.render;
 
 import cn.frkovo.rhythmcmaker.chart.ChartManifest;
+import cn.frkovo.rhythmcmaker.chart.ChartTiming;
 import cn.frkovo.rhythmcmaker.client.RhythmcMakerClient;
 import cn.frkovo.rhythmcmaker.common.effect.EffectPropertyDefinition;
 import cn.frkovo.rhythmcmaker.common.effect.EffectPropertyValueKind;
@@ -11,16 +12,25 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import imgui.ImGui;
+import imgui.ImDrawList;
 import imgui.ImGuiIO;
+import imgui.flag.ImGuiCond;
+import imgui.flag.ImGuiDockNodeFlags;
+import imgui.flag.ImGuiDir;
 import imgui.flag.ImGuiDataType;
 import imgui.flag.ImGuiCol;
 import imgui.flag.ImGuiSelectableFlags;
+import imgui.flag.ImGuiStyleVar;
 import imgui.flag.ImGuiWindowFlags;
 import imgui.type.ImBoolean;
 import imgui.type.ImDouble;
 import imgui.type.ImInt;
 import imgui.type.ImString;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.input.KeyInput;
+import org.lwjgl.glfw.GLFW;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -34,14 +44,33 @@ import java.util.function.Consumer;
  * so an unrecognised effect is displayed read-only and survives a save intact.
  */
 public final class EffectEditorImGuiView {
-    private static final int PANEL_FLAGS = ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoSavedSettings;
+    private static final Logger LOGGER = LoggerFactory.getLogger(EffectEditorImGuiView.class);
+    private static final int PANEL_FLAGS = ImGuiWindowFlags.None;
     private static final int TOOLBAR_FLAGS = ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoSavedSettings;
+    private static final int DOCKSPACE_FLAGS = ImGuiWindowFlags.NoDecoration
+            | ImGuiWindowFlags.NoMove
+            | ImGuiWindowFlags.NoResize
+            | ImGuiWindowFlags.NoSavedSettings
+            | ImGuiWindowFlags.NoDocking
+            | ImGuiWindowFlags.NoBackground
+            | ImGuiWindowFlags.NoBringToFrontOnFocus
+            | ImGuiWindowFlags.NoNavFocus;
+    private static final int INPUT_TRIGGER_FLAGS = ImGuiWindowFlags.NoDecoration
+            | ImGuiWindowFlags.NoMove
+            | ImGuiWindowFlags.NoResize
+            | ImGuiWindowFlags.NoSavedSettings
+            | ImGuiWindowFlags.NoDocking
+            | ImGuiWindowFlags.NoBackground
+            | ImGuiWindowFlags.NoBringToFrontOnFocus
+            | ImGuiWindowFlags.NoNavFocus
+            | ImGuiWindowFlags.NoMouseInputs;
 
     private final ChartManifest chart;
     private final List<JsonObject> workingEffects = new ArrayList<>();
     private final Runnable saveAction;
     private final Runnable closeAction;
-    private final Runnable playbackAction;
+    private final Runnable togglePlaybackAction;
+    private final Runnable replayAction;
     private final Consumer<Double> seekAction;
     private final Consumer<String> statusAction;
     private final EffectTypeRegistry registry = EffectTypeRegistry.getInstance();
@@ -55,18 +84,56 @@ public final class EffectEditorImGuiView {
     private final Map<String, float[]> colorFields = new HashMap<>();
     private final float[] playhead = new float[1];
     private final ImString timelinePositionField = new ImString("0", 64);
+    private double timelineZoomMin;
+    private double timelineZoomMax = 1.0;
+    private int timelineDraggedEvent = -1;
+    private int timelineDraggedChannel = -1;
+    private int timelineDraggedKeyframe = -1;
+    private double timelineDragBeatOffset;
+    private boolean timelineDraggingPlayhead;
+    private boolean timelineDraggingRange;
+    private boolean spaceKeyDown;
+    private double timelineLastSeekBeat = Double.NaN;
+    private boolean applyDefaultDockLayout;
+    private int libraryDockNodeId;
+    private int previewDockNodeId;
+    private int inspectorDockNodeId;
+    private int timelineDockNodeId;
     private int selectedIndex;
     private int bufferIndex = Integer.MIN_VALUE;
     private String bufferType = "";
     private boolean dirty;
     private String status = "就绪";
+    private float previewWindowX = -1.0f;
+    private float previewWindowY = -1.0f;
+    private float previewWindowWidth;
+    private float previewWindowHeight;
+    private float previewContentX = -1.0f;
+    private float previewContentY = -1.0f;
+    private float previewContentWidth;
+    private float previewContentHeight;
+    private boolean cameraDragLogged;
 
-    public EffectEditorImGuiView(ChartManifest chart, Runnable saveAction, Runnable closeAction, Runnable playbackAction,
+    private enum TimelineMarkerKind { EVENT, KEYFRAME }
+
+    private enum TimelineControl { PLAY_PAUSE, RETURN_TO_START, PREVIOUS, NEXT }
+
+    private record TimelineMarker(int eventIndex, int channelIndex, int keyframeIndex, double beat,
+                                  TimelineMarkerKind kind) {
+    }
+
+    private record TimelineRow(String groupLabel, String label, int eventIndex, List<TimelineMarker> markers,
+                               boolean groupHeader) {
+    }
+
+    public EffectEditorImGuiView(ChartManifest chart, Runnable saveAction, Runnable closeAction,
+                                 Runnable togglePlaybackAction, Runnable replayAction,
                                  Consumer<Double> seekAction, Consumer<String> statusAction) {
         this.chart = chart;
         this.saveAction = saveAction;
         this.closeAction = closeAction;
-        this.playbackAction = playbackAction;
+        this.togglePlaybackAction = togglePlaybackAction;
+        this.replayAction = replayAction;
         this.seekAction = seekAction;
         this.statusAction = statusAction;
         if (chart != null && chart.effects != null) {
@@ -81,25 +148,115 @@ public final class EffectEditorImGuiView {
 
     public void render(MinecraftClient client) {
         ImGuiIO io = ImGui.getIO();
-        float width = Math.max(900.0f, io.getDisplaySizeX());
-        float height = Math.max(600.0f, io.getDisplaySizeY());
+        float width = Math.max(1.0f, io.getDisplaySizeX());
+        float height = Math.max(1.0f, io.getDisplaySizeY());
         drawToolbar(width);
+        drawInputTriggerLayer(width, height);
+        drawDockspace(width, height);
         if (chart == null) {
             drawEmptyState(width, height);
             return;
         }
-        float leftWidth = Math.max(210.0f, Math.min(270.0f, width * 0.18f));
-        float rightWidth = Math.max(290.0f, Math.min(360.0f, width * 0.24f));
-        float centerWidth = Math.max(320.0f, width - leftWidth - rightWidth - 24.0f);
+        float leftWidth = Math.min(270.0f, Math.max(120.0f, width * 0.18f));
+        float rightWidth = Math.min(360.0f, Math.max(190.0f, width * 0.24f));
+        float centerWidth = Math.max(1.0f, width - leftWidth - rightWidth - 24.0f);
         float top = 54.0f;
-        float contentHeight = Math.max(260.0f, height - 270.0f);
+        float timelineHeight = height * 0.32f;
+        float contentHeight = Math.max(1.0f, height - top - timelineHeight - 8.0f);
         drawLibrary(0.0f, top, leftWidth, contentHeight);
         drawPreview(leftWidth + 8.0f, top, centerWidth, contentHeight, client);
         drawInspector(leftWidth + centerWidth + 16.0f, top, rightWidth, contentHeight);
-        drawTimeline(0.0f, top + contentHeight + 8.0f, width, Math.max(160.0f, height - top - contentHeight - 8.0f));
+        drawTimeline(0.0f, top + contentHeight + 8.0f, width, timelineHeight);
+        applyDefaultDockLayout = false;
+    }
+
+    /** A transparent bottom layer that gives editor wheel input one stable owner. */
+    private void drawInputTriggerLayer(float width, float height) {
+        ImGui.setNextWindowPos(0.0f, 0.0f, ImGuiCond.Always);
+        ImGui.setNextWindowSize(width, height, ImGuiCond.Always);
+        if (ImGui.begin("##effect-editor-input-trigger", INPUT_TRIGGER_FLAGS)) {
+            if (ImGui.isMouseDragging(2, 0.0f)) {
+                float deltaX = ImGui.getMouseDragDeltaX(2, 0.0f);
+                float deltaY = ImGui.getMouseDragDeltaY(2, 0.0f);
+                if (Float.isFinite(deltaX) && Float.isFinite(deltaY)
+                        && (Math.abs(deltaX) > 0.001f || Math.abs(deltaY) > 0.001f)) {
+                    RhythmcMakerClient.adjustEffectEditorCamera(deltaX, deltaY);
+                    if (!cameraDragLogged) {
+                        cameraDragLogged = true;
+                        LOGGER.info("Effect camera middle drag delta=({}, {}), position={}",
+                                deltaX, deltaY, RhythmcMakerClient.effectEditorCameraPosition());
+                    }
+                    ImGui.resetMouseDragDelta(2);
+                }
+            } else if (ImGui.isMouseReleased(2)) {
+                cameraDragLogged = false;
+            }
+            float wheel = ImGui.getIO().getMouseWheel();
+            if (Math.abs(wheel) > 0.001f) {
+                RhythmcMakerClient.adjustEffectEditorCameraHeight(wheel);
+                LOGGER.info("Effect camera wheel consumed by input layer: delta={}, position={}",
+                        wheel, RhythmcMakerClient.effectEditorCameraPosition());
+                ImGui.getIO().setMouseWheel(0.0f);
+            }
+        }
+        ImGui.end();
+    }
+
+    private void drawDockspace(float width, float height) {
+        ImGui.setNextWindowPos(0.0f, 46.0f, ImGuiCond.Always);
+        ImGui.setNextWindowSize(width, Math.max(1.0f, height - 46.0f), ImGuiCond.Always);
+        if (ImGui.begin("##effect-editor-dockspace", DOCKSPACE_FLAGS)) {
+            int dockspaceId = ImGui.getID("##effect-editor-dockspace-node-v3");
+            initializeDefaultDockLayout(dockspaceId, ImGui.getContentRegionAvailX(),
+                    ImGui.getContentRegionAvailY());
+            ImGui.dockSpace(dockspaceId, 0.0f, 0.0f,
+                    ImGuiDockNodeFlags.PassthruCentralNode);
+        }
+        ImGui.end();
+    }
+
+    private void initializeDefaultDockLayout(int dockspaceId, float width, float height) {
+        if (imgui.internal.ImGui.dockBuilderGetNode(dockspaceId) != null) return;
+
+        int previousDockspaceId = ImGui.getID("##effect-editor-dockspace-node");
+        if (imgui.internal.ImGui.dockBuilderGetNode(previousDockspaceId) != null) {
+            imgui.internal.ImGui.dockBuilderRemoveNode(previousDockspaceId);
+        }
+        int incompleteDockspaceId = ImGui.getID("##effect-editor-dockspace-node-v2");
+        if (imgui.internal.ImGui.dockBuilderGetNode(incompleteDockspaceId) != null) {
+            imgui.internal.ImGui.dockBuilderRemoveNode(incompleteDockspaceId);
+        }
+        imgui.internal.ImGui.dockBuilderAddNode(dockspaceId);
+        imgui.internal.ImGui.dockBuilderSetNodeSize(dockspaceId, Math.max(1.0f, width), Math.max(1.0f, height));
+
+        ImInt timelineNode = new ImInt();
+        ImInt mainNode = new ImInt();
+        imgui.internal.ImGui.dockBuilderSplitNode(dockspaceId, ImGuiDir.Down, 0.30f, timelineNode, mainNode);
+
+        ImInt libraryNode = new ImInt();
+        ImInt centerAndInspectorNode = new ImInt();
+        imgui.internal.ImGui.dockBuilderSplitNode(mainNode.get(), ImGuiDir.Left, 0.18f,
+                libraryNode, centerAndInspectorNode);
+
+        ImInt inspectorNode = new ImInt();
+        ImInt previewNode = new ImInt();
+        imgui.internal.ImGui.dockBuilderSplitNode(centerAndInspectorNode.get(), ImGuiDir.Right, 0.29f,
+                inspectorNode, previewNode);
+
+        imgui.internal.ImGui.dockBuilderDockWindow("特效库##effect-library", libraryNode.get());
+        imgui.internal.ImGui.dockBuilderDockWindow("特效参数设置##effect-inspector", inspectorNode.get());
+        imgui.internal.ImGui.dockBuilderDockWindow("特效时间轴##effect-timeline", timelineNode.get());
+        imgui.internal.ImGui.dockBuilderDockWindow("世界预览##effect-preview", previewNode.get());
+        imgui.internal.ImGui.dockBuilderFinish(dockspaceId);
+        libraryDockNodeId = libraryNode.get();
+        previewDockNodeId = previewNode.get();
+        inspectorDockNodeId = inspectorNode.get();
+        timelineDockNodeId = timelineNode.get();
+        applyDefaultDockLayout = true;
     }
 
     public void dispose() {
+        cameraDragLogged = false;
         textFields.clear();
         decimalFields.clear();
         integerFields.clear();
@@ -157,15 +314,13 @@ public final class EffectEditorImGuiView {
         ImGui.sameLine();
         if (ImGui.button("保存##effect-save")) saveAction.run();
         ImGui.sameLine();
-        if (ImGui.button(RhythmcMakerClient.isEffectEditorPlaybackActive() ? "暂停##effect-play" : "播放##effect-play")) playbackAction.run();
-        ImGui.sameLine();
         if (ImGui.button("关闭##effect-close")) closeAction.run();
         ImGui.end();
     }
 
     private void drawEmptyState(float width, float height) {
-        ImGui.setNextWindowPos(24.0f, 66.0f);
-        ImGui.setNextWindowSize(width - 48.0f, height - 90.0f);
+        ImGui.setNextWindowPos(24.0f, 66.0f, ImGuiCond.FirstUseEver);
+        ImGui.setNextWindowSize(width - 48.0f, height - 90.0f, ImGuiCond.FirstUseEver);
         if (ImGui.begin("特效编辑器##empty", PANEL_FLAGS)) {
             ImGui.text("请先从谱面列表加载一个谱面，再打开特效编辑器。");
             if (ImGui.button("返回##empty-close")) closeAction.run();
@@ -174,8 +329,9 @@ public final class EffectEditorImGuiView {
     }
 
     private void drawLibrary(float x, float y, float width, float height) {
-        ImGui.setNextWindowPos(x, y);
-        ImGui.setNextWindowSize(width, height);
+        ImGui.setNextWindowPos(x, y, ImGuiCond.FirstUseEver);
+        ImGui.setNextWindowSize(width, height, ImGuiCond.FirstUseEver);
+        if (applyDefaultDockLayout) ImGui.setNextWindowDockID(libraryDockNodeId, ImGuiCond.Always);
         if (!ImGui.begin("特效库##effect-library", PANEL_FLAGS)) {
             ImGui.end();
             return;
@@ -192,12 +348,22 @@ public final class EffectEditorImGuiView {
     }
 
     private void drawPreview(float x, float y, float width, float height, MinecraftClient client) {
-        ImGui.setNextWindowPos(x, y);
-        ImGui.setNextWindowSize(width, height);
-        if (!ImGui.begin("世界预览##effect-preview", PANEL_FLAGS | ImGuiWindowFlags.NoBackground)) {
+        ImGui.setNextWindowPos(x, y, ImGuiCond.FirstUseEver);
+        ImGui.setNextWindowSize(width, height, ImGuiCond.FirstUseEver);
+        ImGui.setNextWindowBgAlpha(0.5f);
+        if (applyDefaultDockLayout) ImGui.setNextWindowDockID(previewDockNodeId, ImGuiCond.Always);
+        if (!ImGui.begin("世界预览##effect-preview", PANEL_FLAGS)) {
             ImGui.end();
             return;
         }
+        previewWindowX = ImGui.getWindowPosX();
+        previewWindowY = ImGui.getWindowPosY();
+        previewWindowWidth = ImGui.getWindowSizeX();
+        previewWindowHeight = ImGui.getWindowSizeY();
+        previewContentX = previewWindowX + ImGui.getWindowContentRegionMinX();
+        previewContentY = previewWindowY + ImGui.getWindowContentRegionMinY();
+        previewContentWidth = Math.max(0.0f, ImGui.getWindowContentRegionMaxX() - ImGui.getWindowContentRegionMinX());
+        previewContentHeight = Math.max(0.0f, ImGui.getWindowContentRegionMaxY() - ImGui.getWindowContentRegionMinY());
         ImGui.textColored(0xFF66CCFF, "世界预览");
         if (client.player == null) {
             ImGui.textDisabled("当前没有客户端玩家。");
@@ -225,8 +391,9 @@ public final class EffectEditorImGuiView {
     }
 
     private void drawInspector(float x, float y, float width, float height) {
-        ImGui.setNextWindowPos(x, y);
-        ImGui.setNextWindowSize(width, height);
+        ImGui.setNextWindowPos(x, y, ImGuiCond.FirstUseEver);
+        ImGui.setNextWindowSize(width, height, ImGuiCond.FirstUseEver);
+        if (applyDefaultDockLayout) ImGui.setNextWindowDockID(inspectorDockNodeId, ImGuiCond.Always);
         if (!ImGui.begin("特效参数设置##effect-inspector", PANEL_FLAGS)) {
             ImGui.end();
             return;
@@ -323,36 +490,484 @@ public final class EffectEditorImGuiView {
     }
 
     private void drawTimeline(float x, float y, float width, float height) {
-        ImGui.setNextWindowPos(x, y);
-        ImGui.setNextWindowSize(width, height);
+        ImGui.setNextWindowPos(x, y, ImGuiCond.FirstUseEver);
+        ImGui.setNextWindowSize(width, height, ImGuiCond.FirstUseEver);
+        if (applyDefaultDockLayout) ImGui.setNextWindowDockID(timelineDockNodeId, ImGuiCond.Always);
         if (!ImGui.begin("特效时间轴##effect-timeline", PANEL_FLAGS)) {
             ImGui.end();
             return;
         }
-        ImGui.textColored(0xFF66CCFF, "特效时间轴");
-        float maxBeat = (float) Math.max(1.0, chart.totalBeats);
-        if (RhythmcMakerClient.isEffectEditorPlaybackActive()) playhead[0] = (float) RhythmcMakerClient.effectEditorCurrentBeat();
-        if (ImGui.sliderFloat("播放头##playhead", playhead, 0.0f, maxBeat, "Beat %.2f")) {
-            playhead[0] = Math.max(0.0f, Math.min(maxBeat, playhead[0]));
-            seekAction.accept((double) playhead[0]);
-            status = "播放头已跳转到 " + formatChunkPosition(playhead[0]);
+        drawTimelineControls();
+        double maxBeat = timelineMaxBeat();
+        if (RhythmcMakerClient.isEffectEditorPreviewPrepared()) {
+            playhead[0] = (float) Math.max(0.0, Math.min(maxBeat, RhythmcMakerClient.effectEditorCurrentBeat()));
         }
-        if (ImGui.inputText("Chunk/Sub-beat##position", timelinePositionField)) {
+        float positionRowWidth = ImGui.getContentRegionAvailX();
+        float positionWidth = Math.max(56.0f, Math.min(170.0f, positionRowWidth * 0.24f));
+        ImGui.setNextItemWidth(positionWidth);
+        String positionLabel = positionRowWidth < 420.0f ? "Chunk##position" : "Chunk/Sub-beat##position";
+        if (ImGui.inputText(positionLabel, timelinePositionField)) {
             Double targetBeat = parseChunkPosition(timelinePositionField.get());
             if (targetBeat != null) {
-                playhead[0] = (float) Math.max(0.0, Math.min(maxBeat, targetBeat));
-                seekAction.accept((double) playhead[0]);
-                status = "播放头已跳转到 " + formatChunkPosition(playhead[0]);
+                seekTimelineBeat(targetBeat, maxBeat);
             }
         }
         if (!ImGui.isItemActive()) timelinePositionField.set(formatChunkPosition(playhead[0]));
-        ImGui.text(String.format(Locale.ROOT, "Beat 0     16     32     48     64     %.2f", chart.totalBeats));
-        for (int index = 0; index < workingEffects.size(); index++) {
-            JsonObject event = workingEffects.get(index);
-            String label = String.format(Locale.ROOT, "%s  ·  Beat %.3f", displayText(eventType(event)), eventBeat(event));
-            if (ImGui.selectable(label + "##event-" + index, index == selectedIndex, ImGuiSelectableFlags.SpanAllColumns)) select(index);
-        }
+        ImGui.sameLine();
+        String positionText = ImGui.getContentRegionAvailX() >= 240.0f
+                ? String.format(Locale.ROOT, "Beat %.3f  ·  %s", playhead[0], formatChunkPosition(playhead[0]))
+                : String.format(Locale.ROOT, "Beat %.3f", playhead[0]);
+        ImGui.text(positionText);
+
+        float canvasWidth = Math.max(1.0f, ImGui.getContentRegionAvailX());
+        float canvasHeight = Math.max(1.0f, ImGui.getContentRegionAvailY());
+        float canvasLeft = ImGui.getCursorScreenPosX();
+        float canvasTop = ImGui.getCursorScreenPosY();
+        ImGui.invisibleButton("##timeline-canvas", canvasWidth, canvasHeight);
+        drawTimelineCanvas(canvasLeft, canvasTop, canvasWidth, canvasHeight, maxBeat);
         ImGui.end();
+    }
+
+    private void drawTimelineControls() {
+        float contentWidth = ImGui.getContentRegionAvailX();
+        ImGui.textColored(0xFF66CCFF, "特效时间轴");
+        ImGui.sameLine();
+        ImGui.pushStyleVar(ImGuiStyleVar.FramePadding, 3.0f, 2.0f);
+        drawTimelineControl("timeline-play-pause", "", TimelineControl.PLAY_PAUSE);
+        ImGui.sameLine();
+        drawTimelineControl("timeline-return-to-start", "回到开头", TimelineControl.RETURN_TO_START);
+        ImGui.sameLine();
+        if (contentWidth >= 540.0f) {
+            drawTimelineControl("timeline-previous", "前移（←）", TimelineControl.PREVIOUS);
+            ImGui.sameLine();
+            drawTimelineControl("timeline-next", "后移（→）", TimelineControl.NEXT);
+        } else {
+            ImGui.newLine();
+            ImGui.indent();
+            drawTimelineControl("timeline-previous", "前移（←）", TimelineControl.PREVIOUS);
+            ImGui.sameLine();
+            drawTimelineControl("timeline-next", "后移（→）", TimelineControl.NEXT);
+            ImGui.unindent();
+        }
+        ImGui.popStyleVar();
+    }
+
+    private void drawTimelineControl(String id, String tooltip, TimelineControl control) {
+        float size = 24.0f;
+        if (ImGui.invisibleButton("##" + id, size, size)) activateTimelineControl(control);
+        float left = ImGui.getItemRectMinX();
+        float top = ImGui.getItemRectMinY();
+        float right = ImGui.getItemRectMaxX();
+        float bottom = ImGui.getItemRectMaxY();
+        boolean hovered = ImGui.isItemHovered();
+        boolean active = ImGui.isItemActive();
+        ImDrawList drawList = ImGui.getWindowDrawList();
+        if (hovered || active) {
+            drawList.addRectFilled(left, top, right, bottom, active ? 0xFF36475B : 0xFF263443, 3.0f);
+        }
+        drawTimelineControlIcon(drawList, control, (left + right) * 0.5f, (top + bottom) * 0.5f,
+                hovered ? 0xFF8EDCFF : 0xFFD5E2EF);
+        if (hovered) {
+            String currentTooltip = control == TimelineControl.PLAY_PAUSE
+                    ? RhythmcMakerClient.isEffectEditorPlaybackRequested() ? "暂停" : "播放"
+                    : tooltip;
+            ImGui.setTooltip(currentTooltip);
+        }
+    }
+
+    private void activateTimelineControl(TimelineControl control) {
+        switch (control) {
+            case PLAY_PAUSE -> togglePlaybackAction.run();
+            case RETURN_TO_START -> {
+                replayAction.run();
+                playhead[0] = 0.0f;
+                timelinePositionField.set(formatChunkPosition(0.0));
+                timelineLastSeekBeat = 0.0;
+                status = "已回到开头";
+            }
+            case PREVIOUS -> moveTimelinePlayhead(-1, false);
+            case NEXT -> moveTimelinePlayhead(1, false);
+        }
+    }
+
+    private static void drawTimelineControlIcon(ImDrawList drawList, TimelineControl control,
+                                                float centerX, float centerY, int colour) {
+        switch (control) {
+            case PLAY_PAUSE -> {
+                if (RhythmcMakerClient.isEffectEditorPlaybackRequested()) {
+                    drawList.addRectFilled(centerX - 5.0f, centerY - 6.0f, centerX - 1.0f, centerY + 6.0f, colour);
+                    drawList.addRectFilled(centerX + 1.0f, centerY - 6.0f, centerX + 5.0f, centerY + 6.0f, colour);
+                } else {
+                    drawList.addTriangleFilled(centerX - 4.0f, centerY - 6.0f,
+                            centerX - 4.0f, centerY + 6.0f, centerX + 6.0f, centerY, colour);
+                }
+            }
+            case RETURN_TO_START -> {
+                drawList.addRectFilled(centerX - 5.0f, centerY - 5.0f,
+                        centerX + 5.0f, centerY + 5.0f, colour);
+            }
+            case PREVIOUS -> {
+                drawList.addRectFilled(centerX + 4.0f, centerY - 6.0f, centerX + 6.0f, centerY + 6.0f, colour);
+                drawList.addTriangleFilled(centerX + 2.0f, centerY - 6.0f,
+                        centerX + 2.0f, centerY + 6.0f, centerX - 6.0f, centerY, colour);
+            }
+            case NEXT -> {
+                drawList.addRectFilled(centerX - 6.0f, centerY - 6.0f, centerX - 4.0f, centerY + 6.0f, colour);
+                drawList.addTriangleFilled(centerX - 2.0f, centerY - 6.0f,
+                        centerX - 2.0f, centerY + 6.0f, centerX + 6.0f, centerY, colour);
+            }
+        }
+    }
+
+    public boolean handlePlaybackKey(KeyInput input) {
+        if (!ImGuiRuntime.isInitialized()) return false;
+        ImGuiIO io = ImGui.getIO();
+        if (io.getWantCaptureKeyboard() || ImGui.isAnyItemActive()) return false;
+        if (input.key() == GLFW.GLFW_KEY_SPACE) {
+            if (!spaceKeyDown) {
+                spaceKeyDown = true;
+                togglePlaybackAction.run();
+            }
+            return true;
+        }
+        if (input.key() == GLFW.GLFW_KEY_LEFT || input.key() == GLFW.GLFW_KEY_RIGHT) {
+            boolean fast = (input.modifiers() & GLFW.GLFW_MOD_SHIFT) != 0;
+            moveTimelinePlayhead(input.key() == GLFW.GLFW_KEY_LEFT ? -1 : 1, fast);
+            return true;
+        }
+        return false;
+    }
+
+    public void handlePlaybackKeyRelease(KeyInput input) {
+        if (input.key() == GLFW.GLFW_KEY_SPACE) spaceKeyDown = false;
+    }
+
+    private void moveTimelinePlayhead(int direction, boolean fast) {
+        double currentBeat = RhythmcMakerClient.isEffectEditorPlaybackRequested()
+                ? RhythmcMakerClient.effectEditorCurrentBeat() : playhead[0];
+        double normalStep = 1.0;
+        double divisionsPerChunk = chart == null ? normalStep : Math.max(1.0, Math.min(32.0, chart.divisionsPerChunk));
+        double chunkStep = Math.max(normalStep, divisionsPerChunk);
+        seekTimelineBeat(currentBeat + direction * (fast ? chunkStep : normalStep), timelineMaxBeat());
+    }
+
+    /** Returns the current ImGui preview window rectangle used for mouse camera controls. */
+    public boolean isPreviewRegion(double mouseX, double mouseY) {
+        return previewWindowX >= 0.0f
+                && mouseX >= previewWindowX
+                && mouseX <= previewWindowX + previewWindowWidth
+                && mouseY >= previewWindowY
+                && mouseY <= previewWindowY + previewWindowHeight;
+    }
+
+    private void drawTimelineCanvas(float left, float top, float width, float height, double maxBeat) {
+        List<TimelineRow> rows = buildTimelineRows();
+        if (rows.isEmpty()) rows = List.of(new TimelineRow("事件", "暂无事件", -1, List.of(), false));
+        float trackWidth = Math.min(240.0f, Math.max(96.0f, width * 0.26f));
+        float timelineLeft = left + trackWidth;
+        float timelineRight = left + width;
+        float rulerHeight = 34.0f;
+        float footerHeight = 20.0f;
+        float rowsTop = top + rulerHeight;
+        float rowsBottom = Math.max(rowsTop + 24.0f, top + height - footerHeight);
+        float timelineWidth = Math.max(1.0f, timelineRight - timelineLeft);
+        double zoomSpan = Math.max(0.05, Math.min(1.0, timelineZoomMax - timelineZoomMin));
+        timelineZoomMin = clamp01(timelineZoomMin);
+        timelineZoomMax = Math.min(1.0, timelineZoomMin + zoomSpan);
+        timelineZoomMin = Math.max(0.0, timelineZoomMax - zoomSpan);
+        double minBeat = timelineZoomMin * maxBeat;
+        double visibleBeatSpan = Math.max(1.0e-6, (timelineZoomMax - timelineZoomMin) * maxBeat);
+        double maxVisibleBeat = minBeat + visibleBeatSpan;
+        ImDrawList drawList = ImGui.getWindowDrawList();
+        drawList.pushClipRect(left, top, timelineRight, top + height, true);
+        drawList.addRectFilled(left, top, timelineRight, top + height, 0xF20D1117);
+        drawList.addRectFilled(left, top, timelineRight, rowsTop, 0xFF171D26);
+        drawList.addRectFilled(left, rowsTop, timelineLeft, rowsBottom, 0xFF12171E);
+        drawList.addLine(timelineLeft, top, timelineLeft, rowsBottom, 0xFF4D5968, 1.0f);
+        drawList.addLine(left, rowsTop, timelineRight, rowsTop, 0xFF4D5968, 1.0f);
+
+        double majorStep = timelineMajorStep(visibleBeatSpan, timelineWidth);
+        double minorStep = Math.max(majorStep / 4.0, 0.0001);
+        double firstMinor = Math.floor(minBeat / minorStep) * minorStep;
+        for (double beat = firstMinor; beat <= maxVisibleBeat + minorStep * 0.5; beat += minorStep) {
+            if (beat < -0.0001) continue;
+            float markerX = timelineBeatToX(beat, minBeat, maxVisibleBeat, timelineLeft, timelineWidth);
+            boolean major = Math.abs(beat / majorStep - Math.rint(beat / majorStep)) < 1.0e-5;
+            int colour = major ? 0xFF536071 : 0xFF2B333F;
+            drawList.addLine(markerX, top, markerX, rowsBottom, colour, major ? 1.0f : 0.5f);
+            if (major && markerX >= timelineLeft - 40.0f && markerX <= timelineRight + 4.0f) {
+                String label = String.format(Locale.ROOT, "B %.2f  %.2fs", beat, ChartTiming.beatToSeconds(chart, beat));
+                drawList.addText(markerX + 4.0f, top + 7.0f, 0xFFD5DCE5, label);
+            }
+        }
+
+        List<TimelineHit> hits = new ArrayList<>();
+        float rowY = rowsTop;
+        for (TimelineRow row : rows) {
+            if (row.groupHeader()) {
+                drawList.addRectFilled(left, rowY, timelineRight, rowY + 21.0f, 0xFF202A36);
+                drawList.addText(left + 8.0f, rowY + 4.0f, 0xFF9FD7FF, displayText(row.groupLabel()));
+                drawList.addLine(left, rowY + 20.0f, timelineRight, rowY + 20.0f, 0xFF3A4654, 1.0f);
+                rowY += 21.0f;
+                continue;
+            }
+            float rowBottom = rowY + 24.0f;
+            drawList.addLine(left, rowBottom, timelineRight, rowBottom, 0xFF27303B, 1.0f);
+            int labelColour = row.eventIndex() == selectedIndex ? 0xFFFFFFFF : 0xFFB5BFCC;
+            drawList.addText(left + 13.0f, rowY + 5.0f, labelColour, displayText(row.label()));
+            float markerY = rowY + 12.0f;
+            for (TimelineMarker marker : row.markers()) {
+                float markerX = timelineBeatToX(marker.beat(), minBeat, maxVisibleBeat, timelineLeft, timelineWidth);
+                if (markerX < timelineLeft - 9.0f || markerX > timelineRight + 9.0f) continue;
+                boolean selected = marker.eventIndex() == selectedIndex;
+                int colour = marker.kind() == TimelineMarkerKind.EVENT ? 0xFF4DB7FF : 0xFFE9B96E;
+                if (selected && marker.kind() == TimelineMarkerKind.EVENT) {
+                    drawList.addCircleFilled(markerX, markerY, 8.0f, 0xFFFFFFFF, 16);
+                }
+                if (marker.kind() == TimelineMarkerKind.EVENT) {
+                    drawList.addTriangleFilled(markerX, markerY - 7.0f, markerX + 7.0f, markerY,
+                            markerX, markerY + 7.0f, colour);
+                    drawList.addTriangleFilled(markerX, markerY - 7.0f, markerX - 7.0f, markerY,
+                            markerX, markerY + 7.0f, colour);
+                } else {
+                    drawList.addCircleFilled(markerX, markerY, 4.5f, colour, 12);
+                }
+                hits.add(new TimelineHit(markerX, markerY, marker));
+            }
+            rowY = rowBottom;
+        }
+
+        float playheadX = timelineBeatToX(playhead[0], minBeat, maxVisibleBeat, timelineLeft, timelineWidth);
+        playheadX = Math.max(timelineLeft, Math.min(timelineRight, playheadX));
+        drawList.addLine(playheadX, top, playheadX, rowsBottom, 0xFFFFFFFF, 1.5f);
+        drawList.addTriangleFilled(playheadX - 6.0f, top + 1.0f, playheadX + 6.0f, top + 1.0f,
+                playheadX, top + 11.0f, 0xFFFFFFFF);
+
+        float footerTop = top + height - footerHeight;
+        drawList.addRectFilled(left, footerTop, timelineRight, top + height, 0xFF151B23);
+        drawList.addRectFilled(timelineLeft, footerTop + 6.0f, timelineRight, footerTop + 14.0f, 0xFF303A47);
+        float rangeLeft = (float) (timelineLeft + timelineWidth * timelineZoomMin);
+        float rangeRight = (float) (timelineLeft + timelineWidth * timelineZoomMax);
+        drawList.addRectFilled(rangeLeft, footerTop + 4.0f, rangeRight, footerTop + 16.0f, 0xFF61A7D8);
+        drawList.addText(left + 8.0f, footerTop + 4.0f, 0xFF9CA9B8,
+                String.format(Locale.ROOT, "%.0f%%", (1.0 / Math.max(0.05, zoomSpan)) * 100.0));
+        drawList.popClipRect();
+
+        handleTimelineInteraction(left, top, width, height, timelineLeft, timelineWidth, footerTop,
+                maxBeat, minBeat, maxVisibleBeat, hits);
+    }
+
+    private void handleTimelineInteraction(float left, float top, float width, float height, float timelineLeft,
+                                            float timelineWidth, float footerTop, double maxBeat,
+                                            double minBeat, double maxVisibleBeat, List<TimelineHit> hits) {
+        float mouseX = ImGui.getMousePosX();
+        float mouseY = ImGui.getMousePosY();
+        float right = left + width;
+        boolean hovered = ImGui.isMouseHoveringRect(left, top, right, top + height, true);
+        boolean contentHovered = hovered && mouseX >= timelineLeft && mouseY >= top && mouseY < footerTop;
+        ImGuiIO io = ImGui.getIO();
+        if (contentHovered && Math.abs(io.getMouseWheel()) > 0.001f) {
+            zoomTimelineAt(mouseX, timelineLeft, timelineWidth, io.getMouseWheel());
+        }
+        if (ImGui.isMouseClicked(0) && hovered) {
+            if (mouseY >= footerTop) {
+                timelineDraggingRange = true;
+                moveTimelineRange(mouseX, timelineLeft, timelineWidth);
+            } else if (contentHovered) {
+                TimelineHit hit = findTimelineHit(mouseX, mouseY, hits);
+                if (hit != null) {
+                    TimelineMarker marker = hit.marker();
+                    select(marker.eventIndex());
+                    seekTimelineBeat(marker.beat(), maxBeat);
+                    if (registry.find(eventType(workingEffects.get(marker.eventIndex()))) != null) {
+                        timelineDraggedEvent = marker.eventIndex();
+                        timelineDraggedChannel = marker.channelIndex();
+                        timelineDraggedKeyframe = marker.keyframeIndex();
+                        timelineDragBeatOffset = marker.beat() - timelineXToBeat(mouseX, timelineLeft, timelineWidth,
+                                minBeat, maxVisibleBeat);
+                    }
+                } else {
+                    timelineDraggingPlayhead = true;
+                    seekTimelineBeat(timelineXToBeat(mouseX, timelineLeft, timelineWidth, minBeat, maxVisibleBeat), maxBeat);
+                }
+            }
+        }
+        if (timelineDraggingRange && ImGui.isMouseDown(0)) moveTimelineRange(mouseX, timelineLeft, timelineWidth);
+        if (timelineDraggingPlayhead && ImGui.isMouseDown(0)) {
+            seekTimelineBeat(timelineXToBeat(mouseX, timelineLeft, timelineWidth, minBeat, maxVisibleBeat), maxBeat);
+        }
+        if (timelineDraggedEvent >= 0 && ImGui.isMouseDown(0)) {
+            double target = timelineXToBeat(mouseX, timelineLeft, timelineWidth, minBeat, maxVisibleBeat) + timelineDragBeatOffset;
+            target = Math.max(0.0, Math.min(maxBeat, target));
+            TimelineMarker marker = new TimelineMarker(timelineDraggedEvent, timelineDraggedChannel,
+                    timelineDraggedKeyframe, target,
+                    timelineDraggedChannel < 0 ? TimelineMarkerKind.EVENT : TimelineMarkerKind.KEYFRAME);
+            updateTimelineMarkerBeat(marker, target);
+            seekTimelineBeat(target, maxBeat);
+        }
+        if (ImGui.isMouseReleased(0)) {
+            timelineDraggingRange = false;
+            timelineDraggingPlayhead = false;
+            timelineDraggedEvent = -1;
+            timelineDraggedChannel = -1;
+            timelineDraggedKeyframe = -1;
+            timelineLastSeekBeat = Double.NaN;
+        }
+    }
+
+    private List<TimelineRow> buildTimelineRows() {
+        List<TimelineRow> rows = new ArrayList<>();
+        List<String> groups = new ArrayList<>();
+        for (JsonObject event : workingEffects) {
+            String type = eventType(event);
+            if (!groups.contains(type)) groups.add(type);
+        }
+        for (String group : groups) {
+            rows.add(new TimelineRow(group, group, -1, List.of(), true));
+            for (int eventIndex = 0; eventIndex < workingEffects.size(); eventIndex++) {
+                JsonObject event = workingEffects.get(eventIndex);
+                if (!group.equals(eventType(event))) continue;
+                String label = String.format(Locale.ROOT, "  #%d  Beat %.3f", eventIndex + 1, eventBeat(event));
+                rows.add(new TimelineRow(group, label, eventIndex, timelineMarkers(eventIndex, event), false));
+            }
+        }
+        return rows;
+    }
+
+    private List<TimelineMarker> timelineMarkers(int eventIndex, JsonObject event) {
+        List<TimelineMarker> markers = new ArrayList<>();
+        markers.add(new TimelineMarker(eventIndex, -1, -1, eventBeat(event), TimelineMarkerKind.EVENT));
+        if (!event.has("animation") || !event.get("animation").isJsonObject()) return markers;
+        JsonObject animation = event.getAsJsonObject("animation");
+        if (!animation.has("channels") || !animation.get("channels").isJsonArray()) return markers;
+        JsonArray channels = animation.getAsJsonArray("channels");
+        for (int channelIndex = 0; channelIndex < channels.size(); channelIndex++) {
+            JsonElement channelElement = channels.get(channelIndex);
+            if (!channelElement.isJsonObject()) continue;
+            JsonObject channel = channelElement.getAsJsonObject();
+            if (!channel.has("keyframes") || !channel.get("keyframes").isJsonArray()) continue;
+            JsonArray keyframes = channel.getAsJsonArray("keyframes");
+            for (int keyframeIndex = 0; keyframeIndex < keyframes.size(); keyframeIndex++) {
+                JsonElement keyframeElement = keyframes.get(keyframeIndex);
+                if (!keyframeElement.isJsonObject()) continue;
+                JsonObject keyframe = keyframeElement.getAsJsonObject();
+                double beat = readJsonDouble(keyframe, "beat", eventBeat(event));
+                markers.add(new TimelineMarker(eventIndex, channelIndex, keyframeIndex, Math.max(0.0, beat),
+                        TimelineMarkerKind.KEYFRAME));
+            }
+        }
+        return markers;
+    }
+
+    private double timelineMaxBeat() {
+        double maxBeat = Math.max(1.0, chart == null ? 1.0 : chart.totalBeats);
+        for (int eventIndex = 0; eventIndex < workingEffects.size(); eventIndex++) {
+            JsonObject event = workingEffects.get(eventIndex);
+            maxBeat = Math.max(maxBeat, eventBeat(event));
+            for (TimelineMarker marker : timelineMarkers(eventIndex, event)) maxBeat = Math.max(maxBeat, marker.beat());
+        }
+        return maxBeat;
+    }
+
+    private void updateTimelineMarkerBeat(TimelineMarker marker, double beat) {
+        if (marker.eventIndex() < 0 || marker.eventIndex() >= workingEffects.size()) return;
+        JsonObject event = workingEffects.get(marker.eventIndex());
+        if (marker.kind() == TimelineMarkerKind.EVENT) {
+            event.addProperty("beat", beat);
+            if (marker.eventIndex() == selectedIndex) beatField.set(beat);
+        } else if (event.has("animation") && event.get("animation").isJsonObject()) {
+            JsonObject animation = event.getAsJsonObject("animation");
+            if (!animation.has("channels") || !animation.get("channels").isJsonArray()) return;
+            JsonArray channels = animation.getAsJsonArray("channels");
+            if (marker.channelIndex() < 0 || marker.channelIndex() >= channels.size()) return;
+            JsonElement channelElement = channels.get(marker.channelIndex());
+            if (!channelElement.isJsonObject()) return;
+            JsonObject channel = channelElement.getAsJsonObject();
+            if (!channel.has("keyframes") || !channel.get("keyframes").isJsonArray()) return;
+            JsonArray keyframes = channel.getAsJsonArray("keyframes");
+            if (marker.keyframeIndex() < 0 || marker.keyframeIndex() >= keyframes.size()) return;
+            JsonElement keyframeElement = keyframes.get(marker.keyframeIndex());
+            if (!keyframeElement.isJsonObject()) return;
+            keyframeElement.getAsJsonObject().addProperty("beat", beat);
+        }
+        dirty = true;
+    }
+
+    private void seekTimelineBeat(double beat, double maxBeat) {
+        double target = Math.max(0.0, Math.min(maxBeat, beat));
+        playhead[0] = (float) target;
+        if (Double.isNaN(timelineLastSeekBeat) || Math.abs(timelineLastSeekBeat - target) > 0.0001) {
+            seekAction.accept(target);
+            timelineLastSeekBeat = target;
+        }
+        status = "播放头已跳转到 " + formatChunkPosition(target);
+    }
+
+    private void zoomTimelineAt(float mouseX, float timelineLeft, float timelineWidth, float wheel) {
+        double focus = clamp01((mouseX - timelineLeft) / Math.max(1.0f, timelineWidth));
+        double currentSpan = Math.max(0.05, timelineZoomMax - timelineZoomMin);
+        double nextSpan = Math.max(0.05, Math.min(1.0, currentSpan * (wheel > 0.0f ? 0.8 : 1.25)));
+        double focusBeat = timelineZoomMin + focus * currentSpan;
+        timelineZoomMin = Math.max(0.0, Math.min(1.0 - nextSpan, focusBeat - focus * nextSpan));
+        timelineZoomMax = timelineZoomMin + nextSpan;
+    }
+
+    private void moveTimelineRange(float mouseX, float timelineLeft, float timelineWidth) {
+        double centre = clamp01((mouseX - timelineLeft) / Math.max(1.0f, timelineWidth));
+        double span = Math.max(0.05, timelineZoomMax - timelineZoomMin);
+        timelineZoomMin = Math.max(0.0, Math.min(1.0 - span, centre - span * 0.5));
+        timelineZoomMax = timelineZoomMin + span;
+    }
+
+    private static TimelineHit findTimelineHit(float mouseX, float mouseY, List<TimelineHit> hits) {
+        TimelineHit closest = null;
+        float closestDistance = 11.0f;
+        for (TimelineHit hit : hits) {
+            float dx = hit.x() - mouseX;
+            float dy = hit.y() - mouseY;
+            float distance = (float) Math.sqrt(dx * dx + dy * dy);
+            if (distance < closestDistance) {
+                closest = hit;
+                closestDistance = distance;
+            }
+        }
+        return closest;
+    }
+
+    private static float timelineBeatToX(double beat, double minBeat, double maxBeat, float left, float width) {
+        if (maxBeat <= minBeat) return left;
+        double amount = (beat - minBeat) / (maxBeat - minBeat);
+        return left + (float) (Math.max(0.0, Math.min(1.0, amount)) * width);
+    }
+
+    private static double timelineXToBeat(float x, float left, float width, double minBeat, double maxBeat) {
+        double amount = clamp01((x - left) / Math.max(1.0f, width));
+        return minBeat + amount * (maxBeat - minBeat);
+    }
+
+    private static double timelineMajorStep(double visibleSpan, float width) {
+        double target = visibleSpan / Math.max(3.0, width / 100.0);
+        double magnitude = Math.pow(10.0, Math.floor(Math.log10(Math.max(0.0001, target))));
+        double normalised = target / magnitude;
+        double step = normalised <= 1.0 ? 1.0 : normalised <= 2.0 ? 2.0 : normalised <= 5.0 ? 5.0 : 10.0;
+        return Math.max(0.25, step * magnitude);
+    }
+
+    private static double clamp01(double value) {
+        return Math.max(0.0, Math.min(1.0, value));
+    }
+
+    private static double readJsonDouble(JsonObject object, String name, double fallback) {
+        try {
+            if (!object.has(name) || !object.get(name).isJsonPrimitive()) return fallback;
+            double value = object.get(name).getAsDouble();
+            return Double.isFinite(value) ? value : fallback;
+        } catch (RuntimeException ignored) {
+            return fallback;
+        }
+    }
+
+    private record TimelineHit(float x, float y, TimelineMarker marker) {
     }
 
     private void addEffect(EffectTypeDefinition definition) {
@@ -465,7 +1080,10 @@ public final class EffectEditorImGuiView {
     }
 
     private static double eventBeat(JsonObject event) {
-        try { return event != null && event.has("beat") ? Math.max(0.0, event.get("beat").getAsDouble()) : 0.0; }
+        try {
+            double value = event != null && event.has("beat") ? event.get("beat").getAsDouble() : 0.0;
+            return Double.isFinite(value) ? Math.max(0.0, value) : 0.0;
+        }
         catch (RuntimeException ignored) { return 0.0; }
     }
 
@@ -617,6 +1235,8 @@ public final class EffectEditorImGuiView {
     private Double parseChunkPosition(String raw) {
         if (raw == null || raw.isBlank()) return null;
         String value = raw.trim().toLowerCase(Locale.ROOT).replace("chunk", "").replace(" ", "");
+        int suffix = value.indexOf('(');
+        if (suffix >= 0) value = value.substring(0, suffix);
         double divisions = Math.max(1.0, Math.min(32.0, chart == null ? 1.0 : chart.divisionsPerChunk));
         try {
             int plus = value.indexOf('+');

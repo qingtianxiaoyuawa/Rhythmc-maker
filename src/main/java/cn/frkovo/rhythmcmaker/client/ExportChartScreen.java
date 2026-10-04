@@ -76,11 +76,12 @@ final class ExportChartScreen extends RhythmcScreen {
         MinecraftClient client = MinecraftClient.getInstance();
         try {
             ClientChartAccess.setActiveChart(chart);
+            boolean exportWarnings = ClientChartAccess.hasRhythmc3ExportWarnings(chart);
             if (client.getServer() == null) throw new IOException("当前版本仅支持单人制谱器世界");
             client.getServer().execute(() -> {
                 try {
                     Path folder = ClientChartAccess.exportRhythmc3(chart);
-                    client.execute(() -> exportSucceeded(folder));
+                    client.execute(() -> exportSucceeded(folder, exportWarnings));
                 } catch (IOException | RuntimeException exception) {
                     client.execute(() -> ClientChartAccess.status("导出失败：" + exception.getMessage()));
                 }
@@ -94,7 +95,7 @@ final class ExportChartScreen extends RhythmcScreen {
         return value == Math.rint(value) ? Integer.toString((int) value) : Double.toString(value);
     }
 
-    private void exportSucceeded(Path folder) {
+    private void exportSucceeded(Path folder, boolean exportWarnings) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player == null) return;
         Text open = Text.literal("[点击打开文件夹]").setStyle(Style.EMPTY
@@ -102,6 +103,7 @@ final class ExportChartScreen extends RhythmcScreen {
             .withUnderline(true)
             .withClickEvent(new ClickEvent.OpenFile(folder.toString())));
         client.player.sendMessage(Text.literal("RhythMC 3.0 导出成功：").formatted(Formatting.GREEN).append(open), false);
+        if (exportWarnings) ClientChartAccess.statusWarning("RhythMC 3.0 导出：已忽略 Maker 本地预览属性");
     }
 
     @Override
