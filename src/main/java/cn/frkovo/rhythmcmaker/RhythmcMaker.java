@@ -163,6 +163,9 @@ public final class RhythmcMaker implements ModInitializer {
     private static final int PLAYBACK_PLATFORM_X = 200;
     private static final int PLAYBACK_PLATFORM_Y = 65;
     private static final int PLAYBACK_PLATFORM_Z = 0;
+    private static final double TEXT_DISPLAY_CENTER_X = 200.0;
+    private static final double TEXT_DISPLAY_CENTER_Y = 67.0;
+    private static final double TEXT_DISPLAY_CENTER_Z = -2.0;
     private static final int SCENE_EDIT_BASE_X = 600;
     private static final int SCENE_SIZE = 128;
     private static final int SCENE_EDIT_SPACING = 200;
@@ -2178,7 +2181,9 @@ private static void showSceneBoundary(MinecraftServer server) {
     }
     private static int effectColor(JsonObject effect) {
         com.google.gson.JsonElement raw = EffectPayload.value(effect, "color");
-        if (raw == null || !raw.isJsonPrimitive()) return 0xB77BFF;
+        if (raw == null) return 0xB77BFF;
+        if (raw.isJsonArray()) return colorArray(raw.getAsJsonArray(), 0xB77BFF, false);
+        if (!raw.isJsonPrimitive()) return 0xB77BFF;
         try {
             if (raw.getAsJsonPrimitive().isNumber()) return raw.getAsInt();
             String value = raw.getAsString().trim();
@@ -2193,11 +2198,24 @@ private static void showSceneBoundary(MinecraftServer server) {
                 case "PURPLE" -> 0x800080;
                 case "CYAN" -> 0x00FFFF;
                 case "ORANGE" -> 0xFFA500;
-                default -> Integer.decode(value);
+                default -> parseColorNumber(value, 0xB77BFF);
             };
         } catch (RuntimeException ignored) {
             return 0xB77BFF;
         }
+    }
+    private static int parseColorNumber(String value, int fallback) {
+        try { return Integer.decode(value) & 0xFFFFFF; } catch (RuntimeException ignored) { return fallback; }
+    }
+    private static int colorArray(com.google.gson.JsonArray array, int fallback, boolean withAlpha) {
+        if (array == null || array.size() < 3) return fallback;
+        try {
+            int red = Math.max(0, Math.min(255, array.get(0).getAsInt()));
+            int green = Math.max(0, Math.min(255, array.get(1).getAsInt()));
+            int blue = Math.max(0, Math.min(255, array.get(2).getAsInt()));
+            int alpha = array.size() > 3 ? Math.max(0, Math.min(255, array.get(3).getAsInt())) : 255;
+            return withAlpha ? alpha << 24 | red << 16 | green << 8 | blue : red << 16 | green << 8 | blue;
+        } catch (RuntimeException ignored) { return fallback; }
     }
     private static double[] effectVector(JsonObject effect, String key, double[] fallback) {
         return EffectPayload.vector(effect, key, fallback);
@@ -2234,8 +2252,8 @@ private static void showSceneBoundary(MinecraftServer server) {
         return effectVector(effect, key, new double[]{effectDouble(effect, "x", 0.0), effectDouble(effect, "y", 1.5), effectDouble(effect, "z", 0.0)});
     }
     private static void setTextDisplayPose(DisplayEntity.TextDisplayEntity display, double[] position, double[] rotation, double[] scale) {
-        display.setPosition(PLAYBACK_PLATFORM_X + 0.5 + position[0], PLAYBACK_PLATFORM_Y + position[1], PLAYBACK_PLATFORM_Z + 0.5 + position[2]);
-        display.setTransformation(new AffineTransformation(new Vector3f(), new Quaternionf().rotationXYZ((float) rotation[0], (float) rotation[1], (float) rotation[2]), new Vector3f((float) scale[0], (float) scale[1], (float) scale[2]), new Quaternionf()));
+        display.setPosition(TEXT_DISPLAY_CENTER_X + position[0], TEXT_DISPLAY_CENTER_Y + position[1], TEXT_DISPLAY_CENTER_Z + position[2]);
+        display.setTransformation(new AffineTransformation(new Vector3f(), new Quaternionf().rotationXYZ((float) Math.toRadians(rotation[0]), (float) Math.toRadians(rotation[1]), (float) Math.toRadians(rotation[2])), new Vector3f((float) scale[0], (float) scale[1], (float) scale[2]), new Quaternionf()));
     }
     private static void setTextDisplayTransform(DisplayEntity.TextDisplayEntity display, double[] position, double[] rotation, double[] scale) {
         setTextDisplayPose(display, position, rotation, scale);
@@ -2252,6 +2270,7 @@ private static void showSceneBoundary(MinecraftServer server) {
     }
     private static int textDisplayBackground(JsonObject effect) {
         JsonElement background = effectValue(effect, "background");
+        if (background != null && background.isJsonArray()) return colorArray(background.getAsJsonArray(), 0x40000000, true);
         if (background != null && background.isJsonPrimitive()) {
             try { return background.getAsInt(); } catch (RuntimeException ignored) { }
         }
@@ -2570,7 +2589,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 if (effectInt(effect, "durationTicks", Integer.MIN_VALUE) != Integer.MIN_VALUE) {
                     duration = Math.max(1, effectInt(effect, "durationTicks", 100));
                 } else {
-                    long durationMillis = Math.max(50L, (long) effectDouble(effect, "duration", 5000.0));
+                    long durationMillis = Math.max(50L, (long) effectDouble(effect, "duration", 31_536_000_000.0));
                     duration = (int) Math.min(Integer.MAX_VALUE, Math.max(1L, (durationMillis + 49L) / 50L));
                 }
                 player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(entry, duration, amplifier,
@@ -2783,6 +2802,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private DisplayEntity.TextDisplayEntity createTextDisplay(String id) {
             DisplayEntity.TextDisplayEntity display = new DisplayEntity.TextDisplayEntity(EntityType.TEXT_DISPLAY, world);
             display.addCommandTag("rhythmc_effect:" + chart.id);
+            display.setPosition(TEXT_DISPLAY_CENTER_X, TEXT_DISPLAY_CENTER_Y, TEXT_DISPLAY_CENTER_Z);
             textDisplays.put(id, display);
             world.spawnEntity(display);
             return display;
@@ -2802,6 +2822,9 @@ private static void showSceneBoundary(MinecraftServer server) {
                     double[] rotation = effectVector(effect, "rotation", new double[]{0.0, 0.0, 0.0});
                     double[] scale = effectVector(effect, "scale", new double[]{1.0, 1.0, 1.0});
                     setTextDisplayTransform(display, position, rotation, scale);
+                    long durationMillis = Math.max(0L, (long) effectDouble(effect, "duration", 0.0));
+                    int interpolationTicks = (int) Math.min(59L, Math.max(0L, (durationMillis + 49L) / 50L));
+                    display.setInterpolationDuration(interpolationTicks);
                     textDisplayAnchors.put(id, position.clone());
                 }
                 default -> LOGGER.warn("Unknown RhythMC text display transformation '{}'", transformation);

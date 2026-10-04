@@ -43,7 +43,7 @@ public final class TrackPlayback {
         }
 
         public double distanceAt(double beat) {
-            if (speed.isEmpty()) return beat;
+            if (speed.isEmpty()) return 0.0;
             int index = upperBound(speed, beat) - 1;
             if (index < 0) return 0.0;
             ChartManifest.NumEvent event = speed.get(index);
