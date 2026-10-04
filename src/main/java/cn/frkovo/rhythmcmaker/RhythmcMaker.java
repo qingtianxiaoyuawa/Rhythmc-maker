@@ -163,9 +163,9 @@ public final class RhythmcMaker implements ModInitializer {
     private static final int PLAYBACK_PLATFORM_X = 200;
     private static final int PLAYBACK_PLATFORM_Y = 65;
     private static final int PLAYBACK_PLATFORM_Z = 0;
-    private static final double TEXT_DISPLAY_CENTER_X = 200.0;
-    private static final double TEXT_DISPLAY_CENTER_Y = 67.0;
-    private static final double TEXT_DISPLAY_CENTER_Z = -2.0;
+    private static final double TEXT_DISPLAY_CENTER_X = 200.5;
+    private static final double TEXT_DISPLAY_CENTER_Y = 66.0;
+    private static final double TEXT_DISPLAY_CENTER_Z = -1.0;
     private static final int SCENE_EDIT_BASE_X = 600;
     private static final int SCENE_SIZE = 128;
     private static final int SCENE_EDIT_SPACING = 200;
@@ -2803,6 +2803,12 @@ private static void showSceneBoundary(MinecraftServer server) {
             DisplayEntity.TextDisplayEntity display = new DisplayEntity.TextDisplayEntity(EntityType.TEXT_DISPLAY, world);
             display.addCommandTag("rhythmc_effect:" + chart.id);
             display.setPosition(TEXT_DISPLAY_CENTER_X, TEXT_DISPLAY_CENTER_Y, TEXT_DISPLAY_CENTER_Z);
+            display.setTransformation(new AffineTransformation(new Vector3f(), new Quaternionf(), new Vector3f(1.0f, 1.0f, 1.0f), new Quaternionf()));
+            display.setDisplayWidth(0.1f);
+            display.setDisplayHeight(0.1f);
+            display.setTextOpacity((byte) 0);
+            display.setBillboardMode(DisplayEntity.BillboardMode.FIXED);
+            display.setInterpolationDuration(0);
             textDisplays.put(id, display);
             world.spawnEntity(display);
             return display;
