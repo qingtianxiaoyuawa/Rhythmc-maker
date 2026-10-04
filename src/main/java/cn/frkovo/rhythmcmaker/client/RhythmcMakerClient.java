@@ -217,7 +217,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         int startChunk = activeChart == null ? selectedPlaybackChunk : Math.max(1, Math.min(Math.max(1, activeChart.chunkCount), selectedPlaybackChunk));
         selectedPlaybackChunk = startChunk;
         playbackStartChunk = startChunk;
-        playbackStartBeat = activeChart == null ? 0.0 : Math.max(0.0, (startChunk - 1.0) * Math.max(1.0, Math.min(32.0, activeChart.divisionsPerChunk)));
+        playbackStartBeat = activeChart == null ? 0.0 : PlaybackCoordinates.beatAtChunkStart(startChunk);
         playbackStartSeconds = activeChart == null ? 0.0 : PlaybackCoordinates.songTimeAtBeat(activeChart, ChartTiming.prepare(activeChart), playbackStartBeat);
         audioStartedAtNanos = 0;
         playbackTimingProfile = null;
@@ -578,9 +578,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     }
 
     private static void startAudio(int startChunk) {
-        ChartManifest chart = ClientChartAccess.resolveActiveChart();
-        double divisionsPerChunk = chart == null ? 1.0 : Math.max(1.0, Math.min(32.0, chart.divisionsPerChunk));
-        startAudioAtBeat(Math.max(0.0, (startChunk - 1.0) * divisionsPerChunk));
+        startAudioAtBeat(PlaybackCoordinates.beatAtChunkStart(startChunk));
     }
 
     private static void startAudioAtBeat(double startBeat) {

@@ -1943,7 +1943,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         ChartManifest chart = loadActiveChart(player, source.getServer());
         if (chart == null || !(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world) || chart.bpm <= 0) return 0;
         int startChunk = requestedStartChunk > 0 ? Math.max(1, Math.min(Math.max(1, chart.chunkCount), requestedStartChunk)) : selectedStartChunk(player, chart);
-        double startBeat = startChunk - 1.0;
+        double startBeat = PlaybackCoordinates.beatAtChunkStart(startChunk);
         String mode = "scroll".equalsIgnoreCase(requestedMode) ? "scroll" : "formal";
         double rate = normalizePlaybackRate(requestedRate);
         double startSeconds = PlaybackCoordinates.songTimeAtBeat(chart, ChartTiming.prepare(chart), startBeat);

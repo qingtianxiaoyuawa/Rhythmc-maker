@@ -24,6 +24,10 @@ public final class PlaybackCoordinates {
         return timing.beatToSeconds(beat) + chart.offsetMillis / 1000.0;
     }
 
+    public static double beatAtChunkStart(int chunk) {
+        return Math.max(0.0, chunk - 1.0);
+    }
+
     public static double distanceAtBeat(ChartManifest chart, TrackPlayback.Prepared track, double beat, double playerSpeed) {
         return track.distanceAt(beat) * normalizedPlayerSpeed(playerSpeed) * PLAYBACK_FLOW_MULTIPLIER;
     }
