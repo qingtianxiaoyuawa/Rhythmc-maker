@@ -2167,6 +2167,10 @@ private static void showSceneBoundary(MinecraftServer server) {
             case "RED" -> 0xFF0000; case "GREEN" -> 0x00FF00; case "BLUE" -> 0x0000FF; case "YELLOW" -> 0xFFFF00;
             case "WHITE" -> 0xFFFFFF; case "BLACK" -> 0x000000; case "PURPLE" -> 0x800080; case "CYAN" -> 0x00FFFF;
             case "ORANGE" -> 0xFFA500;
+            case "DARK_RED" -> 0xAA0000; case "DARK_GREEN" -> 0x00AA00; case "DARK_BLUE" -> 0x0000AA;
+            case "DARK_AQUA" -> 0x00AAAA; case "DARK_PURPLE" -> 0xAA00AA; case "GOLD" -> 0xFFAA00;
+            case "GRAY" -> 0xAAAAAA; case "DARK_GRAY" -> 0x555555; case "LIGHT_PURPLE" -> 0xFF55FF;
+            case "AQUA" -> 0x55FFFF;
             default -> normalized.startsWith("#") ? Integer.parseInt(normalized.substring(1), 16) : Integer.decode(normalized);
         };
     }
