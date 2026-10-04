@@ -163,8 +163,8 @@ public final class RhythmcMaker implements ModInitializer {
     private static final int PLAYBACK_PLATFORM_X = 200;
     private static final int PLAYBACK_PLATFORM_Y = 65;
     private static final int PLAYBACK_PLATFORM_Z = 0;
-    private static final double TEXT_DISPLAY_CENTER_X = 200.45;
-    private static final double TEXT_DISPLAY_CENTER_Y = 65.8;
+    private static final double TEXT_DISPLAY_CENTER_X = 200.5;
+    private static final double TEXT_DISPLAY_CENTER_Y = 66.0;
     private static final double TEXT_DISPLAY_CENTER_Z = -1.0;
     private static final int SCENE_EDIT_BASE_X = 600;
     private static final int SCENE_SIZE = 128;
@@ -3787,6 +3787,5 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
     }
 }
-
 
 
