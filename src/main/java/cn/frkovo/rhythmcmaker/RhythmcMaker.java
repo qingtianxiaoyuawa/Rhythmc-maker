@@ -20,6 +20,7 @@ import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
@@ -2220,6 +2221,57 @@ private static void showSceneBoundary(MinecraftServer server) {
         catch (RuntimeException ignored) { return fallback; }
     }
     private static JsonObject effectProperties(JsonObject effect) { return effect != null && effect.has("properties") && effect.get("properties").isJsonObject() ? effect.getAsJsonObject("properties") : new JsonObject(); }
+    private static JsonElement effectValue(JsonObject effect, String key) {
+        JsonObject properties = effectProperties(effect);
+        return effect != null && effect.has(key) ? effect.get(key) : properties.get(key);
+    }
+    private static String textDisplayContents(JsonObject effect) {
+        JsonElement contents = effectValue(effect, "contents");
+        if (contents == null) return "";
+        if (contents.isJsonPrimitive()) return contents.getAsString();
+        if (!contents.isJsonArray()) return "";
+        StringBuilder result = new StringBuilder();
+        for (JsonElement value : contents.getAsJsonArray()) if (value.isJsonPrimitive()) {
+            if (result.length() > 0) result.append('\n');
+            result.append(value.getAsString());
+        }
+        return result.toString();
+    }
+    private static double[] relativeTextDisplayPosition(JsonObject effect, String key) {
+        return effectVector(effect, key, new double[]{effectDouble(effect, "x", 0.0), effectDouble(effect, "y", 1.5), effectDouble(effect, "z", 0.0)});
+    }
+    private static void setTextDisplayPose(DisplayEntity.TextDisplayEntity display, double[] position, double[] rotation, double[] scale) {
+        display.setPosition(PLAYBACK_PLATFORM_X + 0.5 + position[0], PLAYBACK_PLATFORM_Y + position[1], PLAYBACK_PLATFORM_Z + 0.5 + position[2]);
+        display.setTransformation(new AffineTransformation(new Vector3f(), new Quaternionf().rotationXYZ((float) rotation[0], (float) rotation[1], (float) rotation[2]), new Vector3f((float) scale[0], (float) scale[1], (float) scale[2]), new Quaternionf()));
+    }
+    private static void setTextDisplayTransform(DisplayEntity.TextDisplayEntity display, double[] position, double[] rotation, double[] scale) {
+        setTextDisplayPose(display, position, rotation, scale);
+        float bounds = (float) Math.max(0.1, Math.min(64.0, Math.max(Math.abs(scale[0]), Math.max(Math.abs(scale[1]), Math.abs(scale[2]))) * 2.0));
+        display.setDisplayWidth(bounds);
+        display.setDisplayHeight(bounds);
+    }
+    private static void setTextDisplayShadow(DisplayEntity.TextDisplayEntity display, boolean shadowed) {
+        byte flags = display.getDisplayFlags();
+        display.setDisplayFlags(shadowed ? (byte) (flags | 1) : (byte) (flags & ~1));
+    }
+    private static byte textDisplayOpacity(JsonObject effect, String key, int fallback) {
+        return (byte) Math.max(0, Math.min(255, effectInt(effect, key, fallback)));
+    }
+    private static int textDisplayBackground(JsonObject effect) {
+        JsonElement background = effectValue(effect, "background");
+        if (background != null && background.isJsonPrimitive()) {
+            try { return background.getAsInt(); } catch (RuntimeException ignored) { }
+        }
+        JsonElement color = effectValue(effect, "color");
+        if (color != null && color.isJsonArray() && color.getAsJsonArray().size() >= 3) {
+            int red = Math.max(0, Math.min(255, color.getAsJsonArray().get(0).getAsInt()));
+            int green = Math.max(0, Math.min(255, color.getAsJsonArray().get(1).getAsInt()));
+            int blue = Math.max(0, Math.min(255, color.getAsJsonArray().get(2).getAsInt()));
+            int alpha = color.getAsJsonArray().size() > 3 ? Math.max(0, Math.min(255, color.getAsJsonArray().get(3).getAsInt())) : 255;
+            return alpha << 24 | red << 16 | green << 8 | blue;
+        }
+        return 0x40000000;
+    }
     private static net.minecraft.util.Identifier potionIdentifier(String value) {
         String normalized = value == null ? "" : value.trim().toLowerCase(java.util.Locale.ROOT).replace(' ', '_').replace('-', '_');
         if (normalized.contains(":")) {
@@ -2665,7 +2717,10 @@ private static void showSceneBoundary(MinecraftServer server) {
                 double[] anchor = textDisplayAnchors.get(id);
                 if (track != null && anchor != null) {
                     TrackPlayback.Pose pose = trackProfiles.getOrDefault(track, trackProfiles.get(0)).poseAt(timing.secondsToBeat(songTime - chart.offsetMillis / 1000.0));
-                    display.setPosition(anchor[0] + pose.x(), anchor[1] + pose.y(), anchor[2] - pose.z());
+                    setTextDisplayPose(display,
+                            new double[]{pose.x(), pose.y(), pose.z()},
+                            new double[]{pose.rotationX(), pose.rotationY(), pose.rotationZ()},
+                            new double[]{pose.scaleX(), pose.scaleY(), pose.scaleZ()});
                 }
             }
         }
@@ -2696,17 +2751,12 @@ private static void showSceneBoundary(MinecraftServer server) {
                 return;
             }
             String value = effectString(effect, "text", effectString(effect, "content", ""));
-            if (value.isBlank() && effect != null && effect.has("contents") && effect.get("contents").isJsonArray()) {
-                StringBuilder lines = new StringBuilder();
-                for (var element : effect.getAsJsonArray("contents")) {
-                    if (lines.length() > 0) lines.append('\n');
-                    if (element.isJsonPrimitive()) lines.append(element.getAsString());
-                }
-                value = lines.toString();
-            }
+            if (value.isBlank()) value = textDisplayContents(effect);
             if (value.isBlank()) return;
-            double[] position = effectVector(effect, "position", new double[]{effectDouble(effect, "x", PLAYBACK_PLATFORM_X + 0.5), effectDouble(effect, "y", PLAYBACK_PLATFORM_Y + 1.5), effectDouble(effect, "z", PLAYBACK_PLATFORM_Z + 0.5)});
-            double x = position[0], y = position[1], z = position[2];
+            String positionKey = type.equals("HOLOGRAM") ? "location" : "position";
+            double[] position = relativeTextDisplayPosition(effect, positionKey);
+            double[] rotation = effectVector(effect, "rotation", new double[]{0.0, 0.0, 0.0});
+            double[] scale = effectVector(effect, "scale", new double[]{1.0, 1.0, 1.0});
             DisplayEntity.TextDisplayEntity display = textDisplays.get(id);
             if (display == null || display.isRemoved()) {
                 display = new DisplayEntity.TextDisplayEntity(EntityType.TEXT_DISPLAY, world);
@@ -2715,16 +2765,17 @@ private static void showSceneBoundary(MinecraftServer server) {
                 world.spawnEntity(display);
             }
             display.setText(Text.literal(value).styled(style -> style.withColor(effectColor(effect))));
-            display.setPosition(x, y, z);
-            textDisplayAnchors.put(id, new double[]{x, y, z});
+            display.setLineWidth(Math.max(1, Math.min(4096, effectInt(effect, "lineWidth", 200))));
+            display.setTextOpacity(textDisplayOpacity(effect, "opacity", 255));
+            display.setBackground(textDisplayBackground(effect));
+            display.setBillboardMode(DisplayEntity.BillboardMode.FIXED);
+            setTextDisplayTransform(display, position, rotation, scale);
+            setTextDisplayShadow(display, effectBoolean(effect, "shadowed", false));
+            display.setGlowing(effectBoolean(effect, "glowing", false));
+            textDisplayAnchors.put(id, position.clone());
             long duration = (long) effectDouble(effect, "duration", 0.0);
             if (duration > 0) textDisplayExpiresAtNanos.put(id, System.nanoTime() + duration * 1_000_000L);
-            display.setLineWidth(Math.max(1, Math.min(4096, effectInt(effect, "lineWidth", 200))));
-            display.setTextOpacity((byte) Math.max(-128, Math.min(127, effectInt(effect, "opacity", 255))));
-            display.setBackground(effectInt(effect, "background", 0x40000000));
-            display.setDisplayWidth(Math.max(0.1f, Math.min(64.0f, effectFloat(effect, "scale", 1.0f) * 2.0f)));
-            display.setDisplayHeight(Math.max(0.1f, Math.min(64.0f, effectFloat(effect, "scale", 1.0f) * 2.0f)));
-            display.setBillboardMode(DisplayEntity.BillboardMode.CENTER);
+            else textDisplayExpiresAtNanos.remove(id);
             display.setInterpolationDuration(1);
         }
         private void applyTextDisplayTransformation(String id, JsonObject effect) {
@@ -2732,16 +2783,17 @@ private static void showSceneBoundary(MinecraftServer server) {
             if (display == null || display.isRemoved()) return;
             String transformation = effectString(effect, "type", "").toUpperCase(java.util.Locale.ROOT);
             switch (transformation) {
-                case "TEXT" -> display.setText(Text.literal(effectString(effect, "text", "")).styled(style -> style.withColor(effectColor(effect))));
-                case "SHADOW" -> display.setDisplayFlags((byte) (effectBoolean(effect, "shadowed", true) ? (display.getDisplayFlags() | 1) : (display.getDisplayFlags() & ~1)));
-                case "OPACITY" -> display.setTextOpacity((byte) Math.max(-128, Math.min(127, effectInt(effect, "targetOpacity", effectInt(effect, "opacity", 255)))));
-                case "BACKGROUND_COLOR" -> display.setBackground(effectInt(effect, "background", effectColor(effect)));
-                case "GLOWING" -> display.setGlowing(true);
+                case "TEXT" -> display.setText(Text.literal(effectString(effect, "text", effectString(effect, "content", ""))).styled(style -> style.withColor(effectColor(effect))));
+                case "SHADOW" -> setTextDisplayShadow(display, effectBoolean(effect, "shadowed", true));
+                case "OPACITY" -> display.setTextOpacity(textDisplayOpacity(effect, "targetOpacity", 255));
+                case "BACKGROUND_COLOR" -> display.setBackground(textDisplayBackground(effect));
+                case "GLOWING" -> display.setGlowing(effectBoolean(effect, "glowing", true));
                 case "LINEAR_TRANSFORMATION" -> {
                     double[] position = effectVector(effect, "position", new double[]{0.0, 0.0, 0.0});
                     double[] rotation = effectVector(effect, "rotation", new double[]{0.0, 0.0, 0.0});
                     double[] scale = effectVector(effect, "scale", new double[]{1.0, 1.0, 1.0});
-                    display.setTransformation(new AffineTransformation(new Vector3f((float) position[0], (float) position[1], (float) position[2]), new Quaternionf().rotationXYZ((float) rotation[0], (float) rotation[1], (float) rotation[2]), new Vector3f((float) scale[0], (float) scale[1], (float) scale[2]), new Quaternionf()));
+                    setTextDisplayTransform(display, position, rotation, scale);
+                    textDisplayAnchors.put(id, position.clone());
                 }
                 default -> LOGGER.warn("Unknown RhythMC text display transformation '{}'", transformation);
             }

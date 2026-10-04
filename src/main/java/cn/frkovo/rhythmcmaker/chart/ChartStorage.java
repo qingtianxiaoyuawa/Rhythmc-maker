@@ -282,6 +282,17 @@ public final class ChartStorage {
                 ? old.getAsJsonObject("properties").deepCopy() : new JsonObject();
         for (var entry : old.entrySet()) if (!entry.getKey().equals("properties")) properties.add(entry.getKey(), entry.getValue().deepCopy());
         properties.remove("effect-type"); properties.remove("start-tick"); properties.remove("beat");
+        properties.remove("eventType"); properties.remove("effectType");
+        if (type.equals("HOLOGRAM")) convertRhythmc2Hologram(properties, old);
+        if (type.equals("TEXT_DISPLAY")) convertRhythmc2TextDisplay(properties, old);
+        if (type.equals("TEXT_DISPLAY_EFFECT")) {
+            String transformation = firstJsonString(old, "type", "transformation", firstJsonString(properties, "type", "transformation", "LINEAR_TRANSFORMATION"));
+            if (transformation.equalsIgnoreCase("REMOVE")) {
+                converted.addProperty("eventType", "TEXT_DISPLAY_REMOVE");
+            } else {
+                convertRhythmc2TextDisplayTransformation(properties, old, transformation);
+            }
+        }
         if (legacy.equals("INVERT")) properties.addProperty("type", "BLINDNESS");
         if (type.equals("EFFECT") && !properties.has("type")) {
             String potion = firstJsonString(old, "effect", "potion", firstJsonString(old, "effect-id", "potion-effect", ""));
@@ -303,6 +314,97 @@ public final class ChartStorage {
         }
         if (legacy.equals("VISIBLE")) properties.addProperty("hidden", !old.has("visible") || !old.get("visible").getAsBoolean());
         converted.add("properties", properties); return converted;
+    }
+    private static void convertRhythmc2Hologram(JsonObject properties, JsonObject old) {
+        JsonElement legacyLocation = firstJsonElement(old, properties, "hologram-loc");
+        JsonElement sourceLocation = legacyLocation != null ? legacyLocation : firstJsonElement(old, properties, "location", "loc", "position");
+        JsonArray location = vectorArray(sourceLocation, 0.0, 1.5, 0.0);
+        if (legacyLocation != null) location.set(1, new com.google.gson.JsonPrimitive(location.get(1).getAsDouble() + 0.5));
+        properties.add("location", location);
+        String id = firstJsonString(old, "id", "displayId", firstJsonString(properties, "id", "displayId", ""));
+        properties.addProperty("id", id.isBlank() ? "RhyMCGameHologram_" + UUID.randomUUID().toString().replace("-", "") : id);
+        JsonElement sourceContents = firstJsonElement(old, properties, "hologram-contents", "contents");
+        properties.add("contents", stringArray(sourceContents));
+        double durationTicks = jsonNumber(old, "duration", jsonNumber(properties, "duration", 0)).doubleValue();
+        properties.addProperty("duration", durationTicks > 0.0 ? durationTicks * 50.0 : 31_536_000_000L);
+    }
+    private static void convertRhythmc2TextDisplay(JsonObject properties, JsonObject old) {
+        String id = firstJsonString(old, "id", "displayId", firstJsonString(properties, "id", "displayId", ""));
+        properties.addProperty("id", id.isBlank() ? "text_" + UUID.randomUUID().toString().replace("-", "") : id);
+        JsonElement text = firstJsonElement(old, properties, "text", "content");
+        properties.add("text", text == null ? new com.google.gson.JsonPrimitive("") : text.deepCopy());
+        properties.add("position", vectorArray(firstJsonElement(old, properties, "position", "loc", "location"), 0.0, 1.5, 0.0));
+        properties.add("rotation", vectorArray(firstJsonElement(old, properties, "rotation"), 0.0, 0.0, 0.0));
+        properties.add("scale", vectorArray(firstJsonElement(old, properties, "scale"), 1.0, 1.0, 1.0));
+    }
+    private static void convertRhythmc2TextDisplayTransformation(JsonObject properties, JsonObject old, String transformation) {
+        String id = firstJsonString(old, "id", "displayId", firstJsonString(properties, "id", "displayId", ""));
+        properties.addProperty("id", id);
+        String normalized = transformation == null || transformation.isBlank() ? "LINEAR_TRANSFORMATION" : transformation.toUpperCase(java.util.Locale.ROOT);
+        if (normalized.equals("TRANSFORMATION")) normalized = "LINEAR_TRANSFORMATION";
+        properties.addProperty("type", normalized);
+        switch (normalized) {
+            case "BACKGROUND_COLOR" -> {
+                JsonElement color = firstJsonElement(old, properties, "color", "backgroundColor");
+                if (color != null) properties.add("color", color.deepCopy());
+            }
+            case "SHADOW" -> properties.addProperty("shadowed", jsonBoolean(old, properties, "shadowed", "shadow", true));
+            case "GLOWING" -> properties.addProperty("glowing", jsonBoolean(old, properties, "glowing", "glow", true));
+            case "TEXT" -> {
+                JsonElement text = firstJsonElement(old, properties, "text", "content");
+                if (text != null) properties.add("text", text.deepCopy());
+            }
+            case "OPACITY" -> {
+                JsonElement opacity = firstJsonElement(old, properties, "targetOpacity", "opacity");
+                if (opacity == null) opacity = firstArrayElement(firstJsonElement(old, properties, "to"), 0);
+                if (opacity != null) properties.add("targetOpacity", opacity.deepCopy());
+            }
+            case "LINEAR_TRANSFORMATION" -> {
+                properties.add("position", vectorArray(firstJsonElement(old, properties, "position", "to"), 0.0, 0.0, 0.0));
+                properties.add("rotation", rotationArray(firstJsonElement(old, properties, "rotation"), firstJsonElement(old, properties, "rotate")));
+                properties.add("scale", vectorArray(firstJsonElement(old, properties, "scale"), 1.0, 1.0, 1.0));
+            }
+            default -> properties.addProperty("type", "LINEAR_TRANSFORMATION");
+        }
+        double durationTicks = jsonNumber(old, "duration", jsonNumber(properties, "duration", 0)).doubleValue();
+        if (durationTicks > 0.0) properties.addProperty("duration", durationTicks * 50.0);
+    }
+    private static JsonElement firstJsonElement(JsonObject first, JsonObject second, String... keys) {
+        for (String key : keys) {
+            if (first != null && first.has(key)) return first.get(key);
+            if (second != null && second.has(key)) return second.get(key);
+        }
+        return null;
+    }
+    private static JsonElement firstArrayElement(JsonElement element, int index) {
+        return element != null && element.isJsonArray() && element.getAsJsonArray().size() > index ? element.getAsJsonArray().get(index) : null;
+    }
+    private static JsonArray vectorArray(JsonElement source, double defaultX, double defaultY, double defaultZ) {
+        JsonArray result = new JsonArray(); result.add(defaultX); result.add(defaultY); result.add(defaultZ);
+        if (source == null) return result;
+        if (source.isJsonPrimitive() && source.getAsJsonPrimitive().isNumber()) {
+            double value = source.getAsDouble(); result.set(0, new com.google.gson.JsonPrimitive(value)); result.set(1, new com.google.gson.JsonPrimitive(value)); result.set(2, new com.google.gson.JsonPrimitive(value)); return result;
+        }
+        if (!source.isJsonArray()) return result;
+        JsonArray sourceArray = source.getAsJsonArray();
+        for (int index = 0; index < Math.min(3, sourceArray.size()); index++) if (sourceArray.get(index).isJsonPrimitive() && sourceArray.get(index).getAsJsonPrimitive().isNumber()) result.set(index, sourceArray.get(index).deepCopy());
+        return result;
+    }
+    private static JsonArray rotationArray(JsonElement rotation, JsonElement rotate) {
+        if (rotation != null) return vectorArray(rotation, 0.0, 0.0, 0.0);
+        JsonArray result = new JsonArray(); result.add(0.0); result.add(0.0); result.add(rotate != null && rotate.isJsonPrimitive() && rotate.getAsJsonPrimitive().isNumber() ? rotate.getAsDouble() : 0.0); return result;
+    }
+    private static JsonArray stringArray(JsonElement source) {
+        JsonArray result = new JsonArray();
+        if (source == null) return result;
+        if (source.isJsonPrimitive()) { result.add(source.getAsString()); return result; }
+        if (!source.isJsonArray()) return result;
+        for (JsonElement value : source.getAsJsonArray()) if (value.isJsonPrimitive()) result.add(value.getAsString());
+        return result;
+    }
+    private static boolean jsonBoolean(JsonObject first, JsonObject second, String firstKey, String secondKey, boolean fallback) {
+        JsonElement value = firstJsonElement(first, second, firstKey, secondKey);
+        try { return value != null ? value.getAsBoolean() : fallback; } catch (RuntimeException ignored) { return fallback; }
     }
     private static String normalizePotionEffectId(String value) {
         if (value == null || value.isBlank()) return "UNKNOWN";
