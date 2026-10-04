@@ -1,0 +1,18 @@
+FFmpeg minimal cross-build (audio playback) for Rhythmc maker
+
+Version:  6.1.1 (official FFmpeg source)
+Build:    cross-compiled for Windows x64 (mingw-w64) with static SDL2, audio-only
+License:  LGPL v2.1-or-later (built without --enable-gpl)
+Source:   https://ffmpeg.org/releases/ffmpeg-6.1.1.tar.xz   (SDL2: libsdl.org / MSYS2)
+
+Why this binary exists
+----------------------
+The previous bundled ffplay was a 64.5 MB FFmpeg 4.2.2 full static build. Rhythmc
+maker only uses ffplay to play the chart audio (`-nodisp ... -af volume,atempo`),
+so a minimal 6.1.1 build shrinks it to ~4.3 MB. This also aligns ffplay with the
+bundled ffprobe (previously the two were different FFmpeg versions).
+
+Rebuild
+-------
+tools/ffmpeg-minimal/build.sh builds both ffprobe.exe and ffplay.exe.
+See tools/ffmpeg-minimal/README.md.

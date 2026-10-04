@@ -612,13 +612,15 @@ public final class ChartStorage {
         Path directory = Path.of(System.getProperty("java.io.tmpdir"), "rhythmc-maker", "native");
         Files.createDirectories(directory);
         Path executable = directory.resolve("ffprobe.exe");
-        try (var input = ChartStorage.class.getClassLoader().getResourceAsStream(resource)) {
-            if (input == null) throw new IOException("Mod 内置 FFmpeg 组件缺失");
-            byte[] bundled = input.readAllBytes();
-            if (!Files.exists(executable) || Files.size(executable) != bundled.length) {
-                Files.write(executable, bundled);
-            }
+        java.net.URL bundledResource = ChartStorage.class.getClassLoader().getResource(resource);
+        if (bundledResource == null) throw new IOException("Mod 内置 FFmpeg 组件缺失");
+        long bundledSize = bundledResource.openConnection().getContentLengthLong();
+        if (Files.isRegularFile(executable) && Files.size(executable) == bundledSize) return executable;
+        Path temporary = directory.resolve("ffprobe.exe.part");
+        try (InputStream input = bundledResource.openStream()) {
+            Files.copy(input, temporary, StandardCopyOption.REPLACE_EXISTING);
         }
+        Files.move(temporary, executable, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         executable.toFile().setExecutable(true);
         return executable;
     }

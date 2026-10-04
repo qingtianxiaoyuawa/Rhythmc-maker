@@ -8,7 +8,7 @@
     "Rhythmc maker"
   ],
   "contact": {},
-  "license": "MIT",
+  "license": "GPL-3.0",
   "icon": "assets/rhythmc_maker/icon.png",
   "environment": "*",
   "entrypoints": {
