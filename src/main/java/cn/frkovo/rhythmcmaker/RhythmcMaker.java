@@ -2522,6 +2522,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             this.effects.sort(java.util.Comparator.comparingDouble(this::effectSeconds));
             this.effectTimes = new java.util.ArrayList<>(this.effects.size());
             for (JsonObject effect : this.effects) this.effectTimes.add(effectSeconds(effect));
+            initializeTextDisplays(startSeconds);
             this.notes.removeIf(note -> note == null || note.id == null);
             this.notes.sort(java.util.Comparator.comparingDouble(note -> note.time));
             for (ChartManifest.Note note : this.notes) {
@@ -2637,7 +2638,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 int amplifier = Math.max(0, Math.min(255, effectInt(effect, "amplifier", effectInt(effect, "level", 0))));
                 int duration = potionDurationTicks(effect, rate);
                 player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(entry, duration, amplifier,
-                        effectBoolean(effect, "ambient", false), effectBoolean(effect, "particles", true), true));
+                        effectBoolean(effect, "ambient", false), false, true));
             } catch (RuntimeException exception) {
                 LOGGER.warn("Failed to apply RhythMC potion effect '{}'", type, exception);
             }
@@ -2719,6 +2720,19 @@ private static void showSceneBoundary(MinecraftServer server) {
                 return timing.beatToSeconds(effect.get("beat").getAsDouble()) + chart.offsetMillis / 1000.0;
             } catch (RuntimeException ignored) {
                 return Double.POSITIVE_INFINITY;
+            }
+        }
+        private void initializeTextDisplays(double songTime) {
+            for (int index = 0; index < effects.size(); index++) {
+                JsonObject effect = effects.get(index);
+                double effectTime = effectTimes.get(index);
+                if (effectTime >= songTime) break;
+                String type = effectType(effect);
+                if (type.equals("TEXT_DISPLAY") || type.equals("TEXT_DISPLAY_EFFECT")
+                        || type.equals("TEXT_DISPLAY_SYNC_TRACK") || type.equals("TEXT_DISPLAY_DESYNC_TRACK")
+                        || type.equals("TEXT_DISPLAY_REMOVE") || type.equals("HOLOGRAM") || type.equals("REMOVE_HOLOGRAM")) {
+                    applyTextEffect(effect, true, effectTime, songTime);
+                }
             }
         }
 
@@ -2807,81 +2821,97 @@ private static void showSceneBoundary(MinecraftServer server) {
             }
         }
         private void applyTextEffect(JsonObject effect) {
+            applyTextEffect(effect, false, 0.0, 0.0);
+        }
+        private void applyTextEffect(JsonObject effect, boolean bootstrap, double effectTime, double targetTime) {
             String type = effectType(effect);
             String id = effectString(effect, "id", effectString(effect, "displayId", "rhythmc_effect_" + textDisplays.size()));
-            if (type.equals("TEXT_DISPLAY_REMOVE") || type.equals("REMOVE_HOLOGRAM")) {
+            try {
+                if (type.equals("TEXT_DISPLAY_REMOVE") || type.equals("REMOVE_HOLOGRAM")) {
+                    DisplayEntity.TextDisplayEntity display = textDisplays.remove(id);
+                    if (display != null) releaseTextDisplay(id, display);
+                    textDisplayAnchors.remove(id);
+                    textDisplayLastPoses.remove(id);
+                    textDisplayTracks.remove(id);
+                    textDisplayExpiresAtNanos.remove(id);
+                    return;
+                }
+                if (type.equals("TEXT_DISPLAY_EFFECT")) {
+                    applyTextDisplayTransformation(id, effect, bootstrap);
+                    return;
+                }
+                if (type.equals("TEXT_DISPLAY_DESYNC_TRACK")) {
+                    textDisplayTracks.remove(id);
+                    return;
+                }
+                if (type.equals("TEXT_DISPLAY_SYNC_TRACK")) {
+                    int track = effectInt(effect, "track", 0);
+                    textDisplayTracks.put(id, track);
+                    long duration = Math.max(0L, (long) effectDouble(effect, "duration", 31_536_000_000L));
+                    long remaining = bootstrap ? Math.max(0L, Math.round(effectTime * 1000.0 + duration - targetTime * 1000.0)) : duration;
+                    if (remaining > 0) textDisplayExpiresAtNanos.put(id, System.nanoTime() + remaining * 1_000_000L);
+                    else textDisplayExpiresAtNanos.remove(id);
+                    return;
+                }
+                String value = effectString(effect, "text", effectString(effect, "content", ""));
+                if (value.isBlank()) value = textDisplayContents(effect);
+                String positionKey = type.equals("HOLOGRAM") ? "location" : "position";
+                double[] position = relativeTextDisplayPosition(effect, positionKey);
+                textDisplayAnchors.put(id, position.clone());
+                if (value.isBlank()) {
+                    DisplayEntity.TextDisplayEntity display = textDisplays.remove(id);
+                    if (display != null) releaseTextDisplay(id, display);
+                    textDisplayLastPoses.remove(id);
+                    textDisplayTracks.remove(id);
+                    textDisplayExpiresAtNanos.remove(id);
+                    return;
+                }
+                double[] rotation = effectVector(effect, "rotation", new double[]{0.0, 0.0, 0.0});
+                double[] scale = effectVector(effect, "scale", new double[]{1.0, 1.0, 1.0});
+                DisplayEntity.TextDisplayEntity display = textDisplays.get(id);
+                if (display == null || display.isRemoved()) display = acquireTextDisplay(id, position);
+                display.setText(coloredText(value, textDisplayColor(effect)));
+                display.setLineWidth(Math.max(1, Math.min(4096, effectInt(effect, "lineWidth", 200))));
+                display.setTextOpacity(textDisplayOpacity(effect, "opacity", 255));
+                display.setInvisible(false);
+                display.setBackground(textDisplayBackground(effect));
+                display.setBillboardMode(DisplayEntity.BillboardMode.FIXED);
+                setTextDisplayTransform(display, position, rotation, scale);
+                textDisplayLastPoses.put(id, new double[]{position[0], position[1], position[2], rotation[0], rotation[1], rotation[2], scale[0], scale[1], scale[2]});
+                setTextDisplayShadow(display, effectBoolean(effect, "shadowed", false));
+                display.setGlowing(effectBoolean(effect, "glowing", false));
+                long duration = (long) effectDouble(effect, "duration", 0.0);
+                long remaining = bootstrap ? Math.max(0L, Math.round(effectTime * 1000.0 + duration - targetTime * 1000.0)) : duration;
+                if (remaining > 0) textDisplayExpiresAtNanos.put(id, System.nanoTime() + remaining * 1_000_000L);
+                else textDisplayExpiresAtNanos.remove(id);
+                display.setInterpolationDuration(bootstrap ? 0 : 1);
+            } catch (RuntimeException exception) {
+                LOGGER.error("Failed to apply RhythMC text or hologram effect: type={}, id={}, beat={}", type, id, effectDouble(effect, "beat", -1.0), exception);
                 DisplayEntity.TextDisplayEntity display = textDisplays.remove(id);
                 if (display != null) releaseTextDisplay(id, display);
                 textDisplayAnchors.remove(id);
                 textDisplayLastPoses.remove(id);
                 textDisplayTracks.remove(id);
                 textDisplayExpiresAtNanos.remove(id);
-                return;
             }
-            if (type.equals("TEXT_DISPLAY_EFFECT")) {
-                applyTextDisplayTransformation(id, effect);
-                return;
-            }
-            if (type.equals("TEXT_DISPLAY_DESYNC_TRACK")) {
-                textDisplayTracks.remove(id);
-                return;
-            }
-            if (type.equals("TEXT_DISPLAY_SYNC_TRACK")) {
-                int track = effectInt(effect, "track", 0);
-                textDisplayTracks.put(id, track);
-                long duration = Math.max(0L, (long) effectDouble(effect, "duration", 31_536_000_000L));
-                textDisplayExpiresAtNanos.put(id, System.nanoTime() + duration * 1_000_000L);
-                return;
-            }
-            String value = effectString(effect, "text", effectString(effect, "content", ""));
-            if (value.isBlank()) value = textDisplayContents(effect);
-            String positionKey = type.equals("HOLOGRAM") ? "location" : "position";
-            double[] position = relativeTextDisplayPosition(effect, positionKey);
-            if (value.isBlank()) {
-                textDisplayAnchors.put(id, position.clone());
-                return;
-            }
-            double[] rotation = effectVector(effect, "rotation", new double[]{0.0, 0.0, 0.0});
-            double[] scale = effectVector(effect, "scale", new double[]{1.0, 1.0, 1.0});
-            DisplayEntity.TextDisplayEntity display = textDisplays.get(id);
-            if (display == null || display.isRemoved()) display = acquireTextDisplay(id);
-            display.setText(coloredText(value, textDisplayColor(effect)));
-            display.setLineWidth(Math.max(1, Math.min(4096, effectInt(effect, "lineWidth", 200))));
-            display.setTextOpacity(value.isBlank() ? (byte) 0 : textDisplayOpacity(effect, "opacity", 255));
-            display.setInvisible(value.isBlank());
-            display.setBackground(textDisplayBackground(effect));
-            display.setBillboardMode(DisplayEntity.BillboardMode.FIXED);
-            setTextDisplayTransform(display, position, rotation, scale);
-            if (value.isBlank()) {
-                display.setDisplayWidth(0.1f);
-                display.setDisplayHeight(0.1f);
-            }
-            textDisplayLastPoses.put(id, new double[]{position[0], position[1], position[2], rotation[0], rotation[1], rotation[2], scale[0], scale[1], scale[2]});
-            setTextDisplayShadow(display, effectBoolean(effect, "shadowed", false));
-            display.setGlowing(effectBoolean(effect, "glowing", false));
-            textDisplayAnchors.put(id, position.clone());
-            long duration = (long) effectDouble(effect, "duration", 0.0);
-            if (duration > 0) textDisplayExpiresAtNanos.put(id, System.nanoTime() + duration * 1_000_000L);
-            else textDisplayExpiresAtNanos.remove(id);
-            display.setInterpolationDuration(value.isBlank() ? 0 : 1);
         }
-        private DisplayEntity.TextDisplayEntity acquireTextDisplay(String id) {
+        private DisplayEntity.TextDisplayEntity acquireTextDisplay(String id, double[] initialPosition) {
             DisplayEntity.TextDisplayEntity display = textDisplayPool.pollFirst();
-            if (display == null || display.isRemoved()) display = createTextDisplay();
-            display.setText( Text.empty());
-            display.setTextOpacity((byte) 0);
-            display.setInvisible(true);
-            display.setInterpolationDuration(0);
+            if (display == null || display.isRemoved()) display = createTextDisplay(initialPosition);
+            else {
+                display.setInterpolationDuration(0);
+                display.setInvisible(true);
+                display.setText(Text.empty());
+                setTextDisplayTransform(display, initialPosition, new double[]{0.0, 0.0, 0.0}, new double[]{1.0, 1.0, 1.0});
+            }
             textDisplays.put(id, display);
             return display;
         }
-        private DisplayEntity.TextDisplayEntity createTextDisplay() {
+        private DisplayEntity.TextDisplayEntity createTextDisplay(double[] initialPosition) {
             DisplayEntity.TextDisplayEntity display = new DisplayEntity.TextDisplayEntity(EntityType.TEXT_DISPLAY, world);
             display.addCommandTag("rhythmc_effect:" + chart.id);
-            display.setPosition(TEXT_DISPLAY_CENTER_X, TEXT_DISPLAY_CENTER_Y, TEXT_DISPLAY_CENTER_Z);
-            display.setTransformation(new AffineTransformation(new Vector3f(), new Quaternionf(), new Vector3f(1.0f, 1.0f, 1.0f), new Quaternionf()));
-            display.setDisplayWidth(0.1f);
-            display.setDisplayHeight(0.1f);
+            setTextDisplayTransform(display, initialPosition, new double[]{0.0, 0.0, 0.0}, new double[]{1.0, 1.0, 1.0});
+            display.setText(Text.empty());
             display.setTextOpacity((byte) 0);
             display.setInvisible(true);
             display.setBillboardMode(DisplayEntity.BillboardMode.FIXED);
@@ -2891,11 +2921,10 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
         private void releaseTextDisplay(String id, DisplayEntity.TextDisplayEntity display) {
             textDisplays.remove(id);
+            display.setInvisible(true);
             display.setText(Text.empty());
             display.setTextOpacity((byte) 0);
             display.setInterpolationDuration(0);
-            display.setPosition(TEXT_DISPLAY_CENTER_X, TEXT_DISPLAY_CENTER_Y, TEXT_DISPLAY_CENTER_Z);
-            display.setTransformation(new AffineTransformation(new Vector3f(), new Quaternionf(), new Vector3f(1.0f, 1.0f, 1.0f), new Quaternionf()));
             textDisplayPool.addLast(display);
         }
         private static boolean sameTextDisplayPose(double[] left, double[] right) {
@@ -2903,10 +2932,10 @@ private static void showSceneBoundary(MinecraftServer server) {
             for (int index = 0; index < left.length; index++) if (Math.abs(left[index] - right[index]) > 1.0E-5) return false;
             return true;
         }
-        private void applyTextDisplayTransformation(String id, JsonObject effect) {
+        private void applyTextDisplayTransformation(String id, JsonObject effect, boolean bootstrap) {
             DisplayEntity.TextDisplayEntity display = textDisplays.get(id);
             boolean created = display == null || display.isRemoved();
-            if (created) display = acquireTextDisplay(id);
+            if (created) display = acquireTextDisplay(id, textDisplayAnchors.getOrDefault(id, new double[]{0.0, 1.5, 0.0}));
             String transformation = effectString(effect, "type", "").toUpperCase(java.util.Locale.ROOT);
             switch (transformation) {
                 case "TEXT" -> {
@@ -2920,7 +2949,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                         double[] anchor = textDisplayAnchors.get(id);
                         if (anchor != null) setTextDisplayPose(display, anchor, new double[]{0.0, 0.0, 0.0}, new double[]{1.0, 1.0, 1.0});
                     }
-                    display.setInterpolationDuration(1);
+                    display.setInterpolationDuration(bootstrap ? 0 : 1);
                 }
                 case "SHADOW" -> setTextDisplayShadow(display, effectBoolean(effect, "shadowed", true));
                 case "OPACITY" -> display.setTextOpacity(textDisplayOpacity(effect, "targetOpacity", 255));
