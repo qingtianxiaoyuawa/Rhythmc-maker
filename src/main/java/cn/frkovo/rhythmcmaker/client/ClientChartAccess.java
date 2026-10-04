@@ -276,7 +276,8 @@ final class ClientChartAccess {
     }
 
     static int difficultyColor(String difficulty) {
-        return switch (difficulty) {
+        String key = difficulty == null ? "" : difficulty;
+        return switch (key) {
             case "WD" -> 0x63D98A;
             case "NR" -> 0xF05B64;
             case "ED" -> 0xB77BFF;
