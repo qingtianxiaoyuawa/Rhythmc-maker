@@ -2759,18 +2759,13 @@ private static void showSceneBoundary(MinecraftServer server) {
             }
             String value = effectString(effect, "text", effectString(effect, "content", ""));
             if (value.isBlank()) value = textDisplayContents(effect);
-            if (value.isBlank()) return;
+            if (value.isBlank() && !type.equals("TEXT_DISPLAY")) return;
             String positionKey = type.equals("HOLOGRAM") ? "location" : "position";
             double[] position = relativeTextDisplayPosition(effect, positionKey);
             double[] rotation = effectVector(effect, "rotation", new double[]{0.0, 0.0, 0.0});
             double[] scale = effectVector(effect, "scale", new double[]{1.0, 1.0, 1.0});
             DisplayEntity.TextDisplayEntity display = textDisplays.get(id);
-            if (display == null || display.isRemoved()) {
-                display = new DisplayEntity.TextDisplayEntity(EntityType.TEXT_DISPLAY, world);
-                display.addCommandTag("rhythmc_effect:" + chart.id);
-                textDisplays.put(id, display);
-                world.spawnEntity(display);
-            }
+            if (display == null || display.isRemoved()) display = createTextDisplay(id);
             display.setText(Text.literal(value).styled(style -> style.withColor(effectColor(effect))));
             display.setLineWidth(Math.max(1, Math.min(4096, effectInt(effect, "lineWidth", 200))));
             display.setTextOpacity(textDisplayOpacity(effect, "opacity", 255));
@@ -2785,9 +2780,16 @@ private static void showSceneBoundary(MinecraftServer server) {
             else textDisplayExpiresAtNanos.remove(id);
             display.setInterpolationDuration(1);
         }
+        private DisplayEntity.TextDisplayEntity createTextDisplay(String id) {
+            DisplayEntity.TextDisplayEntity display = new DisplayEntity.TextDisplayEntity(EntityType.TEXT_DISPLAY, world);
+            display.addCommandTag("rhythmc_effect:" + chart.id);
+            textDisplays.put(id, display);
+            world.spawnEntity(display);
+            return display;
+        }
         private void applyTextDisplayTransformation(String id, JsonObject effect) {
             DisplayEntity.TextDisplayEntity display = textDisplays.get(id);
-            if (display == null || display.isRemoved()) return;
+            if (display == null || display.isRemoved()) display = createTextDisplay(id);
             String transformation = effectString(effect, "type", "").toUpperCase(java.util.Locale.ROOT);
             switch (transformation) {
                 case "TEXT" -> display.setText(Text.literal(effectString(effect, "text", effectString(effect, "content", ""))).styled(style -> style.withColor(effectColor(effect))));
