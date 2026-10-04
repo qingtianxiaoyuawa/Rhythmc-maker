@@ -10,12 +10,9 @@ import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.input.CharInput;
 import net.minecraft.client.input.KeyInput;
 import net.minecraft.text.Text;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /** ImGui-backed effect editor screen. The world remains visible behind the editor. */
 public final class EffectTrackScreen extends Screen {
-    private static final Logger LOGGER = LoggerFactory.getLogger(EffectTrackScreen.class);
     private final ChartManifest chart;
     private final EffectEditorImGuiView editor;
     private boolean firstFrameLogged;
@@ -31,9 +28,9 @@ public final class EffectTrackScreen extends Screen {
         super(Text.literal("RhythMC 特效编辑器"));
         this.chart = chart;
         this.editor = new EffectEditorImGuiView(chart, this::save, this::closeEditor,
-                RhythmcMakerClient::toggleEffectEditorPlayback, RhythmcMakerClient::seekEffectEditorPreview,
-                ClientChartAccess::status);
-        LOGGER.info("Effect editor screen constructed; chart={}", chart == null ? "none" : "present");
+                RhythmcMakerClient::toggleEffectEditorPlayback,
+                RhythmcMakerClient::replayEffectEditorPlayback,
+                RhythmcMakerClient::seekEffectEditorPreview, ClientChartAccess::status);
     }
 
     @Override
@@ -51,10 +48,7 @@ public final class EffectTrackScreen extends Screen {
         MinecraftClient client = MinecraftClient.getInstance();
         if (!ImGuiRuntime.beginFrame(client)) return;
         try {
-            if (!firstFrameLogged) {
-                firstFrameLogged = true;
-                LOGGER.info("Effect editor first frame; logical={}x{}, framebuffer={}x{}", client.getWindow().getWidth(), client.getWindow().getHeight(), client.getWindow().getFramebufferWidth(), client.getWindow().getFramebufferHeight());
-            }
+            firstFrameLogged = true;
             editor.render(client);
         } finally {
             ImGuiRuntime.endFrame();
@@ -70,10 +64,13 @@ public final class EffectTrackScreen extends Screen {
         super.removed();
     }
 
-    @Override public boolean mouseClicked(Click click, boolean doubleClick) { return true; }
-    @Override public boolean mouseReleased(Click click) { return true; }
-    @Override public boolean mouseDragged(Click click, double deltaX, double deltaY) { return true; }
-    @Override public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) { return true; }
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
+        // ImGui consumes the wheel in the active preview window during its own
+        // frame. Keep Minecraft's callback consumed so the event cannot also
+        // reach an unrelated screen control.
+        return true;
+    }
 
     @Override
     public boolean keyPressed(KeyInput input) {
@@ -81,10 +78,15 @@ public final class EffectTrackScreen extends Screen {
             closeEditor();
             return true;
         }
+        editor.handlePlaybackKey(input);
         return true;
     }
 
-    @Override public boolean keyReleased(KeyInput input) { return true; }
+    @Override
+    public boolean keyReleased(KeyInput input) {
+        editor.handlePlaybackKeyRelease(input);
+        return true;
+    }
     @Override public boolean charTyped(CharInput input) { return true; }
     @Override public boolean shouldCloseOnEsc() { return true; }
 
