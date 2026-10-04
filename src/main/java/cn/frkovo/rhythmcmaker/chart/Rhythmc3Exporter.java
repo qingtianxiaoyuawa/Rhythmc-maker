@@ -1,6 +1,7 @@
 package cn.frkovo.rhythmcmaker.chart;
 
 import cn.frkovo.rhythmcmaker.ChartDimensionManager;
+import cn.frkovo.rhythmcmaker.common.chart.Rhythmc3EffectCodec;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
@@ -130,7 +131,7 @@ public final class Rhythmc3Exporter {
         for (ChartManifest.Track definition : trackDefinitions.values()) tracks.add(trackJson(chart, definition, endBeat));
         root.add("tracks", tracks);
         JsonArray effects = new JsonArray();
-        if (chart.effects != null) for (JsonObject effect : chart.effects) if (effect != null) effects.add(effect.deepCopy());
+        if (chart.effects != null) for (JsonObject effect : chart.effects) if (effect != null) effects.add(Rhythmc3EffectCodec.exportEffect(effect));
         root.add("effects", effects);
         Path difficultyPath = folder.resolve(difficultyFile(chart.difficulty) + ".rmcc");
         try (OutputStream output = new ZstdOutputStream(Files.newOutputStream(difficultyPath))) {
@@ -146,21 +147,21 @@ public final class Rhythmc3Exporter {
     private static JsonObject trackJson(ChartManifest chart, ChartManifest.Track track, double endBeat) {
         JsonObject result = new JsonObject(); result.addProperty("id", track.id);
         for (TrackEventChannel channel : TrackEventChannel.values()) {
-            JsonArray fallback = eventList(0.0, endBeat, channel.defaultValue());
-            if (channel == TrackEventChannel.SPEED && track.id == 0) fallback = speedEventList(chart, endBeat);
+            JsonArray fallback = new JsonArray();
+            if (channel == TrackEventChannel.SPEED) fallback = speedEventList(chart, endBeat);
             result.add(channel.jsonKey(), numEventList(channel.events(track), fallback));
         }
         JsonArray notes = new JsonArray(); if (chart.notes != null) for (ChartManifest.Note note : chart.notes) if (note != null && note.trackId == track.id) {
             JsonObject value = new JsonObject(); value.addProperty("noteType", Math.max(0, Math.min(3, note.type))); value.addProperty("beat", exportBeat(note));
             JsonArray position = new JsonArray(); position.add(note.sourceX == null ? note.x : note.sourceX); position.add(note.sourceY == null ? note.y - 66.0 : note.sourceY); position.add(note.sourceZ == null ? 0.0 : note.sourceZ); value.add("pos", position);
             JsonArray scale = new JsonArray(); scale.add(note.scaleX); scale.add(note.scaleY); scale.add(note.scaleZ); value.add("scale", scale);
-            JsonArray rotation = new JsonArray(); rotation.add(note.rotationX); rotation.add(note.rotationY); rotation.add(note.rotationZ); value.add("rotation", rotation); value.addProperty("holdGroup", note.holdGroup); notes.add(value);
+            JsonArray rotation = new JsonArray(); rotation.add(note.rotationX); rotation.add(note.rotationY); rotation.add(note.rotationZ); value.add("rotation", rotation); if (note.holdGroup >= 0) value.addProperty("holdGroup", note.holdGroup); notes.add(value);
         }
         result.add("notes", notes); return result;
     }
     private static JsonArray numEventList(java.util.List<ChartManifest.NumEvent> events, JsonArray fallback) {
         if (events == null || events.isEmpty()) return fallback;
-        JsonArray result = new JsonArray(); for (ChartManifest.NumEvent event : events) if (event != null) { JsonObject value = new JsonObject(); value.addProperty("startBeat", event.startBeat); value.addProperty("endBeat", event.endBeat); value.addProperty("startValue", event.startValue); value.addProperty("endValue", event.endValue); value.addProperty("easingType", event.easingType); result.add(value); } return result;
+        JsonArray result = new JsonArray(); for (ChartManifest.NumEvent event : events) if (event != null) { JsonObject value = new JsonObject(); value.addProperty("startBeat", event.startBeat); value.addProperty("endBeat", event.endBeat); value.addProperty("startValue", event.startValue); value.addProperty("endValue", event.endValue); value.addProperty("easing", event.easingType); result.add(value); } return result;
     }
 
     private static JsonArray speedEventList(ChartManifest chart, double endBeat) {
@@ -173,7 +174,7 @@ public final class Rhythmc3Exporter {
             value.addProperty("endBeat", event.endBeat);
             value.addProperty("startValue", event.startValue);
             value.addProperty("endValue", event.endValue);
-            value.addProperty("easingType", event.easing);
+            value.addProperty("easing", event.easing);
             events.add(value);
         }
         return events.isEmpty() ? eventList(0.0, endBeat, 1.0) : events;
@@ -278,5 +279,3 @@ public final class Rhythmc3Exporter {
         private ExportDeleteException(IOException cause) { this.cause = cause; }
     }
 }
-
-

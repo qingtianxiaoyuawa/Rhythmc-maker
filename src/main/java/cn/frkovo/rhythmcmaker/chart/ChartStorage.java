@@ -12,6 +12,7 @@ import org.yaml.snakeyaml.Yaml;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.util.WorldSavePath;
 import cn.frkovo.rhythmcmaker.RhythmcMaker;
+import cn.frkovo.rhythmcmaker.common.chart.Rhythmc3EffectCodec;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -129,15 +130,10 @@ public final class ChartStorage {
                 if (!effectElement.isJsonObject()) continue;
                 JsonObject effect = convertRhythmc2Effect(effectElement.getAsJsonObject(), bpm, chart.divisionsPerChunk);
                 if (effect == null) continue;
-                if (effect.has("start-tick") && effect.get("start-tick").isJsonPrimitive()) {
-                    double startTick = effect.get("start-tick").getAsDouble();
-                    if (Double.isFinite(startTick)) effect.addProperty("beat", snapImportedBeat(Math.max(0.0, startTick / 20.0) * bpm / 60.0));
-                }
-                if ("ARENA".equalsIgnoreCase(effect.has("effect-type") ? effect.get("effect-type").getAsString() : "")
-                        && effect.has("arena") && effect.get("arena").isJsonPrimitive()) {
-                    String arena = effect.get("arena").getAsString();
+                JsonObject properties = effect.getAsJsonObject("properties");
+                if ("ARENA".equals(effect.get("eventType").getAsString()) && properties.has("arena")) {
+                    String arena = properties.get("arena").getAsString();
                     if (!arena.isBlank() && !arenaNames.contains(arena)) arenaNames.add(arena);
-                    effect.addProperty("type", "ARENA");
                 }
                 chart.effects.add(effect);
             }
@@ -218,7 +214,7 @@ public final class ChartStorage {
         if (chart.tracks.isEmpty()) chart.tracks.add(new ChartManifest.Track(0));
         ChartManifest.Track primary = chart.tracks.stream().filter(track -> track.id == 0).findFirst().orElse(chart.tracks.get(0));
         chart.speedEvents = primary.speedEvents.stream().map(event -> new ChartManifest.SpeedEvent(event.startBeat, event.endBeat, event.startValue, event.endValue, event.easingType)).collect(java.util.stream.Collectors.toCollection(ArrayList::new));
-        if (root.has("effects") && root.get("effects").isJsonArray()) for (JsonElement effect : root.getAsJsonArray("effects")) if (effect.isJsonObject()) chart.effects.add(effect.getAsJsonObject().deepCopy());
+        if (root.has("effects") && root.get("effects").isJsonArray()) for (JsonElement effect : root.getAsJsonArray("effects")) if (effect.isJsonObject()) chart.effects.add(Rhythmc3EffectCodec.importEffect(effect.getAsJsonObject()));
         create(server, chart, stagedAudio); return chart;
     }
     private static EditorTrackLayout readEditorTrackLayout(JsonObject meta, Path difficultyFile, Path selectedLayoutFile) throws IOException {
@@ -286,8 +282,12 @@ public final class ChartStorage {
                 convertRhythmc2TextDisplayTransformation(properties, old, transformation);
             }
         }
-        if (legacy.equals("INVERT")) properties.addProperty("type", "BLINDNESS");
-        if (type.equals("EFFECT") && !properties.has("type")) {
+        if (legacy.equals("INVERT")) {
+            properties.addProperty("effectId", 15);
+            properties.addProperty("amplifier", 1);
+            properties.remove("type");
+        }
+        if (type.equals("EFFECT") && !properties.has("type") && !properties.has("effectId")) {
             String potion = firstJsonString(old, "effect", "potion", firstJsonString(old, "effect-id", "potion-effect", ""));
             if (potion.isBlank()) potion = firstJsonString(properties, "effect", "potion", firstJsonString(properties, "effect-id", "potion-effect", "UNKNOWN"));
             properties.addProperty("type", normalizePotionEffectId(potion));
@@ -296,13 +296,16 @@ public final class ChartStorage {
         if (type.equals("EFFECT")) {
             JsonElement duration = properties.has("durationTicks") ? properties.get("durationTicks") : properties.get("duration");
             if (duration != null && !duration.isJsonNull()) {
-                properties.addProperty("durationTicks", jsonNumber(properties, properties.has("durationTicks") ? "durationTicks" : "duration", 100).intValue());
+                properties.addProperty("durationTicks", jsonNumber(properties, properties.has("durationTicks") ? "durationTicks" : "duration", 630720000L).longValue());
                 properties.remove("duration");
-            }
+            } else properties.addProperty("durationTicks", 630720000L);
         }
         if (type.equals("CLEAR_EFFECT")) {
             String effectId = firstJsonString(old, "effect-id", "effect", firstJsonString(properties, "effect-id", "effect", ""));
-            if (!effectId.isBlank()) properties.addProperty("type", normalizePotionEffectId(effectId));
+            JsonArray effects = new JsonArray();
+            if (!effectId.isBlank()) effects.add(normalizePotionEffectId(effectId));
+            properties.add("effects", effects);
+            properties.remove("type");
         }
         if (type.equals("TIME") && (legacy.contains("CLIENTTIME") || legacy.contains("TIMECLIENT"))) properties.addProperty("client", true);
         if (type.equals("TIME") && (legacy.contains("WORLDTIME") || legacy.equals("SETTIME"))) properties.addProperty("client", false);
@@ -312,7 +315,16 @@ public final class ChartStorage {
             Number time = jsonNumber(properties, "time-of-day", jsonNumber(properties, "world-time", jsonNumber(properties, "client-time", jsonNumber(properties, "clientTime", jsonNumber(properties, "value", 1000)))));
             properties.addProperty("time", time);
         }
-        if (legacy.equals("VISIBLE")) properties.addProperty("hidden", !old.has("visible") || !old.get("visible").getAsBoolean());
+        if (legacy.equals("VISIBLE")) {
+            JsonArray noteTypes = new JsonArray();
+            if (old.has("visible") && !old.get("visible").getAsBoolean()) {
+                if (old.has("note-types")) for (JsonElement noteType : old.getAsJsonArray("note-types"))
+                    noteTypes.add(switch (oldNoteType(noteType.getAsString())) { case 1 -> "LOOK"; case 2 -> "HOLD"; case 3 -> "DODGE"; default -> "TAP"; });
+                else for (String noteType : List.of("TAP", "LOOK", "HOLD", "DODGE")) noteTypes.add(noteType);
+            }
+            properties.add("noteTypes", noteTypes);
+            properties.add("tracks", new JsonArray());
+        }
         converted.add("properties", properties); return converted;
     }
     private static void convertRhythmc2Hologram(JsonObject properties, JsonObject old) {
@@ -365,7 +377,6 @@ public final class ChartStorage {
                 properties.add("position", vectorArray(firstJsonElement(old, properties, "position", "to"), 0.0, 0.0, 0.0));
                 properties.add("rotation", rotationArray(firstJsonElement(old, properties, "rotation"), firstJsonElement(old, properties, "rotate")));
                 properties.add("scale", vectorArray(firstJsonElement(old, properties, "scale"), 1.0, 1.0, 1.0));
-        if (!properties.has("color") || properties.get("color").isJsonNull()) properties.addProperty("color", "WHITE");
             }
             default -> properties.addProperty("type", "LINEAR_TRANSFORMATION");
         }
