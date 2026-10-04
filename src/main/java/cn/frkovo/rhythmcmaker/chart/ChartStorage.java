@@ -344,7 +344,7 @@ public final class ChartStorage {
         String id = firstJsonString(old, "id", "displayId", firstJsonString(properties, "id", "displayId", ""));
         properties.addProperty("id", id.isBlank() ? "text_" + UUID.randomUUID().toString().replace("-", "") : id);
         JsonElement text = firstJsonElement(old, properties, "text", "content");
-        properties.add("text", text == null ? new com.google.gson.JsonPrimitive("") : text.deepCopy());
+        applyLegacyText(properties, text == null ? "" : text.getAsString());
         properties.add("position", vectorArray(firstJsonElement(old, properties, "position", "loc", "location"), 0.0, 1.5, 0.0));
         properties.add("rotation", vectorArray(firstJsonElement(old, properties, "rotation"), 0.0, 0.0, 0.0));
         properties.add("scale", vectorArray(firstJsonElement(old, properties, "scale"), 1.0, 1.0, 1.0));
@@ -365,7 +365,7 @@ public final class ChartStorage {
             case "GLOWING" -> properties.addProperty("glowing", jsonBoolean(old, properties, "glowing", "glow", true));
             case "TEXT" -> {
                 JsonElement text = firstJsonElement(old, properties, "text", "content");
-                if (text != null) properties.add("text", text.deepCopy());
+                if (text != null) applyLegacyText(properties, text.getAsString());
                 if (!properties.has("color") || properties.get("color").isJsonNull()) properties.addProperty("color", "WHITE");
             }
             case "OPACITY" -> {
@@ -541,6 +541,22 @@ public final class ChartStorage {
         chart.speedEvents = defaultTrack.speedEvents.stream()
                 .map(event -> new ChartManifest.SpeedEvent(event.startBeat, event.endBeat, event.startValue, event.endValue, event.easingType))
                 .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+    }
+    private static void applyLegacyText(JsonObject properties, String source) {
+        String value = source == null ? "" : source;
+        String color = null;
+        java.util.regex.Matcher colorMatcher = java.util.regex.Pattern.compile("&([0-9a-fA-F])").matcher(value);
+        if (colorMatcher.find()) color = switch (Character.toLowerCase(colorMatcher.group(1).charAt(0))) {
+            case '0' -> "BLACK"; case '1' -> "DARK_BLUE"; case '2' -> "DARK_GREEN"; case '3' -> "DARK_AQUA";
+            case '4' -> "DARK_RED"; case '5' -> "DARK_PURPLE"; case '6' -> "GOLD"; case '7' -> "GRAY";
+            case '8' -> "DARK_GRAY"; case '9' -> "BLUE"; case 'a' -> "GREEN"; case 'b' -> "AQUA";
+            case 'c' -> "RED"; case 'd' -> "LIGHT_PURPLE"; case 'e' -> "YELLOW"; case 'f' -> "WHITE";
+            default -> null;
+        };
+        value = value.replaceAll("&[0-9a-fA-Fk-oK-ORr]", "");
+        value = value.replaceAll("<[^>]*>", "");
+        properties.addProperty("text", value);
+        if (color != null) properties.addProperty("color", color);
     }
 
     public static void create(MinecraftServer server, ChartManifest chart, Path stagedAudio) throws IOException {

@@ -2005,11 +2005,11 @@ private static void showSceneBoundary(MinecraftServer server) {
                     if (note == null || session.shouldHide(note)) { session.recycle(display); iterator.remove(); continue; }
                     display.setGlowing(true);
                     double noteTime = session.noteTimes.getOrDefault(note.id, Double.POSITIVE_INFINITY);
-                    if (noteTime <= songTime) {
-                        if (session.hitNotes.add(note.id)) playHitSound(session, player, note);
+                    double relativeDistance = session.relativeDistance(note, songTime);
+                    if (noteTime <= songTime && session.hitNotes.add(note.id)) playHitSound(session, player, note);
+                    if (relativeDistance <= 0.0) {
                         session.recycle(display); iterator.remove(); continue;
                     }
-                    double relativeDistance = session.relativeDistance(note, songTime);
                     double displayZ = PLAYBACK_FRAME_Z - relativeDistance;
                     if (updateDisplayPositions) {
                         display.setTeleportDuration(1);
@@ -2034,10 +2034,6 @@ private static void showSceneBoundary(MinecraftServer server) {
                     }
                     if (relativeDistance > PLAYBACK_APPROACH_DISTANCE) break;
                     session.nextNoteIndex++;
-                    if (noteTime <= songTime) {
-                        if (session.hitNotes.add(note.id)) playHitSound(session, player, note);
-                        continue;
-                    }
                     double displayZ = PLAYBACK_FRAME_Z - Math.max(0.0, relativeDistance);
                     double[] position = session.displayPosition(note, songTime, displayZ);
                     DisplayEntity.BlockDisplayEntity display = session.acquire(blockStateForType(note.type), position[0], position[1], position[2]);
@@ -2193,6 +2189,16 @@ private static void showSceneBoundary(MinecraftServer server) {
                 case "PURPLE" -> 0x800080;
                 case "CYAN" -> 0x00FFFF;
                 case "ORANGE" -> 0xFFA500;
+                case "DARK_RED" -> 0xAA0000;
+                case "DARK_GREEN" -> 0x00AA00;
+                case "DARK_BLUE" -> 0x0000AA;
+                case "DARK_AQUA" -> 0x00AAAA;
+                case "DARK_PURPLE" -> 0xAA00AA;
+                case "GOLD" -> 0xFFAA00;
+                case "GRAY" -> 0xAAAAAA;
+                case "DARK_GRAY" -> 0x555555;
+                case "LIGHT_PURPLE" -> 0xFF55FF;
+                case "AQUA" -> 0x55FFFF;
                 default -> parseColorNumber(value, 0xB77BFF);
             };
         } catch (RuntimeException ignored) {
@@ -2829,9 +2835,12 @@ private static void showSceneBoundary(MinecraftServer server) {
             }
             String value = effectString(effect, "text", effectString(effect, "content", ""));
             if (value.isBlank()) value = textDisplayContents(effect);
-            if (value.isBlank()) return;
             String positionKey = type.equals("HOLOGRAM") ? "location" : "position";
             double[] position = relativeTextDisplayPosition(effect, positionKey);
+            if (value.isBlank()) {
+                textDisplayAnchors.put(id, position.clone());
+                return;
+            }
             double[] rotation = effectVector(effect, "rotation", new double[]{0.0, 0.0, 0.0});
             double[] scale = effectVector(effect, "scale", new double[]{1.0, 1.0, 1.0});
             DisplayEntity.TextDisplayEntity display = textDisplays.get(id);
@@ -2896,7 +2905,8 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
         private void applyTextDisplayTransformation(String id, JsonObject effect) {
             DisplayEntity.TextDisplayEntity display = textDisplays.get(id);
-            if (display == null || display.isRemoved()) display = acquireTextDisplay(id);
+            boolean created = display == null || display.isRemoved();
+            if (created) display = acquireTextDisplay(id);
             String transformation = effectString(effect, "type", "").toUpperCase(java.util.Locale.ROOT);
             switch (transformation) {
                 case "TEXT" -> {
@@ -2904,6 +2914,13 @@ private static void showSceneBoundary(MinecraftServer server) {
                     display.setText(coloredText(value, textDisplayColor(effect)));
                     display.setInvisible(value.isBlank());
                     display.setTextOpacity(value.isBlank() ? (byte) 0 : (byte) 255);
+                    display.setDisplayWidth(value.isBlank() ? 0.1f : 4.0f);
+                    display.setDisplayHeight(value.isBlank() ? 0.1f : 4.0f);
+                    if (created) {
+                        double[] anchor = textDisplayAnchors.get(id);
+                        if (anchor != null) setTextDisplayPose(display, anchor, new double[]{0.0, 0.0, 0.0}, new double[]{1.0, 1.0, 1.0});
+                    }
+                    display.setInterpolationDuration(1);
                 }
                 case "SHADOW" -> setTextDisplayShadow(display, effectBoolean(effect, "shadowed", true));
                 case "OPACITY" -> display.setTextOpacity(textDisplayOpacity(effect, "targetOpacity", 255));
@@ -3762,5 +3779,3 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
     }
 }
-
-
