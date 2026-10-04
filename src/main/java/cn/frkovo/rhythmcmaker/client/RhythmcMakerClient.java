@@ -112,7 +112,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             else if (item == RhythmcMaker.QUICK_FUNCTIONS_ITEM) client.setScreen(new PlaceholderScreen("快捷功能", "quick-functions"));
             else if (item == RhythmcMaker.MORE_OPTIONS_RETURN_ITEM) sendCommand(client, "rhythmc_more_return");
             else if (item == RhythmcMaker.EXPORT_ITEM) client.setScreen(new ExportChartScreen());
-            else if (item == RhythmcMaker.CHART_INFO_ITEM) { if (ClientChartAccess.activeChart() != null) client.setScreen(new ChartInfoScreen(ClientChartAccess.activeChart())); else if (client.player != null) client.player.sendMessage(net.minecraft.text.Text.literal("当前谱面信息尚未加载"), true); }
+            else if (item == RhythmcMaker.CHART_INFO_ITEM) { if (ClientChartAccess.activeChart() != null) client.setScreen(new ChartInfoScreen(ClientChartAccess.activeChart())); else if (client.player != null) client.player.sendMessage(Text.literal("当前未加载谱面"), true); }
             else if (item == RhythmcMaker.SCENE_EDIT_ITEM) client.setScreen(new SceneEditScreen());
             else if (item == RhythmcMaker.EFFECT_TRACK_ITEM) client.setScreen(new EffectTrackScreen());
             else if (item == RhythmcMaker.SAVE_SCENE_ITEM) sendCommand(client, "rhythmc_scene_save");
@@ -151,9 +151,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             return ActionResult.FAIL;
         });
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            if (effectEditorPreviewPrepared && client.options.getPerspective() != Perspective.FIRST_PERSON) {
-                client.options.setPerspective(Perspective.FIRST_PERSON);
-            }
+            if (effectEditorPreviewPrepared) applyEffectEditorPerspective();
             if (client.player != null && client.world != null && client.world.getTime() % 5L == 0L
                     && ClientChartAccess.refreshActiveChartIfChanged()) {
                 sidebarRefreshRequested = true;
@@ -169,7 +167,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             }
             updateEditorSidebarSnapshot(client);
             while (settingsKey.wasPressed()) client.setScreen(new PlaceholderScreen("设置"));
-            boolean inPlaybackArea = client.player != null && isEditorDimension(client) && Math.abs(client.player.getX() - 200.5) < 2.0 && Math.abs(client.player.getY() - 66.0) < 2.0 && Math.abs(client.player.getZ() - 0.5) < 2.0;
+            boolean inPlaybackArea = client.player != null && isEditorDimension(client) && Math.abs(client.player.getX() - 200.5) < 2.0 && Math.abs(client.player.getY() - 66.0) < 2.0 && Math.abs(client.player.getZ() - 0.0) < 2.0;
             boolean inChartDimension = client.player != null && isEditorDimension(client);
             if (playbackToggleCooldownTicks > 0) playbackToggleCooldownTicks--;
             if (inChartDimension && playbackAudioDelayTicks > 0) playbackAudioDelayTicks--;
@@ -250,14 +248,12 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         playbackMode = "scroll";
         effectEditorPreviewPrepared = true;
         effectEditorPlaybackRequested = false;
-        // The editor always renders through the virtual Camera. The server-side player
-        // is only a vanilla chunk-tracking anchor and must never become the view source.
         effectEditorCameraLocked = true;
         effectEditorCameraX = 0.0;
         effectEditorCameraHeight = 74.0;
         effectEditorCameraZOffset = 0.0;
         effectEditorPreviousPerspective = client.options.getPerspective();
-        client.options.setPerspective(Perspective.FIRST_PERSON);
+        applyEffectEditorPerspective();
         effectEditorFov = client.options.getFov().getValue().floatValue();
         effectEditorPlayheadBeat = Math.max(0.0, Math.min(Math.max(0.0, chart.totalBeats), effectEditorPlayheadBeat));
         playbackStartBeat = effectEditorPlayheadBeat;
@@ -367,15 +363,27 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         effectEditorCameraHeight = 74.0;
         effectEditorCameraZOffset = 0.0;
         effectEditorFov = -1.0f;
+        restoreEffectEditorPerspective();
+        pendingPlaybackCommand = null;
+        if (playbackAudioRequested || audioProcess != null) stopAudio();
+        playbackAudioRequested = false;
+        if (active) sendCommand(client, previewActive ? "rhythmc_effect_preview_close" : "rhythmc_stop_playback");
+    }
+
+    private static void applyEffectEditorPerspective() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (effectEditorPreviewPrepared && client.options.getPerspective() != Perspective.FIRST_PERSON) {
+            client.options.setPerspective(Perspective.FIRST_PERSON);
+        }
+    }
+
+    private static void restoreEffectEditorPerspective() {
+        MinecraftClient client = MinecraftClient.getInstance();
         Perspective previousPerspective = effectEditorPreviousPerspective;
         effectEditorPreviousPerspective = null;
         if (previousPerspective != null && client.options.getPerspective() != previousPerspective) {
             client.options.setPerspective(previousPerspective);
         }
-        pendingPlaybackCommand = null;
-        if (playbackAudioRequested || audioProcess != null) stopAudio();
-        playbackAudioRequested = false;
-        if (active) sendCommand(client, previewActive ? "rhythmc_effect_preview_close" : "rhythmc_stop_playback");
     }
 
     public static boolean isEffectEditorCameraLocked() {
@@ -393,7 +401,6 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     public static void adjustEffectEditorCamera(double mouseDeltaX, double mouseDeltaY) {
         if (!effectEditorPreviewPrepared || !Double.isFinite(mouseDeltaX) || !Double.isFinite(mouseDeltaY)) return;
         effectEditorCameraLocked = true;
-        // Horizontal drag maps left-to-right to Z+, vertical drag maps bottom-to-top to X+.
         effectEditorCameraZOffset += mouseDeltaX * EFFECT_EDITOR_CAMERA_DRAG_SCALE;
         effectEditorCameraX -= mouseDeltaY * EFFECT_EDITOR_CAMERA_DRAG_SCALE;
     }
@@ -646,9 +653,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     }
 
     private static void startAudio(int startChunk) {
-        ChartManifest chart = ClientChartAccess.resolveActiveChart();
-        double divisionsPerChunk = chart == null ? 1.0 : Math.max(1.0, Math.min(32.0, chart.divisionsPerChunk));
-        startAudioAtBeat(Math.max(0.0, (startChunk - 1.0) * divisionsPerChunk));
+        startAudioAtBeat(PlaybackCoordinates.beatAtChunkStart(startChunk));
     }
 
     private static void startAudioAtBeat(double startBeat) {
@@ -676,7 +681,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             audioErrorLog = Path.of(System.getProperty("java.io.tmpdir"), "rhythmc-maker", "audio-error.log");
             String tempo = tempoFilter(playbackRate);
             String audioFilter = "volume=" + String.format(Locale.ROOT, "%.3f", ClientChartAccess.config().musicVolumeMultiplier) + (tempo.isBlank() ? "" : "," + tempo);
-            audioProcess = new ProcessBuilder(player.toString(), "-nodisp", "-autoexit", "-loglevel", "error", "-probesize", "32", "-analyzeduration", "0", "-ss", String.format(Locale.ROOT, "%.6f", startSeconds), "-i", audio.toString(), "-vn", "-af", audioFilter)
+            audioProcess = new ProcessBuilder(player.toString(), "-nodisp", "-autoexit", "-loglevel", "error", "-probesize", "32", "-analyzeduration", "0", "-ss", String.format(Locale.ROOT, "%.6f", startSeconds), "-i", audio.toString(), "-af", audioFilter, "-f", "null", "-")
                 .redirectError(ProcessBuilder.Redirect.to(audioErrorLog.toFile()))
                 .redirectOutput(ProcessBuilder.Redirect.DISCARD)
                 .start();
@@ -702,15 +707,15 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         Path directory = Path.of(System.getProperty("java.io.tmpdir"), "rhythmc-maker", "native");
         Files.createDirectories(directory);
         Path executable = directory.resolve("ffplay.exe");
-        Path marker = directory.resolve("ffplay-v1.ready");
-        if (Files.isRegularFile(executable) && Files.isRegularFile(marker)) return executable;
+        java.net.URL bundled = RhythmcMakerClient.class.getResource("/rhythmc_maker/native/windows-x86_64/ffplay.exe");
+        if (bundled == null) throw new IOException("Mod 内置音频播放器缺失");
+        long bundledSize = bundled.openConnection().getContentLengthLong();
+        if (Files.isRegularFile(executable) && Files.size(executable) == bundledSize) return executable;
         Path temporary = directory.resolve("ffplay.exe.part");
-        try (var input = RhythmcMakerClient.class.getResourceAsStream("/rhythmc_maker/native/windows-x86_64/ffplay.exe")) {
-            if (input == null) throw new IOException("Mod 内置音频播放器缺失");
+        try (var input = bundled.openStream()) {
             Files.copy(input, temporary, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         }
         Files.move(temporary, executable, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
-        Files.writeString(marker, "ffplay-v1");
         executable.toFile().setExecutable(true);
         return executable;
     }
@@ -735,8 +740,6 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         playbackAudioRequested = false;
         pendingPlaybackCommand = null;
         if (stopServer && effectEditorPreviewPrepared) {
-            // Keep the preview session and its real-player chunk anchor alive while the
-            // editor remains open. Closing the editor sends the explicit close command.
             sendCommand(client, "rhythmc_effect_preview_seek " + String.format(Locale.ROOT, "%.6f", effectEditorPlayheadBeat));
         } else if (stopServer && !playbackStopRequested) {
             playbackStopRequested = true;
@@ -753,7 +756,6 @@ public final class RhythmcMakerClient implements ClientModInitializer {
 
         double centerZ;
         if (effectEditorPreviewPrepared) {
-            // Keep the judgment line in world space; camera drag changes the view relative to it.
             centerZ = PlaybackCoordinates.editorWorldZAtBeat(chart, effectEditorCurrentBeat());
         } else {
             if (playbackTimingProfile == null || playbackTrackProfile == null) return;
