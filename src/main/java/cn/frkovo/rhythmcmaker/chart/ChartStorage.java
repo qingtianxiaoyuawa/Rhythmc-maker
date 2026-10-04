@@ -499,6 +499,29 @@ public final class ChartStorage {
         return Math.max(8, chart.chunkCount * Math.max(1, Math.min(32, chart.divisionsPerChunk)));
     }
 
+    private static void ensureDefaultTrackSpeed(ChartManifest chart) {
+        if (chart.tracks == null) chart.tracks = new ArrayList<>();
+        ChartManifest.Track defaultTrack = chart.tracks.stream()
+                .filter(track -> track != null && track.id == 0)
+                .findFirst()
+                .orElseGet(() -> {
+                    ChartManifest.Track created = new ChartManifest.Track(0);
+                    chart.tracks.add(created);
+                    return created;
+                });
+        double endBeat = Math.max(1.0, Math.max(chart.totalBeats,
+                chart.durationSeconds > 0.0 ? ChartTiming.secondsToBeat(chart, chart.durationSeconds) : 0.0));
+        for (ChartManifest.Track track : chart.tracks) {
+            if (track == null) continue;
+            if (track.speedEvents == null) track.speedEvents = new ArrayList<>();
+            if (track.speedEvents.isEmpty()) track.speedEvents.add(new ChartManifest.NumEvent(0.0, endBeat, 1.0, 1.0, 0));
+        }
+        if (defaultTrack.speedEvents == null) defaultTrack.speedEvents = new ArrayList<>();
+        chart.speedEvents = defaultTrack.speedEvents.stream()
+                .map(event -> new ChartManifest.SpeedEvent(event.startBeat, event.endBeat, event.startValue, event.endValue, event.easingType))
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+    }
+
     public static void create(MinecraftServer server, ChartManifest chart, Path stagedAudio) throws IOException {
         if (chart.id == null || chart.id.isBlank()) chart.id = UUID.randomUUID().toString();
         if (chart.title == null || chart.title.isBlank()) throw new IOException("歌曲名称不能为空");
@@ -512,6 +535,7 @@ public final class ChartStorage {
 
         String extension = extensionOf(stagedAudio.getFileName().toString());
         chart.durationSeconds = readAudioDuration(stagedAudio);
+        ensureDefaultTrackSpeed(chart);
         chart.audioFile = chart.id + "." + extension;
         chart.lastEdited = "";
         Files.move(stagedAudio, audioDirectory(server).resolve(chart.audioFile), StandardCopyOption.REPLACE_EXISTING);
