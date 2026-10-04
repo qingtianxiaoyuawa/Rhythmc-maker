@@ -48,10 +48,6 @@ import net.minecraft.registry.Registries;
 import net.minecraft.registry.Registry;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.registry.RegistryKeys;
-import net.minecraft.scoreboard.ScoreHolder;
-import net.minecraft.scoreboard.ScoreboardDisplaySlot;
-import net.minecraft.scoreboard.ScoreboardObjective;
-import net.minecraft.scoreboard.ServerScoreboard;
 import net.minecraft.scoreboard.Team;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -158,7 +154,6 @@ public final class RhythmcMaker implements ModInitializer {
 
     private static final String[] HUB_MAP_REGIONS = {"r.-1.-1.mca", "r.-1.0.mca", "r.0.-1.mca", "r.0.0.mca"};
     private static final String[] EDITOR_MAP_REGIONS = {"r.-1.-1.mca", "r.-1.0.mca", "r.0.-1.mca", "r.0.0.mca"};
-    private static final String EDITOR_STATUS_OBJECTIVE = "rhythmc_maker_status";
     private static final DateTimeFormatter LAST_EDITED_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final int PLAYBACK_PLATFORM_X = 200;
     private static final int PLAYBACK_PLATFORM_Y = 65;
@@ -266,7 +261,6 @@ public final class RhythmcMaker implements ModInitializer {
             processPlaybackSessions(server);
             long tick = server.getTicks();
             if (tick % SCENE_BORDER_INTERVAL_TICKS == 0) showSceneBoundary(server);
-            if (tick % ticksForSeconds(config.sidebarRefreshIntervalSeconds) == 0) refreshEditorSidebar(server);
             if (tick - lastAutosaveTick < ticksForSeconds(config.autosaveIntervalSeconds)) return;
             lastAutosaveTick = server.getTicks();
             for (CachedChartState state : CHART_CACHE_BY_ID.values()) if (state.dirty) queueChartSave(server, state);
@@ -686,7 +680,6 @@ public final class RhythmcMaker implements ModInitializer {
         ACTIVE_CHART_LANES.remove(player.getUuid());
         SELECTED_START_CHUNKS.remove(player.getUuid());
         prepareHubPlayer(source.getServer(), player, hub);
-        refreshEditorSidebar(source.getServer());
         return 1;
     }
     private static int adjustOffset(net.minecraft.server.command.ServerCommandSource source, int milliseconds) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
@@ -3262,24 +3255,6 @@ private static void showSceneBoundary(MinecraftServer server) {
         for (DisplayEntity.BlockDisplayEntity display : world.getEntitiesByType(EntityType.BLOCK_DISPLAY, entity -> entity.getCommandTags().contains(tag))) {
             display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
         }
-    }
-    private static void refreshEditorSidebar(MinecraftServer server) {
-        ServerScoreboard scoreboard = server.getScoreboard();
-        ScoreboardObjective objective = scoreboard.getNullableObjective(EDITOR_STATUS_OBJECTIVE);
-        if (objective != null && scoreboard.getObjectiveForSlot(ScoreboardDisplaySlot.SIDEBAR) == objective) {
-            scoreboard.setObjectiveSlot(ScoreboardDisplaySlot.SIDEBAR, null);
-        }
-        if (objective != null) scoreboard.removeObjective(objective);
-    }
-    private static void setSidebarLine(ServerScoreboard scoreboard, ScoreboardObjective objective, String holderName, String text, int score) {
-        var entry = scoreboard.getOrCreateScore(ScoreHolder.fromName(holderName), objective);
-        entry.setScore(score);
-        entry.setDisplayText(Text.literal(text));
-    }
-    private static String formatSongTime(double seconds) {
-        long centiseconds = Math.max(0L, (long) Math.floor(seconds * 100.0));
-        long minutes = centiseconds / 6000;
-        return String.format(Locale.ROOT, "%02d:%05.2f", minutes, (centiseconds % 6000) / 100.0);
     }
     private static boolean hasFraction(double value) { return Math.abs(value - Math.rint(value)) > 0.000001; }
     private static String noteTag(String chartId, String noteId) { return "rhythmc_note:" + chartId + ":" + noteId; }

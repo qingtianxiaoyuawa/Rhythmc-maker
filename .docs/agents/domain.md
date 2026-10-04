@@ -2,9 +2,8 @@
 
 This is a single-context project.
 
-- Project context: `CONTEXT.md`
+- Project context: `README.md` and the notes under `.docs/`
 - Agent instructions: `AGENTS.md`
-- Architecture decisions: `docs/adr/`
-- Issue and workflow configuration: `docs/agents/`
+- Issue tracker / triage notes: `.docs/agents/`
 
-Read `CONTEXT.md` before making changes that affect chart formats, playback, scene rendering, or RhythMC 3.0 compatibility.
+Read the project context and the notes under `.docs/agents/` before making changes that affect chart formats, playback, scene rendering, or RhythMC 3.0 compatibility.

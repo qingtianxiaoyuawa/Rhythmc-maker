@@ -632,15 +632,15 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         Path directory = Path.of(System.getProperty("java.io.tmpdir"), "rhythmc-maker", "native");
         Files.createDirectories(directory);
         Path executable = directory.resolve("ffplay.exe");
-        Path marker = directory.resolve("ffplay-v1.ready");
-        if (Files.isRegularFile(executable) && Files.isRegularFile(marker)) return executable;
+        java.net.URL bundled = RhythmcMakerClient.class.getResource("/rhythmc_maker/native/windows-x86_64/ffplay.exe");
+        if (bundled == null) throw new IOException("Mod 内置音频播放器缺失");
+        long bundledSize = bundled.openConnection().getContentLengthLong();
+        if (Files.isRegularFile(executable) && Files.size(executable) == bundledSize) return executable;
         Path temporary = directory.resolve("ffplay.exe.part");
-        try (var input = RhythmcMakerClient.class.getResourceAsStream("/rhythmc_maker/native/windows-x86_64/ffplay.exe")) {
-            if (input == null) throw new IOException("Mod 内置音频播放器缺失");
+        try (var input = bundled.openStream()) {
             Files.copy(input, temporary, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         }
         Files.move(temporary, executable, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
-        Files.writeString(marker, "ffplay-v1");
         executable.toFile().setExecutable(true);
         return executable;
     }
