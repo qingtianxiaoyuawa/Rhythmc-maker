@@ -2204,6 +2204,9 @@ private static void showSceneBoundary(MinecraftServer server) {
             return 0xB77BFF;
         }
     }
+    private static int textDisplayColor(JsonObject effect) {
+        return EffectPayload.value(effect, "color") == null ? 0xFFFFFF : effectColor(effect);
+    }
     private static int parseColorNumber(String value, int fallback) {
         try { return Integer.decode(value) & 0xFFFFFF; } catch (RuntimeException ignored) { return fallback; }
     }
@@ -2795,7 +2798,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             double[] scale = effectVector(effect, "scale", new double[]{1.0, 1.0, 1.0});
             DisplayEntity.TextDisplayEntity display = textDisplays.get(id);
             if (display == null || display.isRemoved()) display = createTextDisplay(id);
-            display.setText(Text.literal(value).styled(style -> style.withColor(effectColor(effect))));
+            display.setText(Text.literal(value).styled(style -> style.withColor(textDisplayColor(effect))));
             display.setLineWidth(Math.max(1, Math.min(4096, effectInt(effect, "lineWidth", 200))));
             display.setTextOpacity(textDisplayOpacity(effect, "opacity", 255));
             display.setBackground(textDisplayBackground(effect));
@@ -2828,7 +2831,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             if (display == null || display.isRemoved()) display = createTextDisplay(id);
             String transformation = effectString(effect, "type", "").toUpperCase(java.util.Locale.ROOT);
             switch (transformation) {
-                case "TEXT" -> display.setText(Text.literal(effectString(effect, "text", effectString(effect, "content", ""))).styled(style -> style.withColor(effectColor(effect))));
+                case "TEXT" -> display.setText(Text.literal(effectString(effect, "text", effectString(effect, "content", ""))).styled(style -> style.withColor(textDisplayColor(effect))));
                 case "SHADOW" -> setTextDisplayShadow(display, effectBoolean(effect, "shadowed", true));
                 case "OPACITY" -> display.setTextOpacity(textDisplayOpacity(effect, "targetOpacity", 255));
                 case "BACKGROUND_COLOR" -> display.setBackground(textDisplayBackground(effect));

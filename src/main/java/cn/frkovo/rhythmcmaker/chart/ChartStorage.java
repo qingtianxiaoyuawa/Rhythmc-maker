@@ -336,6 +336,7 @@ public final class ChartStorage {
         properties.add("position", vectorArray(firstJsonElement(old, properties, "position", "loc", "location"), 0.0, 1.5, 0.0));
         properties.add("rotation", vectorArray(firstJsonElement(old, properties, "rotation"), 0.0, 0.0, 0.0));
         properties.add("scale", vectorArray(firstJsonElement(old, properties, "scale"), 1.0, 1.0, 1.0));
+        if (!properties.has("color") || properties.get("color").isJsonNull()) properties.addProperty("color", "WHITE");
     }
     private static void convertRhythmc2TextDisplayTransformation(JsonObject properties, JsonObject old, String transformation) {
         String id = firstJsonString(old, "id", "displayId", firstJsonString(properties, "id", "displayId", ""));
@@ -353,6 +354,7 @@ public final class ChartStorage {
             case "TEXT" -> {
                 JsonElement text = firstJsonElement(old, properties, "text", "content");
                 if (text != null) properties.add("text", text.deepCopy());
+                if (!properties.has("color") || properties.get("color").isJsonNull()) properties.addProperty("color", "WHITE");
             }
             case "OPACITY" -> {
                 JsonElement opacity = firstJsonElement(old, properties, "targetOpacity", "opacity");
@@ -363,6 +365,7 @@ public final class ChartStorage {
                 properties.add("position", vectorArray(firstJsonElement(old, properties, "position", "to"), 0.0, 0.0, 0.0));
                 properties.add("rotation", rotationArray(firstJsonElement(old, properties, "rotation"), firstJsonElement(old, properties, "rotate")));
                 properties.add("scale", vectorArray(firstJsonElement(old, properties, "scale"), 1.0, 1.0, 1.0));
+        if (!properties.has("color") || properties.get("color").isJsonNull()) properties.addProperty("color", "WHITE");
             }
             default -> properties.addProperty("type", "LINEAR_TRANSFORMATION");
         }
