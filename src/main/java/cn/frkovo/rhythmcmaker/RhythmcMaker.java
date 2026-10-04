@@ -6,6 +6,7 @@ import cn.frkovo.rhythmcmaker.chart.ChartTiming;
 import cn.frkovo.rhythmcmaker.chart.EditorTrackLayout;
 import cn.frkovo.rhythmcmaker.chart.PlaybackCoordinates;
 import cn.frkovo.rhythmcmaker.chart.TrackPlayback;
+import cn.frkovo.rhythmcmaker.common.effect.EffectPayload;
 import cn.frkovo.rhythmcmaker.config.RhythmcMakerConfig;
 import cn.frkovo.rhythmcmaker.scene.SceneEditStorage;
 import cn.frkovo.rhythmcmaker.worldedit.WorldEditIntegration;
@@ -2015,8 +2016,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                     if (updateDisplayPositions) {
                         display.setTeleportDuration(1);
                         display.setInterpolationDuration(0);
-                        double[] position = session.displayPosition(note, songTime, displayZ);
-                        display.setPosition(position[0], position[1], position[2]);
+                        session.applyNotePose(display, note, songTime, displayZ);
                     }
                 }
                 while (session.nextNoteIndex < session.notes.size()) {
@@ -2040,9 +2040,11 @@ private static void showSceneBoundary(MinecraftServer server) {
                         if (session.hitNotes.add(note.id)) playHitSound(session, player, note);
                         continue;
                     }
-                    double[] position = session.displayPosition(note, songTime, PLAYBACK_FRAME_Z - Math.max(0.0, relativeDistance));
+                    double displayZ = PLAYBACK_FRAME_Z - Math.max(0.0, relativeDistance);
+                    double[] position = session.displayPosition(note, songTime, displayZ);
                     DisplayEntity.BlockDisplayEntity display = session.acquire(blockStateForType(note.type), position[0], position[1], position[2]);
                     if (display == null) continue;
+                    session.applyNotePose(display, note, songTime, displayZ);
                     display.addCommandTag("rhythmc_preview:" + player.getUuid());
                     display.setGlowing(true);
                     session.displays.put(note.id, display);
@@ -2155,12 +2157,10 @@ private static void showSceneBoundary(MinecraftServer server) {
         return effectString(effect, "eventType", effectString(effect, "type", "PARTICLE")).trim().toUpperCase(java.util.Locale.ROOT);
     }
     private static String effectString(JsonObject effect, String key, String fallback) {
-        try { JsonObject properties = effectProperties(effect); return effect != null && effect.has(key) ? effect.get(key).getAsString() : properties.has(key) ? properties.get(key).getAsString() : fallback; }
-        catch (RuntimeException ignored) { return fallback; }
+        return EffectPayload.string(effect, key, fallback);
     }
     private static double effectDouble(JsonObject effect, String key, double fallback) {
-        try { JsonObject properties = effectProperties(effect); return effect != null && effect.has(key) ? effect.get(key).getAsDouble() : properties.has(key) ? properties.get(key).getAsDouble() : fallback; }
-        catch (RuntimeException ignored) { return fallback; }
+        return EffectPayload.doubleValue(effect, key, fallback);
     }
     private static Formatting effectFormatting(JsonObject effect, String key, Formatting fallback) {
         Formatting formatting = Formatting.byName(effectString(effect, key, "white").toLowerCase(java.util.Locale.ROOT));
@@ -2177,8 +2177,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         };
     }
     private static int effectColor(JsonObject effect) {
-        JsonObject properties = effectProperties(effect);
-        com.google.gson.JsonElement raw = effect != null && effect.has("color") ? effect.get("color") : properties.get("color");
+        com.google.gson.JsonElement raw = EffectPayload.value(effect, "color");
         if (raw == null || !raw.isJsonPrimitive()) return 0xB77BFF;
         try {
             if (raw.getAsJsonPrimitive().isNumber()) return raw.getAsInt();
@@ -2201,29 +2200,23 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
     }
     private static double[] effectVector(JsonObject effect, String key, double[] fallback) {
-        try {
-            JsonObject properties = effectProperties(effect);
-            com.google.gson.JsonElement value = effect != null && effect.has(key) ? effect.get(key) : properties.get(key);
-            if (value == null || !value.isJsonArray() || value.getAsJsonArray().size() < 3) return fallback;
-            return new double[]{value.getAsJsonArray().get(0).getAsDouble(), value.getAsJsonArray().get(1).getAsDouble(), value.getAsJsonArray().get(2).getAsDouble()};
-        } catch (RuntimeException ignored) { return fallback; }
+        return EffectPayload.vector(effect, key, fallback);
     }
     private static int effectInt(JsonObject effect, String key, int fallback) {
-        try { JsonObject properties = effectProperties(effect); return effect != null && effect.has(key) ? effect.get(key).getAsInt() : properties.has(key) ? properties.get(key).getAsInt() : fallback; }
-        catch (RuntimeException ignored) { return fallback; }
+        return EffectPayload.integer(effect, key, fallback);
     }
     private static float effectFloat(JsonObject effect, String key, float fallback) {
-        try { JsonObject properties = effectProperties(effect); return effect != null && effect.has(key) ? effect.get(key).getAsFloat() : properties.has(key) ? properties.get(key).getAsFloat() : fallback; }
-        catch (RuntimeException ignored) { return fallback; }
+        return EffectPayload.floatValue(effect, key, fallback);
     }
     private static boolean effectBoolean(JsonObject effect, String key, boolean fallback) {
-        try { JsonObject properties = effectProperties(effect); return effect != null && effect.has(key) ? effect.get(key).getAsBoolean() : properties.has(key) ? properties.get(key).getAsBoolean() : fallback; }
-        catch (RuntimeException ignored) { return fallback; }
+        return EffectPayload.booleanValue(effect, key, fallback);
     }
-    private static JsonObject effectProperties(JsonObject effect) { return effect != null && effect.has("properties") && effect.get("properties").isJsonObject() ? effect.getAsJsonObject("properties") : new JsonObject(); }
+    private static JsonObject effectProperties(JsonObject effect) {
+        JsonObject properties = EffectPayload.properties(effect);
+        return properties == null ? new JsonObject() : properties;
+    }
     private static JsonElement effectValue(JsonObject effect, String key) {
-        JsonObject properties = effectProperties(effect);
-        return effect != null && effect.has(key) ? effect.get(key) : properties.get(key);
+        return EffectPayload.value(effect, key);
     }
     private static String textDisplayContents(JsonObject effect) {
         JsonElement contents = effectValue(effect, "contents");
@@ -2674,12 +2667,26 @@ private static void showSceneBoundary(MinecraftServer server) {
         private double[] displayPosition(ChartManifest.Note note, double songTime, double displayZ) {
             double beat = timing.secondsToBeat(songTime - chart.offsetMillis / 1000.0);
             TrackPlayback.Pose pose = trackProfiles.getOrDefault(note.trackId, trackProfiles.get(0)).poseAt(beat);
-            double localX = (note.sourceX == null ? note.x : note.sourceX) * pose.scaleX();
-            double localY = (note.sourceY == null ? note.y - 66.0 : note.sourceY) * pose.scaleY();
-            double radians = Math.toRadians(pose.rotationZ());
-            double rotatedX = localX * Math.cos(radians) - localY * Math.sin(radians);
-            double rotatedY = localX * Math.sin(radians) + localY * Math.cos(radians);
-            return new double[]{PLAYBACK_PLATFORM_X + rotatedX + pose.x(), PLAYBACK_PLATFORM_Y + 1.0 + rotatedY + pose.y(), displayZ - pose.z()};
+            Vector3f local = new Vector3f((float) (note.sourceX == null ? note.x : note.sourceX),
+                    (float) (note.sourceY == null ? note.y - 66.0 : note.sourceY),
+                    (float) (note.sourceZ == null ? 0.0 : note.sourceZ));
+            local.mul((float) pose.scaleX(), (float) pose.scaleY(), (float) pose.scaleZ());
+            trackRotation(pose).transform(local);
+            return new double[]{PLAYBACK_PLATFORM_X + local.x() + pose.x(), PLAYBACK_PLATFORM_Y + 1.0 + local.y() + pose.y(), displayZ - local.z() - pose.z()};
+        }
+        private void applyNotePose(DisplayEntity.BlockDisplayEntity display, ChartManifest.Note note, double songTime, double displayZ) {
+            double beat = timing.secondsToBeat(songTime - chart.offsetMillis / 1000.0);
+            TrackPlayback.Pose pose = trackProfiles.getOrDefault(note.trackId, trackProfiles.get(0)).poseAt(beat);
+            double[] position = displayPosition(note, songTime, displayZ);
+            display.setPosition(position[0], position[1], position[2]);
+            Quaternionf rotation = trackRotation(pose);
+            Vector3f scale = new Vector3f((float) (note.scaleX * pose.scaleX()),
+                    (float) (note.scaleY * pose.scaleY()), (float) (note.scaleZ * pose.scaleZ()));
+            display.setTransformation(new AffineTransformation(new Vector3f(), rotation, scale, new Quaternionf()));
+        }
+        private static Quaternionf trackRotation(TrackPlayback.Pose pose) {
+            return new Quaternionf().rotationXYZ((float) Math.toRadians(pose.rotationX()),
+                    (float) Math.toRadians(pose.rotationY()), (float) Math.toRadians(pose.rotationZ()));
         }
         private void applyTitle(ServerPlayerEntity player, JsonObject effect) {
             String title = effectString(effect, "title", effectString(effect, "text", ""));

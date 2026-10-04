@@ -233,16 +233,9 @@ public final class ChartStorage {
     }
     private static void importRhythmc3Track(ChartManifest chart, ChartTiming.Prepared timing, JsonObject source) {
         ChartManifest.Track track = new ChartManifest.Track(jsonNumber(source, "id", 0).intValue());
-        track.speedEvents = readNumEvents(source, "speedEvents");
-        track.xTransformEvents = readNumEvents(source, "xTransformEvents");
-        track.yTransformEvents = readNumEvents(source, "yTransformEvents");
-        track.zTransformEvents = readNumEvents(source, "zTransformEvents");
-        track.xRotateEvents = readNumEvents(source, "xRotateEvents");
-        track.yRotateEvents = readNumEvents(source, "yRotateEvents");
-        track.zRotateEvents = readNumEvents(source, "zRotateEvents");
-        track.xScaleEvents = readNumEvents(source, "xScaleEvents");
-        track.yScaleEvents = readNumEvents(source, "yScaleEvents");
-        track.zScaleEvents = readNumEvents(source, "zScaleEvents");
+        for (TrackEventChannel channel : TrackEventChannel.values()) {
+            channel.setEvents(track, readNumEvents(source, channel.jsonKey()));
+        }
         chart.tracks.add(track);
         if (!source.has("notes") || !source.get("notes").isJsonArray()) return;
         for (JsonElement sourceElement : source.getAsJsonArray("notes")) {

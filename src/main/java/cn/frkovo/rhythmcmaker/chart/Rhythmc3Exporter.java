@@ -145,16 +145,11 @@ public final class Rhythmc3Exporter {
 
     private static JsonObject trackJson(ChartManifest chart, ChartManifest.Track track, double endBeat) {
         JsonObject result = new JsonObject(); result.addProperty("id", track.id);
-        result.add("speedEvents", numEventList(track.speedEvents, track.id == 0 ? speedEventList(chart, endBeat) : eventList(0.0, endBeat, 0.0)));
-        result.add("xTransformEvents", numEventList(track.xTransformEvents, eventList(0.0, endBeat, 0.0)));
-        result.add("yTransformEvents", numEventList(track.yTransformEvents, eventList(0.0, endBeat, 0.0)));
-        result.add("zTransformEvents", numEventList(track.zTransformEvents, eventList(0.0, endBeat, 0.0)));
-        result.add("xRotateEvents", numEventList(track.xRotateEvents, eventList(0.0, endBeat, 0.0)));
-        result.add("yRotateEvents", numEventList(track.yRotateEvents, eventList(0.0, endBeat, 0.0)));
-        result.add("zRotateEvents", numEventList(track.zRotateEvents, eventList(0.0, endBeat, 0.0)));
-        result.add("xScaleEvents", numEventList(track.xScaleEvents, eventList(0.0, endBeat, 1.0)));
-        result.add("yScaleEvents", numEventList(track.yScaleEvents, eventList(0.0, endBeat, 1.0)));
-        result.add("zScaleEvents", numEventList(track.zScaleEvents, eventList(0.0, endBeat, 1.0)));
+        for (TrackEventChannel channel : TrackEventChannel.values()) {
+            JsonArray fallback = eventList(0.0, endBeat, channel.defaultValue());
+            if (channel == TrackEventChannel.SPEED && track.id == 0) fallback = speedEventList(chart, endBeat);
+            result.add(channel.jsonKey(), numEventList(channel.events(track), fallback));
+        }
         JsonArray notes = new JsonArray(); if (chart.notes != null) for (ChartManifest.Note note : chart.notes) if (note != null && note.trackId == track.id) {
             JsonObject value = new JsonObject(); value.addProperty("noteType", Math.max(0, Math.min(3, note.type))); value.addProperty("beat", exportBeat(note));
             JsonArray position = new JsonArray(); position.add(note.sourceX == null ? note.x : note.sourceX); position.add(note.sourceY == null ? note.y - 66.0 : note.sourceY); position.add(note.sourceZ == null ? 0.0 : note.sourceZ); value.add("pos", position);

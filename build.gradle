@@ -94,3 +94,41 @@ tasks.register("buildAndRunClient") {
     description = "Builds the project, then starts the Fabric test client."
     dependsOn buildTask, runClientTask
 }
+
+
+def updateModVersion = { String nextVersion ->
+    def propertiesFile = file("gradle.properties")
+    def content = propertiesFile.getText("UTF-8")
+    def updated = content.replaceFirst(/(?m)^mod_version=.*$/, "mod_version=${nextVersion}")
+    if (updated == content) throw new GradleException("mod_version is missing from gradle.properties")
+    propertiesFile.write(updated, "UTF-8")
+}
+
+tasks.register("bumpPatchVersion") {
+    group = "release"
+    description = "Increments the c component of mod_version before deployment."
+    doLast {
+        def parts = project.mod_version.toString().tokenize(".").collect { it as int }
+        if (parts.size() != 3) throw new GradleException("mod_version must use a.b.c")
+        updateModVersion("${parts[0]}.${parts[1]}.${parts[2] + 1}")
+    }
+}
+
+tasks.register("bumpMinorVersion") {
+    group = "release"
+    description = "Increments the b component and resets c for a major feature update."
+    doLast {
+        def parts = project.mod_version.toString().tokenize(".").collect { it as int }
+        if (parts.size() != 3) throw new GradleException("mod_version must use a.b.c")
+        updateModVersion("${parts[0]}.${parts[1] + 1}.0")
+    }
+}
+
+tasks.register("deploy") {
+    group = "release"
+    description = "Bumps the patch version and builds the deployable mod jar."
+    dependsOn "bumpPatchVersion"
+    dependsOn buildTask
+}
+
+buildTask.configure { mustRunAfter tasks.named("bumpPatchVersion") }
