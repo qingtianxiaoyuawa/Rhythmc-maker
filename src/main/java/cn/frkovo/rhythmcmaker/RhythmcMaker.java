@@ -176,11 +176,11 @@ public final class RhythmcMaker implements ModInitializer {
     private static final int PLAYBACK_FRAME_Z = -2;
     private static final double PLAYBACK_APPROACH_DISTANCE = 25.0;
     private static final int PLAYBACK_MAX_PRELOADS_PER_TICK = 64;
+    private static final int PLAYBACK_MAX_EFFECTS_PER_TICK = 256;
     private static final int PLAYBACK_MAX_ACTIVE_DISPLAYS = 256;
     private static final double PLAYBACK_MAX_PRELOAD_SECONDS = 15.0;
     // The note always disappears at this fixed world-space line, independent of playerSpeed.
     // Remove on the judgment line so the model and hit sound stay synchronized.
-    private static final double PLAYBACK_DISAPPEAR_Z = PLAYBACK_FRAME_Z;
     private static final int PLAYBACK_DISPLAY_UPDATE_INTERVAL_TICKS = 1;
     // Playback distance uses a 5x visual flow multiplier.
 
@@ -1994,9 +1994,11 @@ private static void showSceneBoundary(MinecraftServer server) {
             session.updateClientTime(player);
             session.updateTextDisplays(songTime);
             if (session.formal) {
+                int effectsProcessedThisTick = 0;
                 while (session.nextEffectIndex < session.effects.size()) {
                     JsonObject effect = session.effects.get(session.nextEffectIndex);
                     if (session.effectSeconds(effect) > songTime) break;
+                    if (effectsProcessedThisTick++ >= PLAYBACK_MAX_EFFECTS_PER_TICK) break;
                     session.nextEffectIndex++;
                     playTrackEffect(session, player, effect);
                 }
@@ -2015,7 +2017,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                         session.recycle(display); iterator.remove(); continue;
                     }
                     double relativeDistance = session.relativeDistance(note, songTime);
-                    double displayZ = Math.min(PLAYBACK_DISAPPEAR_Z, PLAYBACK_FRAME_Z - relativeDistance);
+                    double displayZ = PLAYBACK_FRAME_Z - relativeDistance;
                     if (updateDisplayPositions) {
                         display.setTeleportDuration(1);
                         display.setInterpolationDuration(0);
@@ -2286,6 +2288,34 @@ private static void showSceneBoundary(MinecraftServer server) {
             return alpha << 24 | red << 16 | green << 8 | blue;
         }
         return 0x40000000;
+    }
+    private static Text coloredText(String value, int fallbackColor) {
+        if (value == null || value.isEmpty()) return Text.empty();
+        net.minecraft.text.MutableText result = Text.empty();
+        Style style = Style.EMPTY.withColor(fallbackColor);
+        StringBuilder segment = new StringBuilder();
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (character != '&' || index + 1 >= value.length()) {
+                segment.append(character);
+                continue;
+            }
+            Formatting formatting = Formatting.byCode(value.charAt(index + 1));
+            if (formatting == null) {
+                segment.append(character);
+                continue;
+            }
+            if (!segment.isEmpty()) {
+                result.append(Text.literal(segment.toString()).setStyle(style));
+                segment.setLength(0);
+            }
+            if (formatting == Formatting.RESET) style = Style.EMPTY.withColor(fallbackColor);
+            else if (formatting.isColor()) style = Style.EMPTY.withColor(formatting);
+            else style = style.withFormatting(formatting);
+            index++;
+        }
+        if (!segment.isEmpty()) result.append(Text.literal(segment.toString()).setStyle(style));
+        return result;
     }
     private static net.minecraft.util.Identifier potionIdentifier(String value) {
         String normalized = value == null ? "" : value.trim().toLowerCase(java.util.Locale.ROOT).replace(' ', '_').replace('-', '_');
@@ -2744,6 +2774,8 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
         private void updateTextDisplays(double songTime) {
             long now = System.nanoTime();
+            double beat = timing.secondsToBeat(songTime - chart.offsetMillis / 1000.0);
+            Map<Integer, TrackPlayback.Pose> poses = new java.util.HashMap<>();
             for (var iterator = textDisplays.entrySet().iterator(); iterator.hasNext();) {
                 var entry = iterator.next();
                 String id = entry.getKey();
@@ -2761,7 +2793,8 @@ private static void showSceneBoundary(MinecraftServer server) {
                 Integer track = textDisplayTracks.get(id);
                 double[] anchor = textDisplayAnchors.get(id);
                 if (track != null && anchor != null) {
-                    TrackPlayback.Pose pose = trackProfiles.getOrDefault(track, trackProfiles.get(0)).poseAt(timing.secondsToBeat(songTime - chart.offsetMillis / 1000.0));
+                    TrackPlayback.Prepared profile = trackProfiles.getOrDefault(track, trackProfiles.get(0));
+                    TrackPlayback.Pose pose = poses.computeIfAbsent(track, ignored -> profile.poseAt(beat));
                     double[] nextPose = {pose.x(), pose.y(), pose.z(), pose.rotationX(), pose.rotationY(), pose.rotationZ(), pose.scaleX(), pose.scaleY(), pose.scaleZ()};
                     double[] previousPose = textDisplayLastPoses.get(id);
                     if (previousPose == null || !sameTextDisplayPose(previousPose, nextPose)) {
@@ -2803,14 +2836,14 @@ private static void showSceneBoundary(MinecraftServer server) {
             }
             String value = effectString(effect, "text", effectString(effect, "content", ""));
             if (value.isBlank()) value = textDisplayContents(effect);
-            if (value.isBlank() && !type.equals("TEXT_DISPLAY")) return;
+            if (value.isBlank()) return;
             String positionKey = type.equals("HOLOGRAM") ? "location" : "position";
             double[] position = relativeTextDisplayPosition(effect, positionKey);
             double[] rotation = effectVector(effect, "rotation", new double[]{0.0, 0.0, 0.0});
             double[] scale = effectVector(effect, "scale", new double[]{1.0, 1.0, 1.0});
             DisplayEntity.TextDisplayEntity display = textDisplays.get(id);
             if (display == null || display.isRemoved()) display = acquireTextDisplay(id);
-            display.setText(Text.literal(value).styled(style -> style.withColor(textDisplayColor(effect))));
+            display.setText(coloredText(value, textDisplayColor(effect)));
             display.setLineWidth(Math.max(1, Math.min(4096, effectInt(effect, "lineWidth", 200))));
             display.setTextOpacity(value.isBlank() ? (byte) 0 : textDisplayOpacity(effect, "opacity", 255));
             display.setInvisible(value.isBlank());
@@ -2873,7 +2906,12 @@ private static void showSceneBoundary(MinecraftServer server) {
             if (display == null || display.isRemoved()) display = acquireTextDisplay(id);
             String transformation = effectString(effect, "type", "").toUpperCase(java.util.Locale.ROOT);
             switch (transformation) {
-                case "TEXT" -> display.setText(Text.literal(effectString(effect, "text", effectString(effect, "content", ""))).styled(style -> style.withColor(textDisplayColor(effect))));
+                case "TEXT" -> {
+                    String value = effectString(effect, "text", effectString(effect, "content", ""));
+                    display.setText(coloredText(value, textDisplayColor(effect)));
+                    display.setInvisible(value.isBlank());
+                    display.setTextOpacity(value.isBlank() ? (byte) 0 : (byte) 255);
+                }
                 case "SHADOW" -> setTextDisplayShadow(display, effectBoolean(effect, "shadowed", true));
                 case "OPACITY" -> display.setTextOpacity(textDisplayOpacity(effect, "targetOpacity", 255));
                 case "BACKGROUND_COLOR" -> display.setBackground(textDisplayBackground(effect));
@@ -2886,7 +2924,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                     textDisplayLastPoses.put(id, new double[]{position[0], position[1], position[2], rotation[0], rotation[1], rotation[2], scale[0], scale[1], scale[2]});
                     long durationMillis = Math.max(0L, (long) effectDouble(effect, "duration", 0.0));
                     int interpolationTicks = (int) Math.min(59L, Math.max(0L, (durationMillis + 49L) / 50L));
-                    display.setInterpolationDuration(interpolationTicks);
+                    display.setInterpolationDuration(Math.min(20, interpolationTicks));
                     textDisplayAnchors.put(id, position.clone());
                 }
                 default -> LOGGER.warn("Unknown RhythMC text display transformation '{}'", transformation);
@@ -3749,10 +3787,6 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
     }
 }
-
-
-
-
 
 
 
