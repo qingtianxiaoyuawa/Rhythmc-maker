@@ -2312,6 +2312,22 @@ private static void showSceneBoundary(MinecraftServer server) {
             case "regen" -> "regeneration"; default -> numeric;
         });
     }
+    private static int potionDurationTicks(JsonObject effect, double playbackRate) {
+        int durationTicks = effectInt(effect, "durationTicks", Integer.MIN_VALUE);
+        if (durationTicks != Integer.MIN_VALUE) {
+            return scaledPotionDurationTicks(durationTicks, playbackRate);
+        }
+        int durationMillis = effectInt(effect, "durationMillis", Integer.MIN_VALUE);
+        if (durationMillis != Integer.MIN_VALUE) {
+            return scaledPotionDurationTicks((durationMillis + 49) / 50, playbackRate);
+        }
+        return scaledPotionDurationTicks(effectInt(effect, "duration", 100), playbackRate);
+    }
+    private static int scaledPotionDurationTicks(int durationTicks, double playbackRate) {
+        double normalizedRate = normalizePlaybackRate(playbackRate);
+        long scaled = (long) Math.ceil(Math.max(1L, durationTicks) / normalizedRate);
+        return (int) Math.min(Integer.MAX_VALUE, Math.max(1L, scaled));
+    }
     private static void stopPlayback(MinecraftServer server, ServerPlayerEntity player, boolean returnPlayer) {
         ScrollJudgementSession scrollSession = SCROLL_JUDGEMENT_SESSIONS.remove(player.getUuid());
         if (scrollSession != null) {
@@ -2585,13 +2601,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                     return;
                 }
                 int amplifier = Math.max(0, Math.min(255, effectInt(effect, "amplifier", effectInt(effect, "level", 0))));
-                int duration;
-                if (effectInt(effect, "durationTicks", Integer.MIN_VALUE) != Integer.MIN_VALUE) {
-                    duration = Math.max(1, effectInt(effect, "durationTicks", 100));
-                } else {
-                    long durationMillis = Math.max(50L, (long) effectDouble(effect, "duration", 31_536_000_000.0));
-                    duration = (int) Math.min(Integer.MAX_VALUE, Math.max(1L, (durationMillis + 49L) / 50L));
-                }
+                int duration = potionDurationTicks(effect, rate);
                 player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(entry, duration, amplifier,
                         effectBoolean(effect, "ambient", false), effectBoolean(effect, "particles", true), true));
             } catch (RuntimeException exception) {
@@ -3693,7 +3703,6 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
     }
 }
-
 
 
 

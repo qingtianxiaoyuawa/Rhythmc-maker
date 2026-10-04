@@ -293,6 +293,13 @@ public final class ChartStorage {
             properties.addProperty("type", normalizePotionEffectId(potion));
         }
         if (type.equals("EFFECT") && properties.has("type")) properties.addProperty("type", normalizePotionEffectId(properties.get("type").getAsString()));
+        if (type.equals("EFFECT")) {
+            JsonElement duration = properties.has("durationTicks") ? properties.get("durationTicks") : properties.get("duration");
+            if (duration != null && !duration.isJsonNull()) {
+                properties.addProperty("durationTicks", jsonNumber(properties, properties.has("durationTicks") ? "durationTicks" : "duration", 100).intValue());
+                properties.remove("duration");
+            }
+        }
         if (type.equals("CLEAR_EFFECT")) {
             String effectId = firstJsonString(old, "effect-id", "effect", firstJsonString(properties, "effect-id", "effect", ""));
             if (!effectId.isBlank()) properties.addProperty("type", normalizePotionEffectId(effectId));
