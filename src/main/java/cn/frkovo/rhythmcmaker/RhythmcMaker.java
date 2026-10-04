@@ -163,8 +163,8 @@ public final class RhythmcMaker implements ModInitializer {
     private static final int PLAYBACK_PLATFORM_X = 200;
     private static final int PLAYBACK_PLATFORM_Y = 65;
     private static final int PLAYBACK_PLATFORM_Z = 0;
-    private static final double TEXT_DISPLAY_CENTER_X = 200.5;
-    private static final double TEXT_DISPLAY_CENTER_Y = 66.0;
+    private static final double TEXT_DISPLAY_CENTER_X = 200.45;
+    private static final double TEXT_DISPLAY_CENTER_Y = 65.8;
     private static final double TEXT_DISPLAY_CENTER_Z = -1.0;
     private static final int SCENE_EDIT_BASE_X = 600;
     private static final int SCENE_SIZE = 128;
@@ -2460,7 +2460,9 @@ private static void showSceneBoundary(MinecraftServer server) {
         private int nextNoteIndex;
         private final Map<String, DisplayEntity.BlockDisplayEntity> displays = new java.util.HashMap<>();
         private final Map<String, DisplayEntity.TextDisplayEntity> textDisplays = new java.util.HashMap<>();
+        private final java.util.ArrayDeque<DisplayEntity.TextDisplayEntity> textDisplayPool = new java.util.ArrayDeque<>();
         private final Map<String, double[]> textDisplayAnchors = new java.util.HashMap<>();
+        private final Map<String, double[]> textDisplayLastPoses = new java.util.HashMap<>();
         private final Map<String, Integer> textDisplayTracks = new java.util.HashMap<>();
         private final Map<String, Long> textDisplayExpiresAtNanos = new java.util.HashMap<>();
         private final java.util.ArrayDeque<DisplayEntity.BlockDisplayEntity> displayPool = new java.util.ArrayDeque<>();
@@ -2733,7 +2735,10 @@ private static void showSceneBoundary(MinecraftServer server) {
         private void clearTextDisplays() {
             for (DisplayEntity.TextDisplayEntity display : textDisplays.values()) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
             textDisplays.clear();
+            textDisplayPool.forEach(display -> display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED));
+            textDisplayPool.clear();
             textDisplayAnchors.clear();
+            textDisplayLastPoses.clear();
             textDisplayTracks.clear();
             textDisplayExpiresAtNanos.clear();
         }
@@ -2745,9 +2750,10 @@ private static void showSceneBoundary(MinecraftServer server) {
                 DisplayEntity.TextDisplayEntity display = entry.getValue();
                 Long expires = textDisplayExpiresAtNanos.get(id);
                 if (expires != null && now >= expires) {
-                    display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+                    releaseTextDisplay(id, display);
                     iterator.remove();
                     textDisplayAnchors.remove(id);
+                    textDisplayLastPoses.remove(id);
                     textDisplayTracks.remove(id);
                     textDisplayExpiresAtNanos.remove(id);
                     continue;
@@ -2756,10 +2762,15 @@ private static void showSceneBoundary(MinecraftServer server) {
                 double[] anchor = textDisplayAnchors.get(id);
                 if (track != null && anchor != null) {
                     TrackPlayback.Pose pose = trackProfiles.getOrDefault(track, trackProfiles.get(0)).poseAt(timing.secondsToBeat(songTime - chart.offsetMillis / 1000.0));
-                    setTextDisplayPose(display,
-                            new double[]{pose.x(), pose.y(), pose.z()},
-                            new double[]{pose.rotationX(), pose.rotationY(), pose.rotationZ()},
-                            new double[]{pose.scaleX(), pose.scaleY(), pose.scaleZ()});
+                    double[] nextPose = {pose.x(), pose.y(), pose.z(), pose.rotationX(), pose.rotationY(), pose.rotationZ(), pose.scaleX(), pose.scaleY(), pose.scaleZ()};
+                    double[] previousPose = textDisplayLastPoses.get(id);
+                    if (previousPose == null || !sameTextDisplayPose(previousPose, nextPose)) {
+                        setTextDisplayPose(display,
+                                new double[]{pose.x(), pose.y(), pose.z()},
+                                new double[]{pose.rotationX(), pose.rotationY(), pose.rotationZ()},
+                                new double[]{pose.scaleX(), pose.scaleY(), pose.scaleZ()});
+                        textDisplayLastPoses.put(id, nextPose);
+                    }
                 }
             }
         }
@@ -2768,8 +2779,9 @@ private static void showSceneBoundary(MinecraftServer server) {
             String id = effectString(effect, "id", effectString(effect, "displayId", "rhythmc_effect_" + textDisplays.size()));
             if (type.equals("TEXT_DISPLAY_REMOVE") || type.equals("REMOVE_HOLOGRAM")) {
                 DisplayEntity.TextDisplayEntity display = textDisplays.remove(id);
-                if (display != null) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+                if (display != null) releaseTextDisplay(id, display);
                 textDisplayAnchors.remove(id);
+                textDisplayLastPoses.remove(id);
                 textDisplayTracks.remove(id);
                 textDisplayExpiresAtNanos.remove(id);
                 return;
@@ -2797,22 +2809,38 @@ private static void showSceneBoundary(MinecraftServer server) {
             double[] rotation = effectVector(effect, "rotation", new double[]{0.0, 0.0, 0.0});
             double[] scale = effectVector(effect, "scale", new double[]{1.0, 1.0, 1.0});
             DisplayEntity.TextDisplayEntity display = textDisplays.get(id);
-            if (display == null || display.isRemoved()) display = createTextDisplay(id);
+            if (display == null || display.isRemoved()) display = acquireTextDisplay(id);
             display.setText(Text.literal(value).styled(style -> style.withColor(textDisplayColor(effect))));
             display.setLineWidth(Math.max(1, Math.min(4096, effectInt(effect, "lineWidth", 200))));
-            display.setTextOpacity(textDisplayOpacity(effect, "opacity", 255));
+            display.setTextOpacity(value.isBlank() ? (byte) 0 : textDisplayOpacity(effect, "opacity", 255));
+            display.setInvisible(value.isBlank());
             display.setBackground(textDisplayBackground(effect));
             display.setBillboardMode(DisplayEntity.BillboardMode.FIXED);
             setTextDisplayTransform(display, position, rotation, scale);
+            if (value.isBlank()) {
+                display.setDisplayWidth(0.1f);
+                display.setDisplayHeight(0.1f);
+            }
+            textDisplayLastPoses.put(id, new double[]{position[0], position[1], position[2], rotation[0], rotation[1], rotation[2], scale[0], scale[1], scale[2]});
             setTextDisplayShadow(display, effectBoolean(effect, "shadowed", false));
             display.setGlowing(effectBoolean(effect, "glowing", false));
             textDisplayAnchors.put(id, position.clone());
             long duration = (long) effectDouble(effect, "duration", 0.0);
             if (duration > 0) textDisplayExpiresAtNanos.put(id, System.nanoTime() + duration * 1_000_000L);
             else textDisplayExpiresAtNanos.remove(id);
-            display.setInterpolationDuration(1);
+            display.setInterpolationDuration(value.isBlank() ? 0 : 1);
         }
-        private DisplayEntity.TextDisplayEntity createTextDisplay(String id) {
+        private DisplayEntity.TextDisplayEntity acquireTextDisplay(String id) {
+            DisplayEntity.TextDisplayEntity display = textDisplayPool.pollFirst();
+            if (display == null || display.isRemoved()) display = createTextDisplay();
+            display.setText( Text.empty());
+            display.setTextOpacity((byte) 0);
+            display.setInvisible(true);
+            display.setInterpolationDuration(0);
+            textDisplays.put(id, display);
+            return display;
+        }
+        private DisplayEntity.TextDisplayEntity createTextDisplay() {
             DisplayEntity.TextDisplayEntity display = new DisplayEntity.TextDisplayEntity(EntityType.TEXT_DISPLAY, world);
             display.addCommandTag("rhythmc_effect:" + chart.id);
             display.setPosition(TEXT_DISPLAY_CENTER_X, TEXT_DISPLAY_CENTER_Y, TEXT_DISPLAY_CENTER_Z);
@@ -2820,15 +2848,29 @@ private static void showSceneBoundary(MinecraftServer server) {
             display.setDisplayWidth(0.1f);
             display.setDisplayHeight(0.1f);
             display.setTextOpacity((byte) 0);
+            display.setInvisible(true);
             display.setBillboardMode(DisplayEntity.BillboardMode.FIXED);
             display.setInterpolationDuration(0);
-            textDisplays.put(id, display);
             world.spawnEntity(display);
             return display;
         }
+        private void releaseTextDisplay(String id, DisplayEntity.TextDisplayEntity display) {
+            textDisplays.remove(id);
+            display.setText(Text.empty());
+            display.setTextOpacity((byte) 0);
+            display.setInterpolationDuration(0);
+            display.setPosition(TEXT_DISPLAY_CENTER_X, TEXT_DISPLAY_CENTER_Y, TEXT_DISPLAY_CENTER_Z);
+            display.setTransformation(new AffineTransformation(new Vector3f(), new Quaternionf(), new Vector3f(1.0f, 1.0f, 1.0f), new Quaternionf()));
+            textDisplayPool.addLast(display);
+        }
+        private static boolean sameTextDisplayPose(double[] left, double[] right) {
+            if (left == null || right == null || left.length != right.length) return false;
+            for (int index = 0; index < left.length; index++) if (Math.abs(left[index] - right[index]) > 1.0E-5) return false;
+            return true;
+        }
         private void applyTextDisplayTransformation(String id, JsonObject effect) {
             DisplayEntity.TextDisplayEntity display = textDisplays.get(id);
-            if (display == null || display.isRemoved()) display = createTextDisplay(id);
+            if (display == null || display.isRemoved()) display = acquireTextDisplay(id);
             String transformation = effectString(effect, "type", "").toUpperCase(java.util.Locale.ROOT);
             switch (transformation) {
                 case "TEXT" -> display.setText(Text.literal(effectString(effect, "text", effectString(effect, "content", ""))).styled(style -> style.withColor(textDisplayColor(effect))));
@@ -2841,6 +2883,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                     double[] rotation = effectVector(effect, "rotation", new double[]{0.0, 0.0, 0.0});
                     double[] scale = effectVector(effect, "scale", new double[]{1.0, 1.0, 1.0});
                     setTextDisplayTransform(display, position, rotation, scale);
+                    textDisplayLastPoses.put(id, new double[]{position[0], position[1], position[2], rotation[0], rotation[1], rotation[2], scale[0], scale[1], scale[2]});
                     long durationMillis = Math.max(0L, (long) effectDouble(effect, "duration", 0.0));
                     int interpolationTicks = (int) Math.min(59L, Math.max(0L, (durationMillis + 49L) / 50L));
                     display.setInterpolationDuration(interpolationTicks);
@@ -3706,8 +3749,6 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
     }
 }
-
-
 
 
 
