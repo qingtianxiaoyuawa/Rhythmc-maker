@@ -171,17 +171,19 @@ private void importLegacyMenu(FlowLayout page) {
         Path manifest = draft.manifest;
         Path layout = draft.layout;
         Path song = draft.song;
-        List<ClientChartAccess.ImportedScene> completeScenes = draft.scenes.stream()
-                .filter(Scene::complete)
+        List<ClientChartAccess.ImportedScene> importedScenes = draft.scenes.stream()
                 .map(scene -> new ClientChartAccess.ImportedScene(scene.schem, scene.info))
                 .toList();
         ClientChartAccess.status("正在导入 3.0 谱面，请稍候...");
         client.getServer().execute(() -> {
             try {
-                ClientChartAccess.importRhythmc3(difficulty, manifest, layout, ClientChartAccess.stageAudio(song), completeScenes);
+                ClientChartAccess.importRhythmc3(difficulty, manifest, layout, ClientChartAccess.stageAudio(song), importedScenes);
                 client.execute(() -> {
                     importing = false;
-                    ClientChartAccess.status("3.0 谱面已导入（完整场景 " + completeScenes.size() + " 个）");
+                    long incompleteScenes = draft.scenes.stream().filter(scene -> !scene.complete()).count();
+                    ClientChartAccess.status(incompleteScenes == 0
+                            ? "3.0 谱面已导入（完整场景 " + importedScenes.size() + " 个）"
+                            : "3.0 谱面已导入，但有 " + incompleteScenes + " 个场景未完整导入，已使用默认场景");
                     client.setScreen(new ChartListScreen());
                 });
             } catch (Exception exception) {

@@ -36,6 +36,9 @@ import java.nio.file.Path;
 import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 
 public final class RhythmcMakerClient implements ClientModInitializer {
     private static KeyBinding settingsKey;
@@ -45,6 +48,11 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     private static String selectedPlaybackChartId;
     private static volatile Process audioProcess;
     private static long audioStartedAtNanos;
+    private static volatile double audioProgressSeconds = Double.NaN;
+    private static volatile long audioProgressUpdatedAtNanos;
+    private static Thread audioProgressReader;
+    private static long lastFormalSyncNanos;
+    private static long formalProgressMissingSinceNanos;
     private static ChartTiming.Prepared playbackTimingProfile;
     private static TrackPlayback.Prepared playbackTrackProfile;
     private static double playbackTrackSpeed = 1.0;
@@ -55,6 +63,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     private static Path audioErrorLog;
     private static CompletableFuture<Path> audioPlayerFuture;
     private static boolean audioPreparingNoticeShown;
+    private static boolean audioRetryNoticeShown;
     private static int playbackAudioDelayTicks;
     private static int playbackToggleCooldownTicks;
     private static int playbackStartChunk = 1;
@@ -180,11 +189,37 @@ public final class RhythmcMakerClient implements ClientModInitializer {
                 pendingPlaybackCommand = null;
             }
             if (playbackAudioRequested && audioAttempted && audioProcess == null && pendingPlaybackCommand == null) {
+                retryAudioPlayback(client);
+            }
+            if (playbackAudioRequested && !effectEditorPreviewPrepared) {
+                long now = System.nanoTime();
+                boolean progressFresh = Double.isFinite(audioProgressSeconds)
+                        && audioProgressUpdatedAtNanos > 0
+                        && now - audioProgressUpdatedAtNanos < 1_000_000_000L;
+                if (!progressFresh) {
+                    if (formalProgressMissingSinceNanos == 0L) formalProgressMissingSinceNanos = now;
+                    if (now - formalProgressMissingSinceNanos >= 10_000_000_000L) {
+                        ClientChartAccess.statusWarning("正式播放音频进度丢失，已结束播放");
+                        finishPlayback(client, true);
+                    }
+                } else {
+                    formalProgressMissingSinceNanos = 0L;
+                }
+            }
+            if (audioProcess != null && !audioProcess.isAlive()) {
+                double elapsed = audioStartedAtNanos <= 0 ? 0.0 : (System.nanoTime() - audioStartedAtNanos) / 1_000_000_000.0;
+                if (audioDurationSeconds > 0.0 && elapsed + 0.5 < audioDurationSeconds) retryAudioPlayback(client);
+                else finishPlayback(client, true);
+            } else if (audioProcess != null && audioDurationSeconds > 0.0
+                    && (System.nanoTime() - audioStartedAtNanos) / 1_000_000_000.0 >= audioDurationSeconds + 0.5) {
                 finishPlayback(client, true);
             }
-            if (audioProcess != null && (!audioProcess.isAlive()
-                    || (audioDurationSeconds > 0 && (System.nanoTime() - audioStartedAtNanos) / 1_000_000_000.0 >= audioDurationSeconds + 0.5))) {
-                finishPlayback(client, true);
+            if (playbackAudioRequested && !effectEditorPreviewPrepared && System.nanoTime() - lastFormalSyncNanos >= 250_000_000L
+                    && Double.isFinite(audioProgressSeconds) && audioProgressUpdatedAtNanos > 0
+                    && System.nanoTime() - audioProgressUpdatedAtNanos < 1_000_000_000L) {
+                double songSeconds = playbackStartSeconds + audioProgressSeconds * playbackRate;
+                sendCommand(client, "rhythmc_sync_formal_playback " + String.format(Locale.ROOT, "%.6f", songSeconds));
+                lastFormalSyncNanos = System.nanoTime();
             }
             if (client.player == null || client.getWindow() == null) return;
             boolean control = GLFW.glfwGetKey(client.getWindow().getHandle(), GLFW.GLFW_KEY_LEFT_CONTROL) == GLFW.GLFW_PRESS || GLFW.glfwGetKey(client.getWindow().getHandle(), GLFW.GLFW_KEY_RIGHT_CONTROL) == GLFW.GLFW_PRESS;
@@ -219,6 +254,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         playbackStopRequested = false;
         audioAttempted = false;
         audioPreparingNoticeShown = false;
+        audioRetryNoticeShown = false;
         playbackAudioDelayTicks = 2;
         var activeChart = ClientChartAccess.resolveActiveChart();
         syncSelectedPlaybackChunk(activeChart);
@@ -318,6 +354,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         playbackAudioRequested = true;
         audioAttempted = false;
         audioPreparingNoticeShown = false;
+        audioRetryNoticeShown = false;
         playbackAudioDelayTicks = 0;
         pendingPlaybackCommand = null;
         effectEditorCameraLocked = true;
@@ -342,6 +379,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         playbackStopRequested = false;
         audioAttempted = false;
         audioPreparingNoticeShown = false;
+        audioRetryNoticeShown = false;
         playbackAudioDelayTicks = 0;
         pendingPlaybackCommand = null;
         sendCommand(client, "rhythmc_stop_playback");
@@ -681,10 +719,15 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             audioErrorLog = Path.of(System.getProperty("java.io.tmpdir"), "rhythmc-maker", "audio-error.log");
             String tempo = tempoFilter(playbackRate);
             String audioFilter = "volume=" + String.format(Locale.ROOT, "%.3f", ClientChartAccess.config().musicVolumeMultiplier) + (tempo.isBlank() ? "" : "," + tempo);
-            audioProcess = new ProcessBuilder(player.toString(), "-nodisp", "-autoexit", "-loglevel", "error", "-probesize", "32", "-analyzeduration", "0", "-ss", String.format(Locale.ROOT, "%.6f", startSeconds), "-i", audio.toString(), "-af", audioFilter, "-f", "null", "-")
+            audioProcess = new ProcessBuilder(player.toString(), "-nodisp", "-autoexit", "-loglevel", "error", "-progress", "pipe:1", "-probesize", "32", "-analyzeduration", "0", "-ss", String.format(Locale.ROOT, "%.6f", startSeconds), "-i", audio.toString(), "-vn", "-af", audioFilter)
                 .redirectError(ProcessBuilder.Redirect.to(audioErrorLog.toFile()))
-                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
                 .start();
+            audioProgressSeconds = 0.0;
+            audioProgressUpdatedAtNanos = System.nanoTime();
+            formalProgressMissingSinceNanos = 0L;
+            audioProgressReader = new Thread(() -> readAudioProgress(audioProcess), "rhythmc-maker-audio-progress");
+            audioProgressReader.setDaemon(true);
+            audioProgressReader.start();
             audioStartedAtNanos = System.nanoTime();
             playbackTrackProfile = PlaybackCoordinates.prepareDefaultTrack(chart);
             playbackTrackSpeed = ClientChartAccess.config().playerSpeed;
@@ -720,6 +763,18 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         return executable;
     }
 
+    private static void retryAudioPlayback(MinecraftClient client) {
+        audioAttempted = false;
+        playbackAudioDelayTicks = Math.max(playbackAudioDelayTicks, 10);
+        if (!audioRetryNoticeShown) {
+            ClientChartAccess.statusWarning("播放失败：正在重试音频播放器");
+            audioRetryNoticeShown = true;
+        }
+        Process process = audioProcess;
+        audioProcess = null;
+        if (process != null && process.isAlive()) process.destroy();
+    }
+
     private static void stopAudio() {
         Process process = audioProcess;
         audioProcess = null;
@@ -729,6 +784,25 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         playbackTimingProfile = null;
         playbackTrackProfile = null;
         if (process != null && process.isAlive()) process.destroy();
+        audioProgressSeconds = Double.NaN;
+        audioProgressUpdatedAtNanos = 0L;
+        audioProgressReader = null;
+        formalProgressMissingSinceNanos = 0L;
+    }
+
+    private static void readAudioProgress(Process process) {
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (!line.startsWith("out_time_ms=")) continue;
+                double micros = Double.parseDouble(line.substring("out_time_ms=".length()).trim());
+                if (Double.isFinite(micros) && micros >= 0.0) {
+                    audioProgressSeconds = micros / 1_000_000.0;
+                    audioProgressUpdatedAtNanos = System.nanoTime();
+                }
+            }
+        } catch (IOException | NumberFormatException ignored) {
+        }
     }
 
     private static void finishPlayback(MinecraftClient client, boolean stopServer) {

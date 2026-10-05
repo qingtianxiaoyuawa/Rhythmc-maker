@@ -14,6 +14,7 @@ public final class ChartManifest {
     /** RhythMC offset in milliseconds; positive values move notes later. */
     public long offsetMillis = 0;
     public boolean sceneInitialized = false;
+    public boolean sceneImportIncomplete = false;
     public String difficulty;
     public double level;
     public int divisionsPerChunk = 4;

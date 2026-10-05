@@ -4,6 +4,7 @@ import cn.frkovo.rhythmcmaker.chart.ChartManifest;
 import cn.frkovo.rhythmcmaker.chart.ChartStorage;
 import cn.frkovo.rhythmcmaker.chart.EditorTrackLayout;
 import cn.frkovo.rhythmcmaker.chart.Rhythmc3Exporter;
+import cn.frkovo.rhythmcmaker.common.chart.Rhythmc3EffectCodec;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
@@ -250,6 +251,12 @@ final class ClientChartAccess {
         return Rhythmc3Exporter.export(server(), chart);
     }
 
+    static boolean hasRhythmc3ExportWarnings(ChartManifest chart) {
+        if (chart == null || chart.effects == null) return false;
+        for (com.google.gson.JsonObject effect : chart.effects) if (Rhythmc3EffectCodec.containsLocalPreviewProperties(effect)) return true;
+        return false;
+    }
+
     static void delete(ChartManifest chart) throws IOException {
         ChartStorage.delete(server(), chart);
     }
@@ -288,6 +295,11 @@ final class ClientChartAccess {
     static void status(String message) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player != null) client.player.sendMessage(Text.literal(message), true);
+    }
+
+    static void statusWarning(String message) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.player != null) client.player.sendMessage(Text.literal(message).formatted(net.minecraft.util.Formatting.RED), true);
     }
 }
 
