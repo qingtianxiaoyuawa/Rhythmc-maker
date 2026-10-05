@@ -8,6 +8,7 @@ import imgui.ImFontGlyphRangesBuilder;
 import imgui.ImGuiIO;
 import imgui.gl3.ImGuiImplGl3;
 import imgui.glfw.ImGuiImplGlfw;
+import imgui.flag.ImGuiConfigFlags;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.resource.Resource;
 import net.minecraft.util.Identifier;
@@ -43,7 +44,9 @@ public final class ImGuiRuntime {
         ImGui.createContext();
         ImGui.styleColorsDark();
         ImGuiIO io = ImGui.getIO();
-        io.setIniFilename(null);
+        io.addConfigFlags(ImGuiConfigFlags.DockingEnable);
+        io.setConfigDockingAlwaysTabBar(true);
+        io.setIniFilename(client.runDirectory.toPath().resolve("config").resolve("rhythmc-maker-imgui.ini").toString());
         ImFont editorFont = loadEditorFont(client);
         if (!PLATFORM.init(client.getWindow().getHandle(), true)) {
             ImGui.destroyContext();
