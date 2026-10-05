@@ -594,9 +594,17 @@ public final class RhythmcMaker implements ModInitializer {
                 extendEditorArea(editor, 0, chart.trackLength, chartBeats(source.getServer(), chartId), laneCount(chart));
             }
             if (!chart.sceneInitialized) {
-                buildPlaybackArea(editor, laneCount(chart));
+                Path initialScene = SceneEditStorage.schematicPath(source.getServer(), chart.id, 1);
+                if (Files.isRegularFile(initialScene)) {
+                    SCENE_IMPORT_TASKS.offer(new SceneImportTask(chart, initialScene, PLAYBACK_PLATFORM_X, PLAYBACK_PLATFORM_Y, PLAYBACK_PLATFORM_Z));
+                    IMPORTING_CHARTS.add(chart.id);
+                } else {
+                    buildPlaybackArea(editor, laneCount(chart));
+                    queueSceneCapture(editor, chart.id, 1, PLAYBACK_PLATFORM_X, null, false);
+                }
                 chart.sceneInitialized = true;
                 saveChart(source.getServer(), chart);
+                queueChartSave(source.getServer(), CHART_CACHE_BY_ID.get(chart.id));
             }
             markSelectedStartChunk(editor, chart, selectedStartChunk(player, chart));
             // Queue note updates so the dimension-change packet is not delayed by a full-chart refresh.
