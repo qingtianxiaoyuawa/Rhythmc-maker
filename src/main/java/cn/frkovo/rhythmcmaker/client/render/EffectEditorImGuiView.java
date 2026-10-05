@@ -94,6 +94,7 @@ public final class EffectEditorImGuiView {
     private boolean timelineDraggingRange;
     private boolean spaceKeyDown;
     private double timelineLastSeekBeat = Double.NaN;
+    private int timelineRowOffset;
     private boolean applyDefaultDockLayout;
     private int libraryDockNodeId;
     private int previewDockNodeId;
@@ -661,7 +662,8 @@ public final class EffectEditorImGuiView {
     }
 
     private void drawTimelineCanvas(float left, float top, float width, float height, double maxBeat) {
-        List<TimelineRow> rows = buildTimelineRows();
+        int visibleRowCapacity = Math.max(1, (int) Math.floor((height - 54.0f) / 24.0f));
+        List<TimelineRow> rows = buildTimelineRows(visibleRowCapacity, timelineRowOffset);
         if (rows.isEmpty()) rows = List.of(new TimelineRow("事件", "暂无事件", -1, List.of(), false));
         float trackWidth = Math.min(240.0f, Math.max(96.0f, width * 0.26f));
         float timelineLeft = left + trackWidth;
@@ -815,7 +817,7 @@ public final class EffectEditorImGuiView {
         }
     }
 
-    private List<TimelineRow> buildTimelineRows() {
+    private List<TimelineRow> buildTimelineRows(int visibleRowCapacity, int rowOffset) {
         List<TimelineRow> rows = new ArrayList<>();
         List<String> groups = new ArrayList<>();
         for (JsonObject event : workingEffects) {

@@ -409,8 +409,11 @@ public final class RhythmcMaker implements ModInitializer {
             dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_offset")
                 .then(net.minecraft.server.command.CommandManager.argument("milliseconds", com.mojang.brigadier.arguments.IntegerArgumentType.integer(-60000, 60000))
                     .executes(context -> adjustOffset(context.getSource(), com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "milliseconds")))));
-            dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_stop_playback")
-                .executes(context -> stopPlaybackCommand(context.getSource())));
+             dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_stop_playback")
+                 .executes(context -> stopPlaybackCommand(context.getSource())));
+             dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_sync_formal_playback")
+                 .then(net.minecraft.server.command.CommandManager.argument("songSeconds", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg(0.0))
+                     .executes(context -> syncFormalPlayback(context.getSource(), com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "songSeconds")))));
             dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_play")
                 .executes(context -> togglePlayback(context.getSource()))
                 .then(net.minecraft.server.command.CommandManager.argument("startChunk", com.mojang.brigadier.arguments.IntegerArgumentType.integer(1, 4096))
@@ -1109,6 +1112,7 @@ public final class RhythmcMaker implements ModInitializer {
     }
     public static void installImportedScenes(MinecraftServer server, ChartManifest chart, java.util.List<ImportedScene> imported) throws IOException {
         if (imported == null || imported.isEmpty()) return;
+        chart.sceneImportIncomplete = imported.stream().anyMatch(scene -> !isCompleteImportedScene(scene));
         ChartDimensionManager.key(chart);
         java.util.List<SceneEditStorage.Scene> scenes = SceneEditStorage.list(server, chart.id);
         java.util.List<SceneImportTask> pending = new java.util.ArrayList<>();
@@ -1132,6 +1136,7 @@ public final class RhythmcMaker implements ModInitializer {
             pending.add(new SceneImportTask(chart, importedScene.schem(), scene.x, PLAYBACK_PLATFORM_Y, PLAYBACK_PLATFORM_Z));
         }
         SceneEditStorage.save(server, chart.id, scenes);
+        saveChart(server, chart);
         for (SceneImportTask task : pending) SCENE_IMPORT_TASKS.add(task);
         if (!pending.isEmpty()) {
             IMPORTING_CHARTS.add(chart.id);
@@ -1941,6 +1946,13 @@ private static void showSceneBoundary(MinecraftServer server) {
         stopPlayback(source.getServer(), player, true);
         return 1;
     }
+    private static int syncFormalPlayback(net.minecraft.server.command.ServerCommandSource source, double songSeconds) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayerEntity player = source.getPlayerOrThrow();
+        PlaybackSession session = PLAYBACK_SESSIONS.get(player.getUuid());
+        if (session == null || !session.formal || !Double.isFinite(songSeconds)) return 0;
+        session.resync(songSeconds);
+        return 1;
+    }
     private static int togglePlayback(net.minecraft.server.command.ServerCommandSource source) throws com.mojang.brigadier.exceptions.CommandSyntaxException { return togglePlayback(source, -1, "formal", 1.0); }
     private static int togglePlayback(net.minecraft.server.command.ServerCommandSource source, int requestedStartChunk) throws com.mojang.brigadier.exceptions.CommandSyntaxException { return togglePlayback(source, requestedStartChunk, "formal", 1.0); }
     private static int togglePlayback(net.minecraft.server.command.ServerCommandSource source, int requestedStartChunk, String requestedMode, double requestedRate) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
@@ -2605,8 +2617,8 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final ChartTiming.Prepared timing;
 
         private final Map<Integer, TrackPlayback.Prepared> trackProfiles = new java.util.HashMap<>();
-        private final double startSeconds;
-        private final long startNanos;
+        private double startSeconds;
+        private long startNanos;
         private final boolean formal;
         private final double rate;
         private final java.util.List<ChartManifest.Note> notes;
@@ -2635,9 +2647,28 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final java.util.Set<String> hitNotes = new java.util.HashSet<>();
         private int nextEffectIndex;
         private long lastDisplayUpdateTick = Long.MIN_VALUE;
+        private long lastResyncNanos;
 
         private boolean playedTapSoundThisTick;
         private boolean playedLookSoundThisTick;
+        private void resync(double songSeconds) {
+            long now = System.nanoTime();
+            if (now - lastResyncNanos < 100_000_000L) return;
+            double current = startSeconds + Math.max(0.0, (now - startNanos) / 1_000_000_000.0) * rate;
+            double delta = songSeconds - current;
+            if (Math.abs(delta) < 0.05) return;
+            lastResyncNanos = now;
+            if (Math.abs(delta) < 0.15) {
+                startSeconds += delta * 0.25;
+                return;
+            }
+            double corrected = Math.max(0.0, songSeconds);
+            startSeconds = corrected;
+            startNanos = now;
+            nextNoteIndex = 0;
+            nextEffectIndex = 0;
+            while (nextNoteIndex < notes.size() && noteTimes.getOrDefault(notes.get(nextNoteIndex).id, Double.POSITIVE_INFINITY) < corrected) nextNoteIndex++;
+        }
         private PlaybackSession(ServerWorld world, double returnX, double returnY, double returnZ, float returnYaw, float returnPitch, ChartManifest chart, double startSeconds, long startNanos, String mode, double rate) {
             this.world = world;
             this.returnX = returnX;
