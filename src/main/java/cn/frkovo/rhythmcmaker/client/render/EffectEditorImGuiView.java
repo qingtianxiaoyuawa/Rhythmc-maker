@@ -95,6 +95,13 @@ public final class EffectEditorImGuiView {
     private boolean spaceKeyDown;
     private double timelineLastSeekBeat = Double.NaN;
     private int timelineRowOffset;
+    private boolean timelineDraggingScrollBar;
+    private float timelineScrollBarDragOffset;
+    private float timelineBoundsLeft = -1.0f;
+    private float timelineBoundsTop = -1.0f;
+    private float timelineBoundsRight = -1.0f;
+    private float timelineBoundsBottom = -1.0f;
+    private int timelineVisibleRowCapacity;
     private boolean applyDefaultDockLayout;
     private int libraryDockNodeId;
     private int previewDockNodeId;
@@ -168,6 +175,7 @@ public final class EffectEditorImGuiView {
         drawPreview(leftWidth + 8.0f, top, centerWidth, contentHeight, client);
         drawInspector(leftWidth + centerWidth + 16.0f, top, rightWidth, contentHeight);
         drawTimeline(0.0f, top + contentHeight + 8.0f, width, timelineHeight);
+        handleCameraWheelOutsideTimeline();
         applyDefaultDockLayout = false;
     }
 
@@ -191,13 +199,6 @@ public final class EffectEditorImGuiView {
                 }
             } else if (ImGui.isMouseReleased(2)) {
                 cameraDragLogged = false;
-            }
-            float wheel = ImGui.getIO().getMouseWheel();
-            if (Math.abs(wheel) > 0.001f) {
-                RhythmcMakerClient.adjustEffectEditorCameraHeight(wheel);
-                LOGGER.info("Effect camera wheel consumed by input layer: delta={}, position={}",
-                        wheel, RhythmcMakerClient.effectEditorCameraPosition());
-                ImGui.getIO().setMouseWheel(0.0f);
             }
         }
         ImGui.end();
@@ -672,6 +673,11 @@ public final class EffectEditorImGuiView {
         float footerHeight = 20.0f;
         float rowsTop = top + rulerHeight;
         float rowsBottom = Math.max(rowsTop + 24.0f, top + height - footerHeight);
+        timelineBoundsLeft = left;
+        timelineBoundsTop = top;
+        timelineBoundsRight = timelineRight;
+        timelineBoundsBottom = top + height;
+        timelineVisibleRowCapacity = visibleRowCapacity;
         float timelineWidth = Math.max(1.0f, timelineRight - timelineLeft);
         double zoomSpan = Math.max(0.05, Math.min(1.0, timelineZoomMax - timelineZoomMin));
         timelineZoomMin = clamp01(timelineZoomMin);
@@ -751,6 +757,7 @@ public final class EffectEditorImGuiView {
         float rangeLeft = (float) (timelineLeft + timelineWidth * timelineZoomMin);
         float rangeRight = (float) (timelineLeft + timelineWidth * timelineZoomMax);
         drawList.addRectFilled(rangeLeft, footerTop + 4.0f, rangeRight, footerTop + 16.0f, 0xFF61A7D8);
+        drawTimelineScrollBar(drawList, timelineRight - 10.0f, rowsTop, rowsBottom, visibleRowCapacity);
         drawList.addText(left + 8.0f, footerTop + 4.0f, 0xFF9CA9B8,
                 String.format(Locale.ROOT, "%.0f%%", (1.0 / Math.max(0.05, zoomSpan)) * 100.0));
         drawList.popClipRect();
@@ -768,11 +775,23 @@ public final class EffectEditorImGuiView {
         boolean hovered = ImGui.isMouseHoveringRect(left, top, right, top + height, true);
         boolean contentHovered = hovered && mouseX >= timelineLeft && mouseY >= top && mouseY < footerTop;
         ImGuiIO io = ImGui.getIO();
-        if (contentHovered && Math.abs(io.getMouseWheel()) > 0.001f) {
-            zoomTimelineAt(mouseX, timelineLeft, timelineWidth, io.getMouseWheel());
+        boolean scrollBarHovered = hovered && mouseX >= timelineRight(timelineLeft, timelineWidth) - 12.0f
+                && mouseY >= top + 34.0f && mouseY < footerTop;
+        if (hovered && Math.abs(io.getMouseWheel()) > 0.001f) {
+            float wheel = io.getMouseWheel();
+            if (isControlPressed()) {
+                if (contentHovered) zoomTimelineAt(mouseX, timelineLeft, timelineWidth, wheel);
+            } else {
+                int direction = wheel > 0.0f ? -1 : 1;
+                timelineRowOffset = Math.max(0, Math.min(maxTimelineRowOffset(), timelineRowOffset + direction * 3));
+            }
+            io.setMouseWheel(0.0f);
         }
         if (ImGui.isMouseClicked(0) && hovered) {
-            if (mouseY >= footerTop) {
+            if (scrollBarHovered) {
+                timelineDraggingScrollBar = true;
+                timelineScrollBarDragOffset = mouseY - timelineScrollBarTop(top + 34.0f, footerTop);
+            } else if (mouseY >= footerTop) {
                 timelineDraggingRange = true;
                 moveTimelineRange(mouseX, timelineLeft, timelineWidth);
             } else if (contentHovered) {
@@ -795,6 +814,7 @@ public final class EffectEditorImGuiView {
             }
         }
         if (timelineDraggingRange && ImGui.isMouseDown(0)) moveTimelineRange(mouseX, timelineLeft, timelineWidth);
+        if (timelineDraggingScrollBar && ImGui.isMouseDown(0)) moveTimelineScrollBar(mouseY, top + 34.0f, footerTop);
         if (timelineDraggingPlayhead && ImGui.isMouseDown(0)) {
             seekTimelineBeat(timelineXToBeat(mouseX, timelineLeft, timelineWidth, minBeat, maxVisibleBeat), maxBeat);
         }
@@ -809,6 +829,7 @@ public final class EffectEditorImGuiView {
         }
         if (ImGui.isMouseReleased(0)) {
             timelineDraggingRange = false;
+            timelineDraggingScrollBar = false;
             timelineDraggingPlayhead = false;
             timelineDraggedEvent = -1;
             timelineDraggedChannel = -1;
@@ -903,6 +924,74 @@ public final class EffectEditorImGuiView {
             timelineLastSeekBeat = target;
         }
         status = "播放头已跳转到 " + formatChunkPosition(target);
+    }
+
+    private void handleCameraWheelOutsideTimeline() {
+        ImGuiIO io = ImGui.getIO();
+        float wheel = io.getMouseWheel();
+        if (Math.abs(wheel) <= 0.001f) return;
+        float mouseX = ImGui.getMousePosX();
+        float mouseY = ImGui.getMousePosY();
+        boolean overTimeline = mouseX >= timelineBoundsLeft && mouseX <= timelineBoundsRight
+                && mouseY >= timelineBoundsTop && mouseY <= timelineBoundsBottom;
+        if (!overTimeline) {
+            RhythmcMakerClient.adjustEffectEditorCameraHeight(wheel);
+            io.setMouseWheel(0.0f);
+        }
+    }
+
+    private boolean isControlPressed() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.getWindow() == null) return false;
+        long handle = client.getWindow().getHandle();
+        return GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_LEFT_CONTROL) == GLFW.GLFW_PRESS
+                || GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_RIGHT_CONTROL) == GLFW.GLFW_PRESS;
+    }
+
+    private int totalTimelineRows() {
+        List<String> types = new ArrayList<>();
+        for (JsonObject event : workingEffects) {
+            String type = eventType(event);
+            if (!types.contains(type)) types.add(type);
+        }
+        return types.size() + workingEffects.size();
+    }
+
+    private int maxTimelineRowOffset() {
+        return Math.max(0, totalTimelineRows() - Math.max(1, timelineVisibleRowCapacity));
+    }
+
+    private void drawTimelineScrollBar(ImDrawList drawList, float left, float top, float bottom, int visibleRows) {
+        int totalRows = Math.max(1, totalTimelineRows());
+        float trackHeight = Math.max(1.0f, bottom - top);
+        float thumbHeight = Math.max(24.0f, trackHeight * Math.min(1.0f, visibleRows / (float) totalRows));
+        float travel = Math.max(0.0f, trackHeight - thumbHeight);
+        float progress = maxTimelineRowOffset() == 0 ? 0.0f : timelineRowOffset / (float) maxTimelineRowOffset();
+        float thumbTop = top + travel * progress;
+        drawList.addRectFilled(left, top, left + 8.0f, bottom, 0xFF202832, 3.0f);
+        drawList.addRectFilled(left, thumbTop, left + 8.0f, thumbTop + thumbHeight, 0xFF6B91B5, 3.0f);
+    }
+
+    private float timelineScrollBarTop(float top, float bottom) {
+        int totalRows = Math.max(1, totalTimelineRows());
+        float trackHeight = Math.max(1.0f, bottom - top);
+        float thumbHeight = Math.max(24.0f, trackHeight * Math.min(1.0f, timelineVisibleRowCapacity / (float) totalRows));
+        float travel = Math.max(0.0f, trackHeight - thumbHeight);
+        float progress = maxTimelineRowOffset() == 0 ? 0.0f : timelineRowOffset / (float) maxTimelineRowOffset();
+        return top + travel * progress;
+    }
+
+    private void moveTimelineScrollBar(float mouseY, float top, float bottom) {
+        int totalRows = Math.max(1, totalTimelineRows());
+        float trackHeight = Math.max(1.0f, bottom - top);
+        float thumbHeight = Math.max(24.0f, trackHeight * Math.min(1.0f, timelineVisibleRowCapacity / (float) totalRows));
+        float travel = Math.max(1.0f, trackHeight - thumbHeight);
+        float target = Math.max(0.0f, Math.min(travel, mouseY - timelineScrollBarDragOffset - top));
+        timelineRowOffset = (int) Math.round(target / travel * maxTimelineRowOffset());
+    }
+
+    private float timelineRight(float timelineLeft, float timelineWidth) {
+        return timelineLeft + timelineWidth;
     }
 
     private void zoomTimelineAt(float mouseX, float timelineLeft, float timelineWidth, float wheel) {
