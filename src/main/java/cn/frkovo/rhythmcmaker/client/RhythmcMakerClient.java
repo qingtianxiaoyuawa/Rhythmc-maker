@@ -193,21 +193,6 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             if (playbackAudioRequested && audioAttempted && audioProcess == null && pendingPlaybackCommand == null) {
                 retryAudioPlayback(client);
             }
-            if (playbackAudioRequested && !effectEditorPreviewPrepared) {
-                long now = System.nanoTime();
-                boolean progressFresh = Double.isFinite(audioProgressSeconds)
-                        && audioProgressUpdatedAtNanos > 0
-                        && now - audioProgressUpdatedAtNanos < 1_000_000_000L;
-                if (!progressFresh) {
-                    if (formalProgressMissingSinceNanos == 0L) formalProgressMissingSinceNanos = now;
-                    if (now - formalProgressMissingSinceNanos >= 10_000_000_000L) {
-                        ClientChartAccess.statusWarning("正式播放音频进度丢失，已结束播放");
-                        finishPlayback(client, true);
-                    }
-                } else {
-                    formalProgressMissingSinceNanos = 0L;
-                }
-            }
             if (audioSessionCreatedAtNanos > 0L
                     && System.nanoTime() - audioSessionCreatedAtNanos >= 1_200_000_000_000L) {
                 ClientChartAccess.statusWarning("Audio output session exceeded 20 minutes");
@@ -223,9 +208,9 @@ public final class RhythmcMakerClient implements ClientModInitializer {
                 finishPlayback(client, true);
             }
             if (playbackAudioRequested && !effectEditorPreviewPrepared && System.nanoTime() - lastFormalSyncNanos >= 250_000_000L
-                    && Double.isFinite(audioProgressSeconds) && audioProgressUpdatedAtNanos > 0
-                    && System.nanoTime() - audioProgressUpdatedAtNanos < 1_000_000_000L) {
-                double songSeconds = playbackStartSeconds + audioProgressSeconds * playbackRate;
+                    && audioStartedAtNanos > 0L) {
+                double songSeconds = playbackStartSeconds
+                        + Math.max(0.0, (System.nanoTime() - audioStartedAtNanos) / 1_000_000_000.0) * playbackRate;
                 sendCommand(client, "rhythmc_sync_formal_playback " + String.format(Locale.ROOT, "%.6f", songSeconds));
                 lastFormalSyncNanos = System.nanoTime();
             }
@@ -729,7 +714,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             audioErrorLog = Path.of(System.getProperty("java.io.tmpdir"), "rhythmc-maker", "audio-error.log");
             String tempo = tempoFilter(playbackRate);
             String audioFilter = "volume=" + String.format(Locale.ROOT, "%.3f", ClientChartAccess.config().musicVolumeMultiplier) + (tempo.isBlank() ? "" : "," + tempo);
-            audioProcess = new ProcessBuilder(player.toString(), "-nodisp", "-autoexit", "-loglevel", "error", "-progress", "pipe:1", "-probesize", "32", "-analyzeduration", "0", "-ss", String.format(Locale.ROOT, "%.6f", startSeconds), "-i", audio.toString(), "-vn", "-af", audioFilter)
+            audioProcess = new ProcessBuilder(player.toString(), "-nodisp", "-autoexit", "-loglevel", "error", "-probesize", "32", "-analyzeduration", "0", "-ss", String.format(Locale.ROOT, "%.6f", startSeconds), "-i", audio.toString(), "-vn", "-af", audioFilter)
                 .redirectError(ProcessBuilder.Redirect.to(audioErrorLog.toFile()))
                 .start();
             audioProgressSeconds = 0.0;
