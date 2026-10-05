@@ -36,9 +36,6 @@ import java.nio.file.Path;
 import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 
 public final class RhythmcMakerClient implements ClientModInitializer {
     private static KeyBinding settingsKey;
@@ -50,7 +47,6 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     private static long audioStartedAtNanos;
     private static volatile double audioProgressSeconds = Double.NaN;
     private static volatile long audioProgressUpdatedAtNanos;
-    private static Thread audioProgressReader;
     private static long lastFormalSyncNanos;
     private static long formalProgressMissingSinceNanos;
     private static ChartTiming.Prepared playbackTimingProfile;
@@ -194,6 +190,14 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             }
             if (playbackAudioRequested && !effectEditorPreviewPrepared) {
                 long now = System.nanoTime();
+                if (audioProcess != null && audioProcess.isAlive() && audioStartedAtNanos > 0) {
+                    // The bundled minimal ffplay has no -progress output; use the same monotonic clock as playback sync.
+                    double elapsed = Math.max(0.0, (now - audioStartedAtNanos) / 1_000_000_000.0);
+                    audioProgressSeconds = audioDurationSeconds > 0.0
+                            ? Math.min(elapsed, audioDurationSeconds)
+                            : elapsed;
+                    audioProgressUpdatedAtNanos = now;
+                }
                 boolean progressFresh = Double.isFinite(audioProgressSeconds)
                         && audioProgressUpdatedAtNanos > 0
                         && now - audioProgressUpdatedAtNanos < 1_000_000_000L;
@@ -350,7 +354,9 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             if (effectEditorPreviewPrepared) sendCommand(client, "rhythmc_effect_preview_seek " + String.format(Locale.ROOT, "%.6f", effectEditorPlayheadBeat));
             return;
         }
-        sendCommand(client, "rhythmc_stop_playback");
+        // Seek the server-side preview session before restarting local audio so the
+        // virtual camera, judgment line, and audio clock move to the same Beat together.
+        sendCommand(client, "rhythmc_effect_preview_seek " + String.format(Locale.ROOT, "%.6f", effectEditorPlayheadBeat));
         stopAudio();
         playbackAudioRequested = true;
         audioAttempted = false;
@@ -431,7 +437,8 @@ public final class RhythmcMakerClient implements ClientModInitializer {
 
     public static Vec3d effectEditorCameraPosition() {
         ChartManifest chart = ClientChartAccess.resolveActiveChart();
-        if (chart == null) return new Vec3d(effectEditorCameraX, effectEditorCameraHeight, PlaybackCoordinates.CHART_ORIGIN_Z + effectEditorCameraZOffset);
+        if (chart == null) return new Vec3d(effectEditorCameraX, effectEditorCameraHeight,
+                PlaybackCoordinates.CHART_ORIGIN_Z + effectEditorCameraZOffset);
         double beat = effectEditorCurrentBeat();
         double z = PlaybackCoordinates.editorWorldZAtBeat(chart, beat);
         return new Vec3d(effectEditorCameraX, effectEditorCameraHeight, z + effectEditorCameraZOffset);
@@ -720,17 +727,16 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             audioAttempted = true;
             audioErrorLog = Path.of(System.getProperty("java.io.tmpdir"), "rhythmc-maker", "audio-error.log");
             String tempo = tempoFilter(playbackRate);
-            String audioFilter = "volume=" + String.format(Locale.ROOT, "%.3f", ClientChartAccess.config().musicVolumeMultiplier) + (tempo.isBlank() ? "" : "," + tempo);
-            audioProcess = new ProcessBuilder(player.toString(), "-nodisp", "-autoexit", "-loglevel", "error", "-progress", "pipe:1", "-probesize", "32", "-analyzeduration", "0", "-ss", String.format(Locale.ROOT, "%.6f", startSeconds), "-i", audio.toString(), "-vn", "-af", audioFilter)
+            int volumePercent = (int) Math.round(Math.max(0.1, Math.min(2.0, ClientChartAccess.config().musicVolumeMultiplier)) * 100.0);
+            String audioFilter = tempo.isBlank() ? "anull" : tempo;
+            audioProcess = new ProcessBuilder(player.toString(), "-nodisp", "-autoexit", "-loglevel", "error", "-volume", Integer.toString(volumePercent), "-probesize", "32", "-analyzeduration", "0", "-ss", String.format(Locale.ROOT, "%.6f", startSeconds), "-i", audio.toString(), "-vn", "-af", audioFilter)
                 .redirectError(ProcessBuilder.Redirect.to(audioErrorLog.toFile()))
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
                 .start();
-            audioProgressSeconds = 0.0;
-            audioProgressUpdatedAtNanos = System.nanoTime();
-            formalProgressMissingSinceNanos = 0L;
-            audioProgressReader = new Thread(() -> readAudioProgress(audioProcess), "rhythmc-maker-audio-progress");
-            audioProgressReader.setDaemon(true);
-            audioProgressReader.start();
             audioStartedAtNanos = System.nanoTime();
+            audioProgressSeconds = 0.0;
+            audioProgressUpdatedAtNanos = audioStartedAtNanos;
+            formalProgressMissingSinceNanos = 0L;
             playbackTrackProfile = PlaybackCoordinates.prepareDefaultTrack(chart);
             playbackTrackSpeed = ClientChartAccess.config().playerSpeed;
             playbackStartSeconds = startSeconds;
@@ -788,23 +794,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         if (process != null && process.isAlive()) process.destroy();
         audioProgressSeconds = Double.NaN;
         audioProgressUpdatedAtNanos = 0L;
-        audioProgressReader = null;
         formalProgressMissingSinceNanos = 0L;
-    }
-
-    private static void readAudioProgress(Process process) {
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (!line.startsWith("out_time_ms=")) continue;
-                double micros = Double.parseDouble(line.substring("out_time_ms=".length()).trim());
-                if (Double.isFinite(micros) && micros >= 0.0) {
-                    audioProgressSeconds = micros / 1_000_000.0;
-                    audioProgressUpdatedAtNanos = System.nanoTime();
-                }
-            }
-        } catch (IOException | NumberFormatException ignored) {
-        }
     }
 
     private static void finishPlayback(MinecraftClient client, boolean stopServer) {

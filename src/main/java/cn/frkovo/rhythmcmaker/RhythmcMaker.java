@@ -117,8 +117,8 @@ public final class RhythmcMaker implements ModInitializer {
     private static final Map<UUID, Integer> SELECTED_START_CHUNKS = new ConcurrentHashMap<>();
     private static final Map<UUID, PlaybackSession> PLAYBACK_SESSIONS = new ConcurrentHashMap<>();
     private static final Map<UUID, ScrollJudgementSession> SCROLL_JUDGEMENT_SESSIONS = new ConcurrentHashMap<>();
-    /** Original player transform for the effect-editor preview. The player entity is moved only
-     * to keep vanilla chunk tracking centered on the judgment line; CameraMixin still owns view rendering. */
+    /** Original player transform for the effect-editor preview. The player entity follows the
+     * judgment line for chunk tracking while CameraMixin owns the rendered view. */
     private static final Map<UUID, EffectPreviewPlayerState> EFFECT_PREVIEW_PLAYERS = new ConcurrentHashMap<>();
     private static final Set<UUID> EDITOR_TRACK_ADJUSTMENTS = ConcurrentHashMap.newKeySet();
     private static final Map<UUID, Long> EDITOR_TRACK_ADJUSTMENT_NOTICES = new ConcurrentHashMap<>();
@@ -1999,10 +1999,14 @@ private static void showSceneBoundary(MinecraftServer server) {
         if (chart == null || !(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world) || chart.bpm <= 0) return 0;
         double beat = Math.max(0.0, Math.min(Math.max(0.0, chart.totalBeats), requestedBeat));
         double rate = normalizePlaybackRate(requestedRate);
-        stopPlayback(source.getServer(), player, false);
-        ScrollJudgementSession session = new ScrollJudgementSession(world, chart, player, true);
-        SCROLL_JUDGEMENT_SESSIONS.put(player.getUuid(), session);
+        ScrollJudgementSession session = SCROLL_JUDGEMENT_SESSIONS.get(player.getUuid());
+        if (session == null || !session.effectPreview || session.world != world) {
+            stopPlayback(source.getServer(), player, false);
+            session = new ScrollJudgementSession(world, chart, player, true);
+            SCROLL_JUDGEMENT_SESSIONS.put(player.getUuid(), session);
+        }
         session.start(PlaybackCoordinates.songTimeAtBeat(chart, session.timing, beat), System.nanoTime(), rate, player);
+        activateEffectPreviewPlayer(player, world, chart, beat);
         return 1;
     }
     private static int seekEffectPreview(net.minecraft.server.command.ServerCommandSource source, double requestedBeat) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
@@ -2028,21 +2032,37 @@ private static void showSceneBoundary(MinecraftServer server) {
             state = new EffectPreviewPlayerState(world, player.getX(), player.getY(), player.getZ(), player.getYaw(), player.getPitch());
             EFFECT_PREVIEW_PLAYERS.put(playerId, state);
         }
+        if (!state.anchorEnabled) return;
+        double targetX = laneWallRightX(chart) + 0.5;
+        double targetY = 72.0;
         double targetZ = PlaybackCoordinates.editorWorldZAtBeat(chart, beat);
-        if (state.matchesPreviewPosition(0.0, 72.0, targetZ)) return;
-        player.teleport(world, 0.0, 72.0, targetZ, Set.of(), -90.0f, 90.0f, false);
-        state.lastPreviewX = 0.0;
-        state.lastPreviewY = 72.0;
+        if (state.matchesPreviewPosition(player, targetX, targetY, targetZ)) return;
+        if (player.getGameMode() != GameMode.SPECTATOR) player.changeGameMode(GameMode.SPECTATOR);
+        player.teleport(world, targetX, targetY, targetZ, Set.of(), -90.0f, 90.0f, false);
+        state.lastPreviewX = targetX;
+        state.lastPreviewY = targetY;
         state.lastPreviewZ = targetZ;
+    }
+    private static void activateEffectPreviewPlayer(ServerPlayerEntity player, ServerWorld world, ChartManifest chart, double beat) {
+        UUID playerId = player.getUuid();
+        EffectPreviewPlayerState state = EFFECT_PREVIEW_PLAYERS.get(playerId);
+        if (state == null || state.world != world) {
+            state = new EffectPreviewPlayerState(world, player.getX(), player.getY(), player.getZ(), player.getYaw(), player.getPitch());
+            EFFECT_PREVIEW_PLAYERS.put(playerId, state);
+        }
+        state.anchorEnabled = true;
+        ensureEffectPreviewPlayer(player, world, chart, beat);
     }
     private static void restoreEffectPreviewPlayer(ServerPlayerEntity player) {
         EffectPreviewPlayerState state = EFFECT_PREVIEW_PLAYERS.remove(player.getUuid());
         if (state == null) return;
         if (!(player.getEntityWorld() instanceof ServerWorld world) || world != state.world) {
             player.teleport(state.world, state.returnX, state.returnY, state.returnZ, Set.of(), state.returnYaw, state.returnPitch, false);
+            player.changeGameMode(GameMode.CREATIVE);
             return;
         }
         player.teleport(world, state.returnX, state.returnY, state.returnZ, Set.of(), state.returnYaw, state.returnPitch, false);
+        player.changeGameMode(GameMode.CREATIVE);
     }
     public static void ensureEffectPreviewDisplayRange(DisplayEntity display) {
         if (display == null || !display.getCommandTags().stream().anyMatch(RhythmcMaker::isEffectPreviewDisplay)) return;
@@ -2511,6 +2531,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final ServerWorld world;
         private final double returnX, returnY, returnZ;
         private final float returnYaw, returnPitch;
+        private boolean anchorEnabled;
         private double lastPreviewX = Double.NaN;
         private double lastPreviewY = Double.NaN;
         private double lastPreviewZ = Double.NaN;
@@ -2525,10 +2546,15 @@ private static void showSceneBoundary(MinecraftServer server) {
             this.returnPitch = returnPitch;
         }
 
-        private boolean matchesPreviewPosition(double x, double y, double z) {
-            return Double.compare(lastPreviewX, x) == 0
-                    && Double.compare(lastPreviewY, y) == 0
-                    && Double.compare(lastPreviewZ, z) == 0;
+        private boolean matchesPreviewPosition(ServerPlayerEntity player, double x, double y, double z) {
+            return player.getEntityWorld() == world
+                    && player.getGameMode() == GameMode.SPECTATOR
+                    && Math.abs(player.getX() - x) < 0.001
+                    && Math.abs(player.getY() - y) < 0.001
+                    && Math.abs(player.getZ() - z) < 0.001
+                    && Math.abs(lastPreviewX - x) < 0.001
+                    && Math.abs(lastPreviewY - y) < 0.001
+                    && Math.abs(lastPreviewZ - z) < 0.001;
         }
     }
     private static final class ScrollJudgementSession {
@@ -2578,6 +2604,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
 
         private void start(double startSeconds, long startNanos, double rate, ServerPlayerEntity player) {
+            clearEffectSession(player);
             this.startSeconds = startSeconds;
             this.startNanos = startNanos;
             this.rate = rate;
@@ -2592,6 +2619,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
 
         private void seekToBeat(double beat, ServerPlayerEntity player) {
+            clearEffectSession(player);
             this.currentBeat = beat;
             this.startSeconds = PlaybackCoordinates.songTimeAtBeat(chart, timing, beat);
             this.startNanos = Long.MAX_VALUE;
@@ -2599,6 +2627,22 @@ private static void showSceneBoundary(MinecraftServer server) {
             while (nextNoteIndex < noteTimes.size() && noteTimes.get(nextNoteIndex) < startSeconds) nextNoteIndex++;
             this.playing = false;
             if (effectPreview) ensureEffectPreviewPlayer(player, world, chart, beat);
+        }
+
+        private void clearEffectSession(ServerPlayerEntity player) {
+            if (effectSession == null) return;
+            effectSession.resetClientTime(player);
+            effectSession.clearTextDisplays();
+            effectSession.clearGlowTeam();
+            for (DisplayEntity.BlockDisplayEntity display : effectSession.displays.values()) {
+                display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+            }
+            for (DisplayEntity.BlockDisplayEntity display : effectSession.displayPool) {
+                display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+            }
+            effectSession.displays.clear();
+            effectSession.displayPool.clear();
+            effectSession = null;
         }
     }
     private static void cleanupOrphanedPlaybackDisplays(ServerWorld world) {

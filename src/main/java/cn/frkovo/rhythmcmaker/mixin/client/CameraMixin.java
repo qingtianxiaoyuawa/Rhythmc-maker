@@ -25,6 +25,6 @@ abstract class CameraMixin {
                                                        boolean inverseView, float tickDelta, CallbackInfo callback) {
         if (!RhythmcMakerClient.isEffectEditorCameraLocked()) return;
         setPos(RhythmcMakerClient.effectEditorCameraPosition());
-        setRotation(-90.0f, 90.0f);
+        setRotation(90.0f, 90.0f);
     }
 }
