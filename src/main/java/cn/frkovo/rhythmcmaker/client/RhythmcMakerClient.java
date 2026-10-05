@@ -81,6 +81,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     private static double effectEditorCameraHeight = 74.0;
     private static double effectEditorCameraZOffset;
     private static final double EFFECT_EDITOR_CAMERA_MIN_HEIGHT = 72.0;
+    private static final double EFFECT_EDITOR_CAMERA_MAX_HEIGHT = 90.0;
     private static final double EFFECT_EDITOR_CAMERA_DRAG_SCALE = 0.08;
     private static Perspective effectEditorPreviousPerspective;
     private static SidebarSnapshot sidebarSnapshot;
@@ -446,7 +447,8 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     public static void adjustEffectEditorCameraHeight(double wheelDelta) {
         if (!effectEditorPreviewPrepared || !Double.isFinite(wheelDelta)) return;
         effectEditorCameraLocked = true;
-        effectEditorCameraHeight = Math.max(EFFECT_EDITOR_CAMERA_MIN_HEIGHT, effectEditorCameraHeight + wheelDelta);
+        effectEditorCameraHeight = Math.max(EFFECT_EDITOR_CAMERA_MIN_HEIGHT,
+                Math.min(EFFECT_EDITOR_CAMERA_MAX_HEIGHT, effectEditorCameraHeight + wheelDelta));
     }
 
     public static float effectEditorCameraFov(float fallback) {

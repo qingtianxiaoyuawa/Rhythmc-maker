@@ -167,14 +167,14 @@ public final class EffectEditorImGuiView {
         }
         float leftWidth = Math.min(270.0f, Math.max(120.0f, width * 0.18f));
         float rightWidth = Math.min(360.0f, Math.max(190.0f, width * 0.24f));
-        float centerWidth = Math.max(1.0f, width - leftWidth - rightWidth - 24.0f);
+        float centerWidth = Math.max(1.0f, width - leftWidth - rightWidth);
         float top = 54.0f;
         float timelineHeight = height * 0.32f;
-        float contentHeight = Math.max(1.0f, height - top - timelineHeight - 8.0f);
+        float contentHeight = Math.max(1.0f, height - top - timelineHeight);
         drawLibrary(0.0f, top, leftWidth, contentHeight);
-        drawPreview(leftWidth + 8.0f, top, centerWidth, contentHeight, client);
-        drawInspector(leftWidth + centerWidth + 16.0f, top, rightWidth, contentHeight);
-        drawTimeline(0.0f, top + contentHeight + 8.0f, width, timelineHeight);
+        drawPreview(leftWidth, top, centerWidth, contentHeight, client);
+        drawInspector(leftWidth + centerWidth, top, rightWidth, contentHeight);
+        drawTimeline(0.0f, top + contentHeight, width, timelineHeight);
         handleCameraWheelOutsideTimeline();
         applyDefaultDockLayout = false;
     }
@@ -248,7 +248,7 @@ public final class EffectEditorImGuiView {
         imgui.internal.ImGui.dockBuilderDockWindow("特效库##effect-library", libraryNode.get());
         imgui.internal.ImGui.dockBuilderDockWindow("特效参数设置##effect-inspector", inspectorNode.get());
         imgui.internal.ImGui.dockBuilderDockWindow("特效时间轴##effect-timeline", timelineNode.get());
-        imgui.internal.ImGui.dockBuilderDockWindow("世界预览##effect-preview", previewNode.get());
+        imgui.internal.ImGui.dockBuilderDockWindow("游戏画面##effect-preview", previewNode.get());
         imgui.internal.ImGui.dockBuilderFinish(dockspaceId);
         libraryDockNodeId = libraryNode.get();
         previewDockNodeId = previewNode.get();
@@ -333,6 +333,7 @@ public final class EffectEditorImGuiView {
     private void drawLibrary(float x, float y, float width, float height) {
         ImGui.setNextWindowPos(x, y, ImGuiCond.FirstUseEver);
         ImGui.setNextWindowSize(width, height, ImGuiCond.FirstUseEver);
+        ImGui.setNextWindowBgAlpha(1.0f);
         if (applyDefaultDockLayout) ImGui.setNextWindowDockID(libraryDockNodeId, ImGuiCond.Always);
         if (!ImGui.begin("特效库##effect-library", PANEL_FLAGS)) {
             ImGui.end();
@@ -352,9 +353,9 @@ public final class EffectEditorImGuiView {
     private void drawPreview(float x, float y, float width, float height, MinecraftClient client) {
         ImGui.setNextWindowPos(x, y, ImGuiCond.FirstUseEver);
         ImGui.setNextWindowSize(width, height, ImGuiCond.FirstUseEver);
-        ImGui.setNextWindowBgAlpha(0.5f);
         if (applyDefaultDockLayout) ImGui.setNextWindowDockID(previewDockNodeId, ImGuiCond.Always);
-        if (!ImGui.begin("世界预览##effect-preview", PANEL_FLAGS)) {
+        ImGui.setNextWindowBgAlpha(1.0f);
+        if (!ImGui.begin("游戏画面##effect-preview", PANEL_FLAGS)) {
             ImGui.end();
             return;
         }
@@ -366,25 +367,6 @@ public final class EffectEditorImGuiView {
         previewContentY = previewWindowY + ImGui.getWindowContentRegionMinY();
         previewContentWidth = Math.max(0.0f, ImGui.getWindowContentRegionMaxX() - ImGui.getWindowContentRegionMinX());
         previewContentHeight = Math.max(0.0f, ImGui.getWindowContentRegionMaxY() - ImGui.getWindowContentRegionMinY());
-        ImGui.textColored(0xFF66CCFF, "世界预览");
-        if (client.player == null) {
-            ImGui.textDisabled("当前没有客户端玩家。");
-        } else {
-            ImGui.text("维度：" + client.player.getEntityWorld().getRegistryKey().getValue());
-            var camera = RhythmcMakerClient.effectEditorCameraPosition();
-            ImGui.text(String.format(Locale.ROOT, "主摄像机：%.2f, %.2f, %.2f", camera.x, camera.y, camera.z));
-        }
-        ImGui.separator();
-        JsonObject event = selectedEvent();
-        if (event == null) {
-            ImGui.textWrapped("从左侧选择一个特效类型，或在下方时间线选择已有事件。");
-        } else {
-            ImGui.text("播放头 " + formatChunkPosition(playhead[0]));
-            ImGui.text("当前事件：" + displayText(eventType(event)));
-            ImGui.textWrapped("中心区域透出当前 Minecraft 主摄像机画面；播放时 Camera 会跟随滚动判定线。");
-        }
-        ImGui.separator();
-        ImGui.text("状态：" + (RhythmcMakerClient.isEffectEditorPlaybackActive() ? "播放中" : status));
         ImGui.end();
     }
 
@@ -395,6 +377,7 @@ public final class EffectEditorImGuiView {
     private void drawInspector(float x, float y, float width, float height) {
         ImGui.setNextWindowPos(x, y, ImGuiCond.FirstUseEver);
         ImGui.setNextWindowSize(width, height, ImGuiCond.FirstUseEver);
+        ImGui.setNextWindowBgAlpha(1.0f);
         if (applyDefaultDockLayout) ImGui.setNextWindowDockID(inspectorDockNodeId, ImGuiCond.Always);
         if (!ImGui.begin("特效参数设置##effect-inspector", PANEL_FLAGS)) {
             ImGui.end();
@@ -494,6 +477,7 @@ public final class EffectEditorImGuiView {
     private void drawTimeline(float x, float y, float width, float height) {
         ImGui.setNextWindowPos(x, y, ImGuiCond.FirstUseEver);
         ImGui.setNextWindowSize(width, height, ImGuiCond.FirstUseEver);
+        ImGui.setNextWindowBgAlpha(1.0f);
         if (applyDefaultDockLayout) ImGui.setNextWindowDockID(timelineDockNodeId, ImGuiCond.Always);
         if (!ImGui.begin("特效时间轴##effect-timeline", PANEL_FLAGS)) {
             ImGui.end();
