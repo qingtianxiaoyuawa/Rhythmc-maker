@@ -839,6 +839,23 @@ public final class RhythmcMaker implements ModInitializer {
         if (state != null) queueChartSave(server, state);
     }
     public static String activeChart(ServerPlayerEntity player) { return ACTIVE_CHARTS.get(player.getUuid()); }
+    public static void saveEffectEditor(MinecraftServer server, ServerPlayerEntity player,
+                                       java.util.List<com.google.gson.JsonObject> effects,
+                                       cn.frkovo.rhythmcmaker.common.effect.editor.EffectEditorLayout layout) throws IOException {
+        ChartManifest current = cachedChart(server, activeChart(player));
+        if (current == null) throw new IOException("活动谱面已关闭");
+        current.effects = effects;
+        current.effectEditorLayout = layout;
+        updateChart(server, current);
+    }
+    public static boolean isEditorTrackAdjustmentPending(UUID playerId) {
+        return EDITOR_TRACK_ADJUSTMENTS.contains(playerId);
+    }
+
+    public static boolean updateEffectEditorDivisions(ServerPlayerEntity player, int divisions) throws IOException, com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ChartManifest chart = cachedChart(player.getEntityWorld().getServer(), activeChart(player));
+        return chart != null && updateEditorLayout(player.getCommandSource(), chart, divisions, laneCount(chart)) == 1;
+    }
     private static boolean rejectEditorTrackAdjustment(ServerPlayerEntity player) {
         if (!EDITOR_TRACK_ADJUSTMENTS.contains(player.getUuid())) return false;
         long tick = activeServer == null ? Long.MAX_VALUE : activeServer.getTicks();
@@ -3760,7 +3777,12 @@ private static void showSceneBoundary(MinecraftServer server) {
             var entry = iterator.next();
             EditorTrackRebuildTask task = entry.getValue();
             ServerWorld world = server.getWorld(task.worldKey);
-            if (world == null) { iterator.remove(); continue; }
+            if (world == null) {
+                EDITOR_TRACK_ADJUSTMENTS.remove(task.playerId);
+                EDITOR_TRACK_ADJUSTMENT_NOTICES.remove(task.playerId);
+                iterator.remove();
+                continue;
+            }
             int budget = Integer.MAX_VALUE;
             if (!task.foundationReady) {
                 restoreEditorTrackFoundation(world, task.x, task.newLength, task.laneCount);

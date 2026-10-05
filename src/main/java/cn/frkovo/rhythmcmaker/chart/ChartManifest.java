@@ -43,6 +43,7 @@ public final class ChartManifest {
     public java.util.List<Track> tracks = new java.util.ArrayList<>();
     /** Independent visual effect-track events, kept in RhythMC 3.0 JSON form. */
     public java.util.List<JsonObject> effects = new java.util.ArrayList<>();
+    public cn.frkovo.rhythmcmaker.common.effect.editor.EffectEditorLayout effectEditorLayout;
     public String initialArena;
     public java.util.Map<String, String> arenaBindings = new java.util.LinkedHashMap<>();
     public java.util.List<Note> notes = new java.util.ArrayList<>();
