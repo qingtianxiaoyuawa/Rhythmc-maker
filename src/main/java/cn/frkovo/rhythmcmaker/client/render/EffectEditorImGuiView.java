@@ -741,7 +741,6 @@ public final class EffectEditorImGuiView {
         float rangeLeft = (float) (timelineLeft + timelineWidth * timelineZoomMin);
         float rangeRight = (float) (timelineLeft + timelineWidth * timelineZoomMax);
         drawList.addRectFilled(rangeLeft, footerTop + 4.0f, rangeRight, footerTop + 16.0f, 0xFF61A7D8);
-        drawTimelineScrollBar(drawList, timelineRight - 10.0f, rowsTop, rowsBottom, visibleRowCapacity);
         drawList.addText(left + 8.0f, footerTop + 4.0f, 0xFF9CA9B8,
                 String.format(Locale.ROOT, "%.0f%%", (1.0 / Math.max(0.05, zoomSpan)) * 100.0));
         drawList.popClipRect();
@@ -759,8 +758,6 @@ public final class EffectEditorImGuiView {
         boolean hovered = ImGui.isMouseHoveringRect(left, top, right, top + height, true);
         boolean contentHovered = hovered && mouseX >= timelineLeft && mouseY >= top && mouseY < footerTop;
         ImGuiIO io = ImGui.getIO();
-        boolean scrollBarHovered = hovered && mouseX >= timelineRight(timelineLeft, timelineWidth) - 12.0f
-                && mouseY >= top + 34.0f && mouseY < footerTop;
         if (hovered && Math.abs(io.getMouseWheel()) > 0.001f) {
             float wheel = io.getMouseWheel();
             if (isControlPressed()) {
@@ -772,10 +769,7 @@ public final class EffectEditorImGuiView {
             io.setMouseWheel(0.0f);
         }
         if (ImGui.isMouseClicked(0) && hovered) {
-            if (scrollBarHovered) {
-                timelineDraggingScrollBar = true;
-                timelineScrollBarDragOffset = mouseY - timelineScrollBarTop(top + 34.0f, footerTop);
-            } else if (mouseY >= footerTop) {
+            if (mouseY >= footerTop) {
                 timelineDraggingRange = true;
                 moveTimelineRange(mouseX, timelineLeft, timelineWidth);
             } else if (contentHovered) {
@@ -798,7 +792,6 @@ public final class EffectEditorImGuiView {
             }
         }
         if (timelineDraggingRange && ImGui.isMouseDown(0)) moveTimelineRange(mouseX, timelineLeft, timelineWidth);
-        if (timelineDraggingScrollBar && ImGui.isMouseDown(0)) moveTimelineScrollBar(mouseY, top + 34.0f, footerTop);
         if (timelineDraggingPlayhead && ImGui.isMouseDown(0)) {
             seekTimelineBeat(timelineXToBeat(mouseX, timelineLeft, timelineWidth, minBeat, maxVisibleBeat), maxBeat);
         }

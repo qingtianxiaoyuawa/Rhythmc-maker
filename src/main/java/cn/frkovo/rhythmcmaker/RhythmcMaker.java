@@ -412,7 +412,7 @@ public final class RhythmcMaker implements ModInitializer {
              dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_stop_playback")
                  .executes(context -> stopPlaybackCommand(context.getSource())));
              dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_sync_formal_playback")
-                 .then(net.minecraft.server.command.CommandManager.argument("songSeconds", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg(0.0))
+                 .then(net.minecraft.server.command.CommandManager.argument("songSeconds", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg())
                      .executes(context -> syncFormalPlayback(context.getSource(), com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "songSeconds")))));
             dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_play")
                 .executes(context -> togglePlayback(context.getSource()))
@@ -2494,6 +2494,9 @@ private static void showSceneBoundary(MinecraftServer server) {
         } catch (RuntimeException exception) {
             LOGGER.error("Failed to clean playback displays for {}", player.getUuid(), exception);
         } finally {
+            if (session.formal && session.sceneChanged) {
+                restoreInitialPlaybackScene(server, session);
+            }
             if (returnPlayer && session.formal) {
                 try {
                     player.teleport(session.world, session.returnX, session.returnY, session.returnZ, Set.of(), session.returnYaw, session.returnPitch, false);
@@ -2502,6 +2505,19 @@ private static void showSceneBoundary(MinecraftServer server) {
                     LOGGER.error("Failed to return player {} after playback", player.getUuid(), exception);
                 }
             }
+        }
+    }
+    private static void restoreInitialPlaybackScene(MinecraftServer server, PlaybackSession session) {
+        try {
+            SceneEditStorage.Scene initial = SceneEditStorage.list(server, session.chart.id).stream()
+                    .filter(scene -> scene.initial && scene.saved).findFirst().orElse(null);
+            if (initial == null) return;
+            Path sceneFile = SceneEditStorage.schematicPath(server, session.chart.id, initial.index);
+            if (!Files.isRegularFile(sceneFile)) return;
+            SCENE_IMPORT_TASKS.offer(new SceneImportTask(session.chart, sceneFile, PLAYBACK_PLATFORM_X, PLAYBACK_PLATFORM_Y, PLAYBACK_PLATFORM_Z));
+            IMPORTING_CHARTS.add(session.chart.id);
+        } catch (IOException | RuntimeException exception) {
+            LOGGER.warn("Failed to restore initial playback scene for {}", session.chart.id, exception);
         }
     }
     private static boolean hasPlaybackSession(UUID playerId) {
@@ -2586,7 +2602,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             this.nextNoteIndex = 0;
             this.playedTapSoundThisTick = false;
             this.playedLookSoundThisTick = false;
-            this.effectSession = new PlaybackSession(world, player.getX(), player.getY(), player.getZ(), player.getYaw(), player.getPitch(), chart, startSeconds, startNanos, "scroll", rate);
+            this.effectSession = null;
             while (nextNoteIndex < noteTimes.size() && noteTimes.get(nextNoteIndex) < startSeconds) nextNoteIndex++;
             this.playing = true;
         }
@@ -2615,6 +2631,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final float returnYaw, returnPitch;
         private final ChartManifest chart;
         private final ChartTiming.Prepared timing;
+        private boolean sceneChanged;
 
         private final Map<Integer, TrackPlayback.Prepared> trackProfiles = new java.util.HashMap<>();
         private double startSeconds;
@@ -3158,6 +3175,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                     LOGGER.warn("RhythMC arena schematic does not exist: {}", sceneFile);
                     return;
                 }
+                sceneChanged = true;
                 SCENE_IMPORT_TASKS.offer(new SceneImportTask(chart, sceneFile, PLAYBACK_PLATFORM_X, PLAYBACK_PLATFORM_Y, PLAYBACK_PLATFORM_Z));
                 IMPORTING_CHARTS.add(chart.id);
             } catch (IOException | RuntimeException exception) {

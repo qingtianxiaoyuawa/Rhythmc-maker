@@ -48,6 +48,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     private static String selectedPlaybackChartId;
     private static volatile Process audioProcess;
     private static long audioStartedAtNanos;
+    private static long audioSessionCreatedAtNanos;
     private static volatile double audioProgressSeconds = Double.NaN;
     private static volatile long audioProgressUpdatedAtNanos;
     private static Thread audioProgressReader;
@@ -207,6 +208,12 @@ public final class RhythmcMakerClient implements ClientModInitializer {
                     formalProgressMissingSinceNanos = 0L;
                 }
             }
+            if (audioSessionCreatedAtNanos > 0L
+                    && System.nanoTime() - audioSessionCreatedAtNanos >= 1_200_000_000_000L) {
+                ClientChartAccess.statusWarning("Audio output session exceeded 20 minutes");
+                finishPlayback(client, true);
+                return;
+            }
             if (audioProcess != null && !audioProcess.isAlive()) {
                 double elapsed = audioStartedAtNanos <= 0 ? 0.0 : (System.nanoTime() - audioStartedAtNanos) / 1_000_000_000.0;
                 if (audioDurationSeconds > 0.0 && elapsed + 0.5 < audioDurationSeconds) retryAudioPlayback(client);
@@ -265,6 +272,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         playbackStartBeat = activeChart == null ? 0.0 : PlaybackCoordinates.beatAtChunkStart(startChunk);
         playbackStartSeconds = activeChart == null ? 0.0 : PlaybackCoordinates.songTimeAtBeat(activeChart, ChartTiming.prepare(activeChart), playbackStartBeat);
         audioStartedAtNanos = 0;
+        audioSessionCreatedAtNanos = 0L;
         playbackTimingProfile = null;
         playbackTrackProfile = null;
         pendingPlaybackCommand = "rhythmc_play " + startChunk + " " + playbackMode + " " + String.format(Locale.ROOT, "%.2f", playbackRate);
@@ -731,6 +739,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             audioProgressReader.setDaemon(true);
             audioProgressReader.start();
             audioStartedAtNanos = System.nanoTime();
+            if (audioSessionCreatedAtNanos == 0L) audioSessionCreatedAtNanos = audioStartedAtNanos;
             playbackTrackProfile = PlaybackCoordinates.prepareDefaultTrack(chart);
             playbackTrackSpeed = ClientChartAccess.config().playerSpeed;
             playbackStartSeconds = startSeconds;
@@ -783,6 +792,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         audioDurationSeconds = 0;
         playbackStartSeconds = 0;
         audioStartedAtNanos = 0;
+        audioSessionCreatedAtNanos = 0L;
         playbackTimingProfile = null;
         playbackTrackProfile = null;
         if (process != null && process.isAlive()) process.destroy();
