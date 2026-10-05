@@ -42,6 +42,16 @@ public final class Rhythmc3Exporter {
 
     public static Path export(MinecraftServer server, ChartManifest chart) throws IOException {
         if (chart == null || chart.id == null || chart.id.isBlank()) throw new IOException("谱面不存在");
+        if (chart.effects != null) {
+            for (JsonObject effect : chart.effects) {
+                if (effect == null) continue;
+                try {
+                    Rhythmc3EffectCodec.exportEffect(effect);
+                } catch (IllegalArgumentException exception) {
+                    throw new IOException("特效参数校验失败：" + exception.getMessage(), exception);
+                }
+            }
+        }
         ServerWorld world = server.getWorld(ChartDimensionManager.key(chart));
         if (world == null) throw new IOException("请先进入该谱面制谱维度，再进行导出");
 

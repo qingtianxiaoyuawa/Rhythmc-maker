@@ -66,6 +66,7 @@ public final class EffectEditorImGuiView {
     private final Consumer<Double> seekAction;
     private final Consumer<String> statusAction;
     private final EffectTypeRegistry registry = EffectTypeRegistry.getInstance();
+    private final EffectParameterEditor parameterEditor = new EffectParameterEditor();
     private final EffectTrackLayoutModel layoutModel;
     private final EffectPreviewViewport viewport = new EffectPreviewViewport();
     private final Consumer<Integer> divisionsAction;
@@ -81,13 +82,6 @@ public final class EffectEditorImGuiView {
     private boolean closeRequested;
     private Runnable confirmedCloseAction;
     private final ImDouble beatField = new ImDouble();
-    private final ImDouble durationField = new ImDouble();
-    private final Map<String, ImString> textFields = new HashMap<>();
-    private final Map<String, ImString> integerArrayFields = new HashMap<>();
-    private final Map<String, ImDouble> decimalFields = new HashMap<>();
-    private final Map<String, ImInt> integerFields = new HashMap<>();
-    private final Map<String, ImBoolean> booleanFields = new HashMap<>();
-    private final Map<String, float[]> colorFields = new HashMap<>();
     private final float[] playhead = new float[1];
     private final ImString timelinePositionField = new ImString("0", 64);
     private double timelineZoomMin;
@@ -289,11 +283,7 @@ public final class EffectEditorImGuiView {
     public void dispose() {
         viewport.close();
         cameraDragLogged = false;
-        textFields.clear();
-        decimalFields.clear();
-        integerFields.clear();
-        booleanFields.clear();
-        colorFields.clear();
+        parameterEditor.clear();
     }
 
     public void applyPendingEdits() {
@@ -303,6 +293,7 @@ public final class EffectEditorImGuiView {
 
     public void saveToChart() {
         if (chart == null) return;
+        if (!validateParameters()) throw new IllegalStateException(status);
         applyPendingEdits();
         chart.effects = new ArrayList<>();
         for (JsonObject effect : workingEffects) chart.effects.add(effect.deepCopy());
@@ -316,6 +307,14 @@ public final class EffectEditorImGuiView {
 
     public boolean hasUnsavedChanges() {
         return dirty;
+    }
+
+    public boolean validateParameters() {
+        List<String> errors = parameterEditor.errors(workingEffects);
+        if (errors.isEmpty()) return true;
+        status = "参数校验失败：" + errors.get(0);
+        statusAction.accept(status);
+        return false;
     }
 
     public void discardChanges() {
@@ -455,12 +454,8 @@ public final class EffectEditorImGuiView {
             }
             eventPositionField.set(layoutModel.position(selectedIndex).label());
         }
-        if (ImGui.inputScalar("持续时间##duration", ImGuiDataType.Double, durationField, 0.25, 1.0, "%.3f")) {
-            writeProperty(event, "duration", durationField.get());
-            dirty = true;
-        }
         ImGui.separator();
-        for (EffectPropertyDefinition property : definition.properties()) drawProperty(event, property);
+        if (parameterEditor.render(event)) dirty = true;
         EffectAnimationEvaluator.evaluate(event, RhythmcMakerClient.effectEditorCurrentBeat()).ifPresent(sample -> {
             if (!sample.values().isEmpty()) {
                 ImGui.separator();
@@ -473,55 +468,6 @@ public final class EffectEditorImGuiView {
         ImGui.sameLine();
         if (ImGui.button("删除当前事件##delete-event")) deleteSelected();
         ImGui.end();
-    }
-
-    private void drawProperty(JsonObject event, EffectPropertyDefinition definition) {
-        String name = definition.name();
-        switch (definition.valueKind()) {
-            case TEXT, ENUM -> {
-                ImString field = textFields.computeIfAbsent(name, key -> new ImString(readString(event, key, ""), 512));
-                if (ImGui.inputText(displayText(definition.displayName()) + "##" + name, field)) {
-                    writeProperty(event, name, field.get());
-                    dirty = true;
-                }
-            }
-            case INTEGER -> {
-                ImInt field = integerFields.computeIfAbsent(name, key -> new ImInt((int) readDouble(event, key, 0.0)));
-                if (ImGui.inputScalar(displayText(definition.displayName()) + "##" + name, ImGuiDataType.S32, field, 1, 10)) {
-                    writeProperty(event, name, field.get());
-                    dirty = true;
-                }
-            }
-            case DECIMAL -> {
-                ImDouble field = decimalFields.computeIfAbsent(name, key -> new ImDouble(readDouble(event, key, 0.0)));
-                if (ImGui.inputScalar(displayText(definition.displayName()) + "##" + name, ImGuiDataType.Double, field, 0.1, 1.0, "%.3f")) {
-                    writeProperty(event, name, field.get());
-                    dirty = true;
-                }
-            }
-            case BOOLEAN -> {
-                ImBoolean field = booleanFields.computeIfAbsent(name, key -> new ImBoolean(readBoolean(event, key, false)));
-                if (ImGui.checkbox(displayText(definition.displayName()) + "##" + name, field)) {
-                    writeProperty(event, name, field.get());
-                    dirty = true;
-                }
-            }
-            case INTEGER_ARRAY -> {
-                ImString field = integerArrayFields.computeIfAbsent(name, key -> new ImString(readIntegerArrayText(event, key), 256));
-                if (ImGui.inputText(displayText(definition.displayName()) + "##" + name, field)) {
-                    writeProperty(event, name, parseIntegerArray(field.get()));
-                    dirty = true;
-                }
-            }
-            case COLOR -> {
-                float[] field = colorFields.computeIfAbsent(name, key -> readColor(event, key));
-                if (ImGui.colorEdit4(displayText(definition.displayName()) + "##" + name, field)) {
-                    writeProperty(event, name, packColor(field));
-                    dirty = true;
-                }
-            }
-            case VECTOR, JSON -> ImGui.textDisabled(displayText(definition.displayName()) + "：" + displayText(readElement(event, name)));
-        }
     }
 
     private void drawTimeline(float x, float y, float width, float height) {
@@ -1243,8 +1189,7 @@ public final class EffectEditorImGuiView {
         JsonObject event = new JsonObject();
         event.addProperty("eventType", definition.eventType());
         event.addProperty("beat", Math.max(0.0, contextBeat));
-        JsonObject properties = new JsonObject();
-        for (EffectPropertyDefinition property : definition.properties()) addDefault(properties, property, definition.eventType());
+        JsonObject properties = cn.frkovo.rhythmcmaker.common.effect.parameter.EffectParameterCodec.getInstance().createDefaults(definition.eventType());
         event.add("properties", properties);
         workingEffects.add(event);
         layoutModel.addEvent(definition.eventType(), eventBeat(event), chart.divisionsPerChunk, contextTrackId);
@@ -1252,20 +1197,6 @@ public final class EffectEditorImGuiView {
         cachedTimelineRows = null;
         select(workingEffects.size() - 1);
         status = "已新增 " + definition.displayName();
-    }
-
-    private void addDefault(JsonObject properties, EffectPropertyDefinition property, String type) {
-        switch (property.valueKind()) {
-            case TEXT -> properties.addProperty(property.name(), "TITLE".equals(type) ? "标题显示" : "特效");
-            case ENUM -> properties.addProperty(property.name(), "");
-            case INTEGER -> properties.addProperty(property.name(), 0);
-            case DECIMAL -> properties.addProperty(property.name(), 0.0);
-            case BOOLEAN -> properties.addProperty(property.name(), false);
-            case COLOR -> properties.addProperty(property.name(), 0x66CCFF);
-            case INTEGER_ARRAY -> properties.add(property.name(), new JsonArray());
-            case VECTOR -> properties.add(property.name(), new JsonArray());
-            case JSON -> properties.add(property.name(), new JsonObject());
-        }
     }
 
     private void addKeyframe(JsonObject event) {
@@ -1318,28 +1249,14 @@ public final class EffectEditorImGuiView {
         if (selectedIndex == bufferIndex && type.equals(bufferType)) return;
         bufferIndex = selectedIndex;
         bufferType = type;
-        textFields.clear();
-        integerArrayFields.clear();
-        decimalFields.clear();
-        integerFields.clear();
-        booleanFields.clear();
-        colorFields.clear();
         beatField.set(event == null ? 0.0 : eventBeat(event));
         eventPositionField.set(event == null ? "" : layoutModel.position(selectedIndex).label());
-        durationField.set(event == null ? 0.0 : readDouble(event, "duration", 0.0));
     }
 
     private void syncEventFromBuffers() {
         JsonObject event = selectedEvent();
         if (event == null || registry.find(eventType(event)) == null) return;
         event.addProperty("beat", Math.max(0.0, beatField.get()));
-        if (durationField.get() > 0.0) writeProperty(event, "duration", durationField.get());
-        for (Map.Entry<String, ImString> entry : textFields.entrySet()) writeProperty(event, entry.getKey(), entry.getValue().get());
-        for (Map.Entry<String, ImDouble> entry : decimalFields.entrySet()) writeProperty(event, entry.getKey(), entry.getValue().get());
-        for (Map.Entry<String, ImInt> entry : integerFields.entrySet()) writeProperty(event, entry.getKey(), entry.getValue().get());
-        for (Map.Entry<String, ImBoolean> entry : booleanFields.entrySet()) writeProperty(event, entry.getKey(), entry.getValue().get());
-        for (Map.Entry<String, ImString> entry : integerArrayFields.entrySet()) writeProperty(event, entry.getKey(), parseIntegerArray(entry.getValue().get()));
-        for (Map.Entry<String, float[]> entry : colorFields.entrySet()) writeProperty(event, entry.getKey(), packColor(entry.getValue()));
     }
 
     private JsonObject selectedEvent() {
@@ -1352,10 +1269,7 @@ public final class EffectEditorImGuiView {
     }
 
     private static String eventType(JsonObject event) {
-        if (event == null) return "EFFECT";
-        if (event.has("eventType") && event.get("eventType").isJsonPrimitive()) return event.get("eventType").getAsString();
-        if (event.has("type") && event.get("type").isJsonPrimitive()) return event.get("type").getAsString();
-        return "EFFECT";
+        return event == null ? "" : cn.frkovo.rhythmcmaker.common.effect.parameter.EffectParameterCodec.getInstance().type(event);
     }
 
     private static double eventBeat(JsonObject event) {

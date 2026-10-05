@@ -113,7 +113,7 @@ public final class EffectTrackScreen extends Screen {
     @Override public boolean shouldCloseOnEsc() { return true; }
 
     private void save() {
-        if (chart == null || editor.isInputLocked()) return;
+        if (chart == null || editor.isInputLocked() || !editor.validateParameters()) return;
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.getServer() == null || client.player == null) return;
         editor.saveToChart();
