@@ -1,17 +1,14 @@
 package cn.frkovo.rhythmcmaker.client.render;
 
+import cn.frkovo.rhythmcmaker.client.render.font.EditorFontAtlas;
 import imgui.ImGui;
 import imgui.ImFont;
 import imgui.ImFontAtlas;
-import imgui.ImFontConfig;
-import imgui.ImFontGlyphRangesBuilder;
 import imgui.ImGuiIO;
 import imgui.gl3.ImGuiImplGl3;
 import imgui.glfw.ImGuiImplGlfw;
 import imgui.flag.ImGuiConfigFlags;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.resource.Resource;
-import net.minecraft.util.Identifier;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
@@ -19,19 +16,13 @@ import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL21;
 import org.lwjgl.opengl.GL33;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.UncheckedIOException;
+import imgui.type.ImInt;
 
 /** Owns the native ImGui context used by the editor overlay. */
 public final class ImGuiRuntime {
     private static final String GLSL_VERSION = "#version 150";
-    private static final Identifier EDITOR_FONT = Identifier.of("minecraft", "font/misans-bold.ttf");
-    private static final float EDITOR_FONT_SIZE = 18.0f;
-    private static final String EDITOR_GLYPHS = "特效编辑器未加载谱面撤销保存播放关闭库仅注册表中的类型允许新增未知类型保留原JSON并只读显示世界预览当前没有客户端玩家维度相机位置从左侧选择一个特效类型或在下方时间线选择已有事件播放头当前事件Screen继续透视当前游戏世界独立相机viewport需要WorldRenderEvents hook当前不在Screen内伪造第二个世界渲染通道状态实机画面虚拟预览独立相机状态不改变玩家真实视角重置相机参数设置请选择一个事件类型只读新增关键帧删除当前事件时间轴Beat未命名谱面已保存未保存就绪标题显示颜色位置持续时间步长速度透明度强度方向角度距离中文测试谱面标题显示测试玩家输入效果名称日本語한국어РусскийΕλληνικάภาษาไทยTiếng Việt，。！？：；（）【】《》、·—…“”‘’「」『』〈〉《》【】〔〕〖〗※℃％‰＋－×÷＝≠≤≥∞≈√∑∫→←↑↓↔↕★☆●○◆◇■□✓✕";
     private static final ImGuiImplGlfw PLATFORM = new ImGuiImplGlfw();
     private static final ImGuiImplGl3 RENDERER = new ImGuiImplGl3();
-    private static byte[] editorFontData;
     private static boolean initialized;
     private static boolean frameOpen;
 
@@ -47,7 +38,9 @@ public final class ImGuiRuntime {
         io.addConfigFlags(ImGuiConfigFlags.DockingEnable);
         io.setConfigDockingAlwaysTabBar(true);
         io.setIniFilename(client.runDirectory.toPath().resolve("config").resolve("rhythmc-maker-imgui.ini").toString());
-        ImFont editorFont = loadEditorFont(client);
+        ImFont editorFont = EditorFontAtlas.getInstance().load(io.getFonts());
+        io.setFontDefault(editorFont);
+        validateFontTextureSize(io.getFonts());
         if (!PLATFORM.init(client.getWindow().getHandle(), true)) {
             ImGui.destroyContext();
             throw new IllegalStateException("Unable to initialize the ImGui GLFW backend");
@@ -100,57 +93,13 @@ public final class ImGuiRuntime {
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
     }
 
-    private static ImFont loadEditorFont(MinecraftClient client) {
-        try {
-            Resource resource = client.getResourceManager().getResourceOrThrow(EDITOR_FONT);
-            try (InputStream input = resource.getInputStream()) {
-                editorFontData = input.readAllBytes();
-                if (editorFontData.length == 0) {
-                    throw new IllegalStateException("ImGui editor font is empty: " + EDITOR_FONT);
-                }
-                ImFontAtlas fonts = ImGui.getIO().getFonts();
-                ImFontGlyphRangesBuilder rangesBuilder = new ImFontGlyphRangesBuilder();
-                addUnsignedRanges(rangesBuilder, fonts.getGlyphRangesDefault());
-                addUnsignedRanges(rangesBuilder, fonts.getGlyphRangesChineseSimplifiedCommon());
-                addUnsignedRanges(rangesBuilder, fonts.getGlyphRangesChineseFull());
-                addUnsignedRanges(rangesBuilder, fonts.getGlyphRangesJapanese());
-                addUnsignedRanges(rangesBuilder, fonts.getGlyphRangesKorean());
-                addUnsignedRanges(rangesBuilder, fonts.getGlyphRangesCyrillic());
-                addUnsignedRanges(rangesBuilder, fonts.getGlyphRangesThai());
-                addUnsignedRanges(rangesBuilder, fonts.getGlyphRangesVietnamese());
-                rangesBuilder.addText(EDITOR_GLYPHS);
-
-                ImFontConfig fontConfig = new ImFontConfig();
-                fontConfig.setOversampleH(2);
-                fontConfig.setOversampleV(2);
-                ImFont editorFont = fonts.addFontFromMemoryTTF(
-                        editorFontData,
-                        EDITOR_FONT_SIZE,
-                        fontConfig,
-                        rangesBuilder.buildRanges()
-                );
-                fontConfig.destroy();
-                if (editorFont == null) {
-                    throw new IllegalStateException("ImGui editor font was not added: " + EDITOR_FONT);
-                }
-                if (!fonts.build()) {
-                    throw new IllegalStateException("ImGui editor font atlas failed to build: " + EDITOR_FONT);
-                }
-                ImGui.getIO().setFontDefault(editorFont);
-                return editorFont;
-            }
-        } catch (IOException exception) {
-            throw new UncheckedIOException("Unable to read ImGui editor font: " + EDITOR_FONT, exception);
-        }
-    }
-
-    private static void addUnsignedRanges(ImFontGlyphRangesBuilder builder, short[] ranges) {
-        for (int index = 0; index + 1 < ranges.length && ranges[index] != 0; index += 2) {
-            int from = ranges[index] & 0xFFFF;
-            int to = ranges[index + 1] & 0xFFFF;
-            for (int codepoint = from; codepoint <= to; codepoint++) {
-                builder.addChar((char) codepoint);
-            }
+    private static void validateFontTextureSize(ImFontAtlas fonts) {
+        ImInt width = new ImInt();
+        ImInt height = new ImInt();
+        fonts.getTexDataAsAlpha8(width, height);
+        int maximum = GL11.glGetInteger(GL11.GL_MAX_TEXTURE_SIZE);
+        if (width.get() > maximum || height.get() > maximum) {
+            throw new IllegalStateException("编辑器字体图集尺寸 " + width.get() + "x" + height.get() + " 超过显卡纹理上限 " + maximum);
         }
     }
 
@@ -191,7 +140,7 @@ public final class ImGuiRuntime {
         RENDERER.dispose();
         PLATFORM.dispose();
         ImGui.destroyContext();
-        editorFontData = null;
+        EditorFontAtlas.getInstance().release();
         initialized = false;
     }
 
