@@ -104,7 +104,6 @@ public final class EffectEditorImGuiView {
     private int timelineVisibleRowCapacity;
     private boolean applyDefaultDockLayout;
     private int libraryDockNodeId;
-    private int previewDockNodeId;
     private int inspectorDockNodeId;
     private int timelineDockNodeId;
     private int selectedIndex;
@@ -112,14 +111,6 @@ public final class EffectEditorImGuiView {
     private String bufferType = "";
     private boolean dirty;
     private String status = "就绪";
-    private float previewWindowX = -1.0f;
-    private float previewWindowY = -1.0f;
-    private float previewWindowWidth;
-    private float previewWindowHeight;
-    private float previewContentX = -1.0f;
-    private float previewContentY = -1.0f;
-    private float previewContentWidth;
-    private float previewContentHeight;
     private boolean cameraDragLogged;
 
     private enum TimelineMarkerKind { EVENT, KEYFRAME }
@@ -172,7 +163,6 @@ public final class EffectEditorImGuiView {
         float timelineHeight = height * 0.32f;
         float contentHeight = Math.max(1.0f, height - top - timelineHeight);
         drawLibrary(0.0f, top, leftWidth, contentHeight);
-        drawPreview(leftWidth, top, centerWidth, contentHeight, client);
         drawInspector(leftWidth + centerWidth, top, rightWidth, contentHeight);
         drawTimeline(0.0f, top + contentHeight, width, timelineHeight);
         handleCameraWheelOutsideTimeline();
@@ -208,7 +198,7 @@ public final class EffectEditorImGuiView {
         ImGui.setNextWindowPos(0.0f, 46.0f, ImGuiCond.Always);
         ImGui.setNextWindowSize(width, Math.max(1.0f, height - 46.0f), ImGuiCond.Always);
         if (ImGui.begin("##effect-editor-dockspace", DOCKSPACE_FLAGS)) {
-            int dockspaceId = ImGui.getID("##effect-editor-dockspace-node-v3");
+        int dockspaceId = ImGui.getID("##effect-editor-dockspace-node-v4");
             initializeDefaultDockLayout(dockspaceId, ImGui.getContentRegionAvailX(),
                     ImGui.getContentRegionAvailY());
             ImGui.dockSpace(dockspaceId, 0.0f, 0.0f,
@@ -241,17 +231,15 @@ public final class EffectEditorImGuiView {
                 libraryNode, centerAndInspectorNode);
 
         ImInt inspectorNode = new ImInt();
-        ImInt previewNode = new ImInt();
+        ImInt centralNode = new ImInt();
         imgui.internal.ImGui.dockBuilderSplitNode(centerAndInspectorNode.get(), ImGuiDir.Right, 0.29f,
-                inspectorNode, previewNode);
+                inspectorNode, centralNode);
 
         imgui.internal.ImGui.dockBuilderDockWindow("特效库##effect-library", libraryNode.get());
         imgui.internal.ImGui.dockBuilderDockWindow("特效参数设置##effect-inspector", inspectorNode.get());
         imgui.internal.ImGui.dockBuilderDockWindow("特效时间轴##effect-timeline", timelineNode.get());
-        imgui.internal.ImGui.dockBuilderDockWindow("游戏画面##effect-preview", previewNode.get());
         imgui.internal.ImGui.dockBuilderFinish(dockspaceId);
         libraryDockNodeId = libraryNode.get();
-        previewDockNodeId = previewNode.get();
         inspectorDockNodeId = inspectorNode.get();
         timelineDockNodeId = timelineNode.get();
         applyDefaultDockLayout = true;
@@ -347,26 +335,6 @@ public final class EffectEditorImGuiView {
             if (ImGui.selectable(displayText(definition.displayName()) + "##add", false, ImGuiSelectableFlags.SpanAllColumns)) addEffect(definition);
             ImGui.popID();
         }
-        ImGui.end();
-    }
-
-    private void drawPreview(float x, float y, float width, float height, MinecraftClient client) {
-        ImGui.setNextWindowPos(x, y, ImGuiCond.FirstUseEver);
-        ImGui.setNextWindowSize(width, height, ImGuiCond.FirstUseEver);
-        if (applyDefaultDockLayout) ImGui.setNextWindowDockID(previewDockNodeId, ImGuiCond.Always);
-        ImGui.setNextWindowBgAlpha(1.0f);
-        if (!ImGui.begin("游戏画面##effect-preview", PANEL_FLAGS)) {
-            ImGui.end();
-            return;
-        }
-        previewWindowX = ImGui.getWindowPosX();
-        previewWindowY = ImGui.getWindowPosY();
-        previewWindowWidth = ImGui.getWindowSizeX();
-        previewWindowHeight = ImGui.getWindowSizeY();
-        previewContentX = previewWindowX + ImGui.getWindowContentRegionMinX();
-        previewContentY = previewWindowY + ImGui.getWindowContentRegionMinY();
-        previewContentWidth = Math.max(0.0f, ImGui.getWindowContentRegionMaxX() - ImGui.getWindowContentRegionMinX());
-        previewContentHeight = Math.max(0.0f, ImGui.getWindowContentRegionMaxY() - ImGui.getWindowContentRegionMinY());
         ImGui.end();
     }
 
@@ -638,17 +606,12 @@ public final class EffectEditorImGuiView {
     }
 
     /** Returns the current ImGui preview window rectangle used for mouse camera controls. */
-    public boolean isPreviewRegion(double mouseX, double mouseY) {
-        return previewWindowX >= 0.0f
-                && mouseX >= previewWindowX
-                && mouseX <= previewWindowX + previewWindowWidth
-                && mouseY >= previewWindowY
-                && mouseY <= previewWindowY + previewWindowHeight;
-    }
-
     private void drawTimelineCanvas(float left, float top, float width, float height, double maxBeat) {
         int visibleRowCapacity = Math.max(1, (int) Math.floor((height - 54.0f) / 24.0f));
-        List<TimelineRow> rows = buildTimelineRows(visibleRowCapacity, timelineRowOffset);
+        List<TimelineRow> allRows = buildTimelineRows();
+        int rowStart = Math.min(Math.max(0, timelineRowOffset), Math.max(0, allRows.size() - visibleRowCapacity));
+        List<TimelineRow> rows = allRows.subList(rowStart,
+                Math.min(allRows.size(), rowStart + visibleRowCapacity));
         if (rows.isEmpty()) rows = List.of(new TimelineRow("事件", "暂无事件", -1, List.of(), false));
         float trackWidth = Math.min(240.0f, Math.max(96.0f, width * 0.26f));
         float timelineLeft = left + trackWidth;
@@ -815,7 +778,7 @@ public final class EffectEditorImGuiView {
         }
     }
 
-    private List<TimelineRow> buildTimelineRows(int visibleRowCapacity, int rowOffset) {
+    private List<TimelineRow> buildTimelineRows() {
         List<TimelineRow> rows = new ArrayList<>();
         List<String> groups = new ArrayList<>();
         for (JsonObject event : workingEffects) {

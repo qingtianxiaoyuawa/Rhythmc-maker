@@ -111,6 +111,7 @@ public final class ImGuiRuntime {
                 ImFontAtlas fonts = ImGui.getIO().getFonts();
                 ImFontGlyphRangesBuilder rangesBuilder = new ImFontGlyphRangesBuilder();
                 addUnsignedRanges(rangesBuilder, fonts.getGlyphRangesDefault());
+                addUnsignedRanges(rangesBuilder, fonts.getGlyphRangesChineseSimplifiedCommon());
                 addUnsignedRanges(rangesBuilder, fonts.getGlyphRangesChineseFull());
                 addUnsignedRanges(rangesBuilder, fonts.getGlyphRangesJapanese());
                 addUnsignedRanges(rangesBuilder, fonts.getGlyphRangesKorean());
