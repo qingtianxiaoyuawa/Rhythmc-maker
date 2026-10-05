@@ -12,7 +12,7 @@ public final class EffectParameterSchema {
     private EffectParameterSchema() {
         add("HOLOGRAM", "全息文字", true,
                 vector("location", "位置偏移 [x,y,z]（格）", "[0,2,0]", "相对游戏中心的偏移，不是绝对世界坐标。"),
-                field("contents", "文字内容（每行一条）", STRING_LIST, "[\"全息文字\"]", "保存为 string[]，可编辑多行。"),
+                field("contents", "文字内容（每行一条）", STRING_LIST, "[\"全息文字\"]", "保存为字符串数组，每个条目可包含多行文字。"),
                 optional(field("id", "全息文字 ID", TEXT, "\"hologram-1\"", "不启用时由服务端生成 ID；删除时需使用同一 ID。")), duration());
         add("REMOVE_HOLOGRAM", "移除全息文字", true, id("hologram-1"));
         add("TITLE", "标题", true,
@@ -28,24 +28,24 @@ public final class EffectParameterSchema {
                 enumeration("type", "烟花形状", "BALL", List.of("BALL", "LARGE_BALL", "STAR", "BURST", "CREEPER")),
                 field("flicker", "闪烁", BOOLEAN, "false", ""), field("trail", "拖尾", BOOLEAN, "true", ""));
         add("TIME", "世界时间", true,
-                number("time", "世界时间（Minecraft 时间刻度）", LONG, "6000", 0, Long.MAX_VALUE), duration());
+                number("time", "世界时间（游戏刻）", LONG, "6000", 0, Long.MAX_VALUE), duration());
         add("EFFECT", "药水效果", true,
                 number("effectId", "药水数字 ID（Bukkit）", INTEGER, "1", 1, Integer.MAX_VALUE),
                 number("amplifier", "效果等级（0 为一级）", INTEGER, "0", 0, Integer.MAX_VALUE), duration());
         add("CLEAR_EFFECT", "清除药水效果", true,
                 optional(field("effects", "要清除的药水 ID 列表", INTEGER_LIST, "[]", "不启用此字段时清除全部；启用后只清除数组中的 ID，空数组不清除任何效果。")));
         add("WEATHER", "天气", true, enumeration("weather", "天气", "CLEAR", List.of("DOWNFALL", "CLEAR")));
-        add("ARENA", "切换场景", true, field("arena", "场景名称", TEXT, "\"arena\"", "使用已导入/保存的竞技场名称。"));
+        add("ARENA", "切换场景", true, field("arena", "场景名称", TEXT, "\"arena\"", "使用已导入或保存的场景名称。"));
         add("HIDE_NOTES", "隐藏音符", true,
-                optional(choices(field("noteTypes", "隐藏的音符类型", NOTE_TYPES, "[]", "TAP / LOOK / HOLD / DODGE；空数组恢复显示全部类型。"), List.of("TAP", "LOOK", "HOLD", "DODGE"))),
+                optional(choices(field("noteTypes", "隐藏的音符类型", NOTE_TYPES, "[]", "点击 / 视角 / 长按 / 闪避音符；空数组恢复显示全部类型。"), List.of("TAP", "LOOK", "HOLD", "DODGE"))),
                 optional(field("tracks", "隐藏的轨道 ID", INTEGER_LIST, "[]", "填数字轨道 ID；空数组恢复显示全部轨道。")));
         add("GLOW_COLOR", "发光颜色", true, enumeration("color", "Minecraft 颜色名称", "WHITE", List.of(
                 "BLACK", "DARK_BLUE", "DARK_GREEN", "DARK_AQUA", "DARK_RED", "DARK_PURPLE", "GOLD", "GRAY",
                 "DARK_GRAY", "BLUE", "GREEN", "AQUA", "RED", "LIGHT_PURPLE", "YELLOW", "WHITE")));
-        add("MESSAGE", "聊天消息", true, field("contents", "消息内容（每行一条）", STRING_LIST, "[\"消息\"]", "保存为 string[]。"));
+        add("MESSAGE", "聊天消息", true, field("contents", "消息内容（每行一条）", STRING_LIST, "[\"消息\"]", "保存为字符串数组，每个条目可包含多行文字。"));
         add("TEXT_DISPLAY", "文本展示实体", true,
                 vector("position", "位置偏移 [x,y,z]（格）", "[0,0,0]", "相对游戏中心；不改变 Maker 的预览中心。"),
-                vector("rotation", "旋转 [x,y,z]（弧度）", "[0,0,0]", "官方 GpTextDisplay.rotateXYZ 使用弧度。"),
+                vector("rotation", "旋转 [x,y,z]（弧度）", "[0,0,0]", "绕 X、Y、Z 轴旋转，单位为弧度，不是角度。"),
                 vector("scale", "缩放 [x,y,z]", "[1,1,1]", "每个坐标轴独立缩放。"),
                 field("text", "文本", MULTILINE_TEXT, "\"文本\"", ""), id("text-display-1"));
         add("TEXT_DISPLAY_EFFECT", "修改文本展示实体", true,

@@ -21,6 +21,7 @@ import java.util.List;
 
 public final class EffectParameterEditor {
     private final EffectParameterCodec codec = EffectParameterCodec.getInstance();
+    private final EffectParameterLabels labels = EffectParameterLabels.getInstance();
     private final List<EventForm> forms = new ArrayList<>();
     private boolean changed;
 
@@ -185,9 +186,9 @@ public final class EffectParameterEditor {
     }
 
     private void renderEnum(EventForm form, FieldState state) {
-        if (ImGui.beginCombo("##value", state.value.getAsString())) {
+        if (ImGui.beginCombo("##value", labels.choice(state.value.getAsString()))) {
             for (String choice : state.definition.choices()) {
-                if (ImGui.selectable(choice, choice.equals(state.value.getAsString()))) commitValue(form, state, new JsonPrimitive(choice));
+                if (ImGui.selectable(labels.choice(choice) + "##" + choice, choice.equals(state.value.getAsString()))) commitValue(form, state, new JsonPrimitive(choice));
             }
             ImGui.endCombo();
         }
@@ -199,12 +200,17 @@ public final class EffectParameterEditor {
         boolean editedValue = false;
         for (int component = 0; component < row.size(); component++) {
             if (component > 0) ImGui.sameLine();
+            ImGui.beginGroup();
+            ImGui.pushTextWrapPos(ImGui.getCursorPosX() + width);
+            ImGui.textWrapped(labels.component(state.definition, component));
+            ImGui.popTextWrapPos();
             ImGui.setNextItemWidth(width);
             ImDouble value = new ImDouble(row.get(component).getAsDouble());
             if (ImGui.inputDouble("##component-" + rowIndex + "-" + component, value, 0, 0, "%.9g")) {
                 edited.set(component, new JsonPrimitive(value.get()));
                 editedValue = true;
             }
+            ImGui.endGroup();
         }
         if (editedValue) {
             if (rowIndex < 0) commitValue(form, state, edited);
@@ -270,7 +276,7 @@ public final class EffectParameterEditor {
             JsonArray values = state.value.getAsJsonArray();
             boolean selected = values.asList().stream().anyMatch(item -> item.getAsString().equals(choice));
             ImBoolean enabled = new ImBoolean(selected);
-            if (ImGui.checkbox(choice, enabled)) {
+            if (ImGui.checkbox(labels.choice(choice) + "##" + choice, enabled)) {
                 JsonArray edited = new JsonArray();
                 for (JsonElement item : values) if (!item.getAsString().equals(choice)) edited.add(item.deepCopy());
                 if (enabled.get()) edited.add(choice);
@@ -314,7 +320,7 @@ public final class EffectParameterEditor {
     }
 
     private void renderRawProperties(EventForm form) {
-        if (!ImGui.collapsingHeader("完整 properties JSON（保留扩展字段）")) return;
+        if (!ImGui.collapsingHeader("完整参数 JSON（properties，保留扩展字段）")) return;
         if (form.rawProperties == null) form.rawProperties = new ImString(form.event.has("properties") ? form.event.get("properties").toString() : "{}", 4096);
         if (!form.rawPending) form.rawProperties.set(form.event.has("properties") ? form.event.get("properties").toString() : "{}");
         if (ImGui.inputTextMultiline("##properties-json", form.rawProperties, -1, 160, ImGuiInputTextFlags.CallbackResize)) form.rawPending = true;
