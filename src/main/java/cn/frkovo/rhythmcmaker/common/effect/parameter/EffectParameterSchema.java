@@ -62,10 +62,6 @@ public final class EffectParameterSchema {
                 id("text-display-1"), number("track", "跟随的轨道 ID", INTEGER, "0", 0, Integer.MAX_VALUE), duration());
         add("TEXT_DISPLAY_DESYNC_TRACK", "取消文本展示实体跟随", true, id("text-display-1"));
         add("TEXT_DISPLAY_REMOVE", "移除文本展示实体", true, id("text-display-1"));
-        add("ACTIONBAR", "状态栏文字（Maker 扩展）", false,
-                field("text", "状态栏文字", MULTILINE_TEXT, "\"文字\"", "本地扩展，不属于这份 Reborn 3.0 官方特效枚举。"));
-        add("CHANGE_ARENA", "切换场景（兼容旧名称）", false,
-                field("arena", "场景名称", TEXT, "\"arena\"", "旧 Maker 名称；导出转换为官方 ARENA。"));
     }
 
     public static EffectParameterSchema getInstance() {

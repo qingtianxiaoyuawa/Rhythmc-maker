@@ -9,6 +9,7 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import cn.frkovo.rhythmcmaker.common.text.EffectTextFormatter;
 
 public final class EffectParameterCodec {
     private static final EffectParameterCodec INSTANCE = new EffectParameterCodec();
@@ -43,7 +44,11 @@ public final class EffectParameterCodec {
 
     public String type(JsonObject event) {
         for (String name : List.of("eventType", "effectType", "type")) {
-            if (event.has(name) && event.get(name).isJsonPrimitive() && event.getAsJsonPrimitive(name).isString()) return event.get(name).getAsString();
+            if (event.has(name) && event.get(name).isJsonPrimitive() && event.getAsJsonPrimitive(name).isString()) {
+                String value = event.get(name).getAsString();
+                if (value.equalsIgnoreCase("CHANGE_ARENA")) { event.addProperty(name, "ARENA"); return "ARENA"; }
+                return value;
+            }
         }
         return "";
     }
@@ -85,10 +90,10 @@ public final class EffectParameterCodec {
         JsonElement value;
         try {
             value = switch (field.control()) {
-                case TEXT, MULTILINE_TEXT, ENUM -> new JsonPrimitive(input);
+                case TEXT, MULTILINE_TEXT, ENUM -> new JsonPrimitive(normalizeText(field, input));
                 case STRING_LIST -> {
                     JsonArray lines = new JsonArray();
-                    if (!input.isEmpty()) for (String line : input.split("\\R", -1)) lines.add(line);
+                    if (!input.isEmpty()) for (String line : input.split("\\R", -1)) lines.add(EffectTextFormatter.getInstance().normalize(line));
                     yield lines;
                 }
                 default -> JsonParser.parseString(input);
@@ -103,13 +108,17 @@ public final class EffectParameterCodec {
     public String input(EffectParameterField field, JsonElement value) {
         if (value == null) return "";
         if ((field.control() == EffectParameterControl.TEXT || field.control() == EffectParameterControl.MULTILINE_TEXT
-                || field.control() == EffectParameterControl.ENUM) && value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()) return value.getAsString();
+                || field.control() == EffectParameterControl.ENUM) && value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()) return field.control() == EffectParameterControl.ENUM ? value.getAsString() : EffectTextFormatter.getInstance().normalize(value.getAsString());
         if (field.control() == EffectParameterControl.STRING_LIST && validate(field, value).isEmpty()) {
             List<String> lines = new ArrayList<>();
-            for (JsonElement line : value.getAsJsonArray()) lines.add(line.getAsString());
+            for (JsonElement line : value.getAsJsonArray()) lines.add(EffectTextFormatter.getInstance().normalize(line.getAsString()));
             return String.join("\n", lines);
         }
         return value.toString();
+    }
+
+    private String normalizeText(EffectParameterField field, String value) {
+        return field.control() == EffectParameterControl.ENUM ? value : EffectTextFormatter.getInstance().normalize(value);
     }
 
     public List<String> validateEvent(JsonObject event) {

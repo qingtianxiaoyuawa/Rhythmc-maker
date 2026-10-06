@@ -20,6 +20,7 @@ public final class RhythmcMakerConfig {
     public double playerSpeed = 1.0;
     public double musicVolumeMultiplier = 1.0;
     public double noteJudgementVolumeMultiplier = 1.0;
+    public double playbackPitchPercent = 100.0;
     public String playbackMode = "formal";
     public double playbackSpeed = 1.0;
     public boolean preventChunkDisplacement = true;
@@ -61,6 +62,7 @@ public final class RhythmcMakerConfig {
         playerSpeed = Double.isFinite(playerSpeed) ? Math.max(0.1, Math.min(5.0, playerSpeed)) : 1.0;
         musicVolumeMultiplier = Double.isFinite(musicVolumeMultiplier) ? Math.max(0.1, Math.min(2.0, musicVolumeMultiplier)) : 1.0;
         noteJudgementVolumeMultiplier = Double.isFinite(noteJudgementVolumeMultiplier) ? Math.max(0.1, Math.min(5.0, noteJudgementVolumeMultiplier)) : 1.0;
+        playbackPitchPercent = Double.isFinite(playbackPitchPercent) ? Math.max(25.0, Math.min(200.0, playbackPitchPercent)) : 100.0;
         playbackSpeed = Double.isFinite(playbackSpeed) ? normalizePlaybackSpeed(playbackSpeed) : 1.0;
         if (!"scroll".equals(playbackMode)) playbackMode = "formal";
         if (lobbySidebarContent == null || lobbySidebarContent.isBlank()) lobbySidebarContent = "可以在设置修改此处显示内容~";
