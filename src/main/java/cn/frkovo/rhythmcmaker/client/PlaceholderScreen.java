@@ -88,7 +88,7 @@ final class PlaceholderScreen extends RhythmcScreen {
         } else if (section.equals("keys")) {
             page.child(UIComponents.label(Text.literal("飞行速度快捷键：Ctrl+1（1倍）、Ctrl+2（1.5倍）、Ctrl+3（2倍）、Ctrl+4（4倍）")));
             page.child(UIComponents.label(Text.literal("播放起始 Chunk：按住 Alt + 鼠标滚轮，或按住 Alt 后右键当前 Chunk 任意位置")));
-            page.child(UIComponents.label(Text.literal("播放方式与倍速：按住 Shift + 右键播放，打开菜单选择正式播放或滚动播放及倍速（此处仅作说明）")));
+            page.child(UIComponents.label(Text.literal("播放方式：按住 Shift + 右键播放，打开菜单选择正式播放或滚动播放；全局音高和速度在特效编辑器控制（此处仅作说明）")));
             page.child(UIComponents.button(Text.literal("按键选项"), button -> MinecraftClient.getInstance().setScreen(new ControlsOptionsScreen(this, MinecraftClient.getInstance().options))).horizontalSizing(Sizing.fill()));
         } else if (section.equals("chart-settings")) {
             var chart = ClientChartAccess.resolveActiveChart();

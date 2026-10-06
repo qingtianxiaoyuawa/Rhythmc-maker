@@ -65,12 +65,14 @@ public final class EffectEditorImGuiView {
     private final Runnable replayAction;
     private final Consumer<Double> seekAction;
     private final Consumer<String> statusAction;
+    private final Consumer<Double> pitchAction;
     private final EffectTypeRegistry registry = EffectTypeRegistry.getInstance();
     private final EffectParameterEditor parameterEditor = new EffectParameterEditor();
     private final EffectTrackLayoutModel layoutModel;
     private final EffectPreviewViewport viewport = new EffectPreviewViewport();
     private final Consumer<Integer> divisionsAction;
     private final ImInt divisionsField = new ImInt();
+    private final ImDouble pitchPercentField = new ImDouble(100.0);
     private boolean inputLocked;
     private final List<EffectEditorLayout.KeyframePosition> keyframePositions = new ArrayList<>();
     private List<TimelineRow> cachedTimelineRows;
@@ -127,7 +129,8 @@ public final class EffectEditorImGuiView {
 
     public EffectEditorImGuiView(ChartManifest chart, Runnable saveAction, Runnable closeAction,
                                  Runnable togglePlaybackAction, Runnable replayAction,
-                                 Consumer<Double> seekAction, Consumer<String> statusAction, Consumer<Integer> divisionsAction) {
+                                 Consumer<Double> seekAction, Consumer<String> statusAction, Consumer<Integer> divisionsAction,
+                                 Consumer<Double> pitchAction) {
         this.chart = chart;
         this.saveAction = saveAction;
         this.closeAction = closeAction;
@@ -136,6 +139,8 @@ public final class EffectEditorImGuiView {
         this.seekAction = seekAction;
         this.statusAction = statusAction;
         this.divisionsAction = divisionsAction;
+        this.pitchAction = pitchAction;
+        pitchPercentField.set(RhythmcMakerClient.getPlaybackPitchPercent());
         divisionsField.set(chart == null ? 1 : chart.divisionsPerChunk);
         this.layoutModel = new EffectTrackLayoutModel(chart == null ? null : chart.effectEditorLayout);
         if (chart != null && chart.effects != null) {
@@ -199,7 +204,7 @@ public final class EffectEditorImGuiView {
         }
         if (ImGui.beginPopupModal("正在同步轨道", ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoMove)) {
             if (!inputLocked) ImGui.closeCurrentPopup();
-            ImGui.textWrapped(status);
+            ImGui.text(status);
             ImGui.endPopup();
         }
         applyDefaultDockLayout = false;
@@ -234,23 +239,30 @@ public final class EffectEditorImGuiView {
                     ImGui.getContentRegionAvailY());
             ImGui.dockSpace(dockspaceId, 0.0f, 0.0f,
                     ImGuiDockNodeFlags.PassthruCentralNode);
-            imgui.internal.ImGuiDockNode root = imgui.internal.ImGui.dockBuilderGetNode(dockspaceId);
-            imgui.internal.ImGuiDockNode center = root == null ? null : root.getCentralNode();
-            if (center != null) viewport.setBounds(center.getPosX(), center.getPosY(), center.getSizeX(), center.getSizeY());
+            imgui.internal.ImGuiDockNode center = imgui.internal.ImGui.dockBuilderGetCentralNode(dockspaceId);
+            if (center.isValidPtr()) {
+                viewport.setBounds(center.getPosX(), center.getPosY(), center.getSizeX(), center.getSizeY());
+                viewport.drawPreview(ImGui.getWindowDrawList());
+            } else {
+                viewport.setBounds(0.0f, 0.0f, 0.0f, 0.0f);
+            }
         }
         ImGui.end();
         ImGui.popStyleVar();
     }
 
     private void initializeDefaultDockLayout(int dockspaceId, float width, float height) {
-        if (imgui.internal.ImGui.dockBuilderGetNode(dockspaceId) != null) return;
+        imgui.internal.ImGuiDockNode existingDockspace = imgui.internal.ImGui.dockBuilderGetNode(dockspaceId);
+        if (existingDockspace.isValidPtr()) return;
 
         int previousDockspaceId = ImGui.getID("##effect-editor-dockspace-node");
-        if (imgui.internal.ImGui.dockBuilderGetNode(previousDockspaceId) != null) {
+        imgui.internal.ImGuiDockNode previousDockspace = imgui.internal.ImGui.dockBuilderGetNode(previousDockspaceId);
+        if (previousDockspace.isValidPtr()) {
             imgui.internal.ImGui.dockBuilderRemoveNode(previousDockspaceId);
         }
         int incompleteDockspaceId = ImGui.getID("##effect-editor-dockspace-node-v2");
-        if (imgui.internal.ImGui.dockBuilderGetNode(incompleteDockspaceId) != null) {
+        imgui.internal.ImGuiDockNode incompleteDockspace = imgui.internal.ImGui.dockBuilderGetNode(incompleteDockspaceId);
+        if (incompleteDockspace.isValidPtr()) {
             imgui.internal.ImGui.dockBuilderRemoveNode(incompleteDockspaceId);
         }
         imgui.internal.ImGui.dockBuilderAddNode(dockspaceId);
@@ -529,6 +541,25 @@ public final class EffectEditorImGuiView {
             drawTimelineControl("timeline-next", "后移（→）", TimelineControl.NEXT);
             ImGui.unindent();
         }
+        ImGui.sameLine();
+        ImGui.text("音高");
+        ImGui.sameLine();
+        ImGui.setNextItemWidth(78.0f);
+        if (ImGui.inputDouble("##effect-pitch-percent", pitchPercentField, 0.0, 0.0, "%.1f",
+                imgui.flag.ImGuiInputTextFlags.EnterReturnsTrue)) {
+            double requestedPercent = pitchPercentField.get();
+            if (Double.isFinite(requestedPercent)) {
+                double normalizedPercent = Math.max(1.0, Math.min(1000.0, requestedPercent));
+                pitchPercentField.set(normalizedPercent);
+                pitchAction.accept(normalizedPercent);
+            } else {
+                pitchPercentField.set(RhythmcMakerClient.getPlaybackPitchPercent());
+            }
+        }
+        boolean pitchHovered = ImGui.isItemHovered();
+        ImGui.sameLine();
+        ImGui.text("%");
+        if (pitchHovered) ImGui.setTooltip("范围：1%–1000%；100% 为原音高和原速度。该设置全局生效，按 Enter 应用。");
         ImGui.popStyleVar();
     }
 

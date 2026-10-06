@@ -2,6 +2,8 @@ package cn.frkovo.rhythmcmaker.config;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.util.WorldSavePath;
 
@@ -21,7 +23,7 @@ public final class RhythmcMakerConfig {
     public double musicVolumeMultiplier = 1.0;
     public double noteJudgementVolumeMultiplier = 1.0;
     public String playbackMode = "formal";
-    public double playbackSpeed = 1.0;
+    public double playbackPitchPercent = 100.0;
     public boolean preventChunkDisplacement = true;
     public String lobbySidebarContent = "可以在设置修改此处显示内容~";
 
@@ -33,7 +35,12 @@ public final class RhythmcMakerConfig {
         try {
             Path path = path(server);
             if (Files.exists(path)) {
-                RhythmcMakerConfig loaded = GSON.fromJson(Files.readString(path, StandardCharsets.UTF_8), RhythmcMakerConfig.class);
+                JsonObject settings = JsonParser.parseString(Files.readString(path, StandardCharsets.UTF_8)).getAsJsonObject();
+                if (!settings.has("playbackPitchPercent") && settings.has("playbackSpeed")) {
+                    settings.addProperty("playbackPitchPercent", settings.get("playbackSpeed").getAsDouble() * 100.0);
+                }
+                settings.remove("playbackSpeed");
+                RhythmcMakerConfig loaded = GSON.fromJson(settings, RhythmcMakerConfig.class);
                 if (loaded != null) config = loaded;
             }
             config.normalize();
@@ -61,15 +68,11 @@ public final class RhythmcMakerConfig {
         playerSpeed = Double.isFinite(playerSpeed) ? Math.max(0.1, Math.min(5.0, playerSpeed)) : 1.0;
         musicVolumeMultiplier = Double.isFinite(musicVolumeMultiplier) ? Math.max(0.1, Math.min(2.0, musicVolumeMultiplier)) : 1.0;
         noteJudgementVolumeMultiplier = Double.isFinite(noteJudgementVolumeMultiplier) ? Math.max(0.1, Math.min(5.0, noteJudgementVolumeMultiplier)) : 1.0;
-        playbackSpeed = Double.isFinite(playbackSpeed) ? normalizePlaybackSpeed(playbackSpeed) : 1.0;
+        playbackPitchPercent = Double.isFinite(playbackPitchPercent)
+                ? Math.max(1.0, Math.min(1000.0, playbackPitchPercent))
+                : 100.0;
         if (!"scroll".equals(playbackMode)) playbackMode = "formal";
         if (lobbySidebarContent == null || lobbySidebarContent.isBlank()) lobbySidebarContent = "可以在设置修改此处显示内容~";
         if (lobbySidebarContent.length() > 120) lobbySidebarContent = lobbySidebarContent.substring(0, 120);
-    }
-    private static double normalizePlaybackSpeed(double value) {
-        double[] choices = {0.25, 0.5, 0.75, 1.0, 1.5, 2.0};
-        double nearest = choices[0];
-        for (double choice : choices) if (Math.abs(choice - value) < Math.abs(nearest - value)) nearest = choice;
-        return nearest;
     }
 }

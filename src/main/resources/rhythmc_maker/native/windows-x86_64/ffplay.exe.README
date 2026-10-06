@@ -8,7 +8,8 @@ Source:   https://ffmpeg.org/releases/ffmpeg-6.1.1.tar.xz   (SDL2: libsdl.org / 
 Why this binary exists
 ----------------------
 The previous bundled ffplay was a 64.5 MB FFmpeg 4.2.2 full static build. Rhythmc
-maker only uses ffplay to play the chart audio (`-nodisp ... -af volume,atempo`),
+maker only uses ffplay to play chart audio and apply pitch/speed changes
+(`-nodisp ... -af volume,aresample,asetrate`),
 so a minimal 6.1.1 build shrinks it to ~4.3 MB. This also aligns ffplay with the
 bundled ffprobe (previously the two were different FFmpeg versions).
 
