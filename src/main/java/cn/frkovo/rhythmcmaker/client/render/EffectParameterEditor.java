@@ -6,7 +6,6 @@ import cn.frkovo.rhythmcmaker.common.effect.parameter.EffectParameterField;
 import cn.frkovo.rhythmcmaker.common.effect.parameter.EffectParameterResult;
 import cn.frkovo.rhythmcmaker.common.effect.parameter.EffectParameterSchema;
 import cn.frkovo.rhythmcmaker.common.effect.parameter.EffectParameterType;
-import cn.frkovo.rhythmcmaker.common.text.EffectTextFormatter;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -24,7 +23,6 @@ public final class EffectParameterEditor {
     private final EffectParameterCodec codec = EffectParameterCodec.getInstance();
     private final EffectParameterLabels labels = EffectParameterLabels.getInstance();
     private final List<EventForm> forms = new ArrayList<>();
-    private final EffectTextFormatter textFormatter = EffectTextFormatter.getInstance();
     private boolean changed;
 
     public boolean render(JsonObject event) {
@@ -162,26 +160,8 @@ public final class EffectParameterEditor {
             }
         }
         if (!state.error.isEmpty()) ImGui.textColored(0xFF7777FF, state.error);
-        if (field.control() == EffectParameterControl.TEXT || field.control() == EffectParameterControl.MULTILINE_TEXT
-                || field.control() == EffectParameterControl.STRING_LIST) renderStylePreview(state);
         if (ImGui.smallButton("恢复该参数默认值")) {
             commitValue(form, state, JsonParser.parseString(field.defaultJson()));
-        }
-    }
-
-    private void renderStylePreview(FieldState state) {
-        ImGui.textDisabled("文字样式预览");
-        String value = state.value == null ? "" : state.value.isJsonArray()
-                ? state.value.getAsJsonArray().toString() : state.value.getAsString();
-        List<EffectTextFormatter.PreviewSegment> segments = textFormatter.preview(value, 0xFFFFFF);
-        if (segments.isEmpty()) {
-            ImGui.textDisabled("（空）");
-            return;
-        }
-        for (EffectTextFormatter.PreviewSegment segment : segments) {
-            ImGui.sameLine(0.0f, 0.0f);
-            String suffix = segment.obfuscated() ? " ▒" : "";
-            ImGui.textColored(0xFF000000 | segment.color(), segment.text() + suffix);
         }
     }
 

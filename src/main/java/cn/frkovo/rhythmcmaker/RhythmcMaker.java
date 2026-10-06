@@ -2114,7 +2114,16 @@ private static void showSceneBoundary(MinecraftServer server) {
             session.playedTapSoundThisTick = false;
             session.playedLookSoundThisTick = false;
             session.updateClientTime(player);
-            session.updateTextDisplays(songTime);
+            if (session.formal) {
+                try {
+                    session.updateTextDisplays(songTime);
+                } catch (RuntimeException exception) {
+                    LOGGER.error("Failed to update formal-playback text displays; clearing affected displays", exception);
+                    session.clearTextDisplays();
+                }
+            } else {
+                session.updateTextDisplays(songTime);
+            }
             if (session.formal) {
                 int effectsProcessedThisTick = 0;
                 while (session.nextEffectIndex < session.effects.size()) {
@@ -2122,7 +2131,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                     if (session.effectSeconds(effect) > songTime) break;
                     if (effectsProcessedThisTick++ >= PLAYBACK_MAX_EFFECTS_PER_TICK) break;
                     session.nextEffectIndex++;
-                    playTrackEffect(session, player, effect);
+                    playTrackEffectSafely(session, player, effect);
                 }
             }
             if (session.formal) {
@@ -2199,12 +2208,21 @@ private static void showSceneBoundary(MinecraftServer server) {
             session.playedLookSoundThisTick = false;
             int processed = 0;
             PlaybackSession effectSession = session.effectSession;
-            if (effectSession != null) { effectSession.updateClientTime(player); effectSession.updateTextDisplays(songTime); }
+            if (effectSession != null) {
+                effectSession.updateClientTime(player);
+                try {
+                    effectSession.updateTextDisplays(songTime);
+                } catch (RuntimeException exception) {
+                    LOGGER.error("Failed to update formal scroll-playback text displays; clearing affected displays", exception);
+                    effectSession.clearTextDisplays();
+                }
+            }
             while (effectSession != null && effectSession.nextEffectIndex < effectSession.effects.size()
                     && effectSession.effectTimes.get(effectSession.nextEffectIndex) <= songTime
                     && processed++ < PLAYBACK_MAX_PRELOADS_PER_TICK) {
                 JsonObject effect = effectSession.effects.get(effectSession.nextEffectIndex++);
-                playTrackEffect(effectSession, player, effect);
+                if (session.effectPreview) playTrackEffect(effectSession, player, effect);
+                else playTrackEffectSafely(effectSession, player, effect);
             }
             while (session.nextNoteIndex < session.notes.size()
                     && session.noteTimes.get(session.nextNoteIndex) <= songTime
@@ -2285,7 +2303,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             case "GLOW_COLOR" -> session.applyGlowColor(effect);
             case "HIDE_NOTES" -> session.updateHiddenNotes(effect);
             case "TITLE" -> session.applyTitle(player, effect);
-            case "MESSAGE" -> { if (!text.isBlank()) player.sendMessage(EffectTextFormatter.getInstance().text(text, 0xFFFFFF), false); }
+            case "MESSAGE" -> sendMessageEffect(player, effect, text);
             case "TEXT_DISPLAY", "TEXT_DISPLAY_EFFECT", "TEXT_DISPLAY_SYNC_TRACK", "TEXT_DISPLAY_DESYNC_TRACK", "TEXT_DISPLAY_REMOVE", "HOLOGRAM", "REMOVE_HOLOGRAM" -> session.applyTextEffect(effect);
             case "EFFECT" -> session.applyPotionProxy(player, effect);
             case "CLEAR_EFFECT" -> session.clearPotionEffect(player, effect);
@@ -2296,6 +2314,29 @@ private static void showSceneBoundary(MinecraftServer server) {
             default -> LOGGER.warn("Ignoring unsupported RhythMC effect '{}' instead of substituting a particle placeholder", type);
         }
     }
+    private static void playTrackEffectSafely(PlaybackSession session, ServerPlayerEntity player, JsonObject effect) {
+        try {
+            playTrackEffect(session, player, effect);
+        } catch (RuntimeException exception) {
+            LOGGER.error("Failed to apply formal-playback effect: type={}, beat={}",
+                    effectType(effect), effectDouble(effect, "beat", -1.0), exception);
+        }
+    }
+
+    private static void sendMessageEffect(ServerPlayerEntity player, JsonObject effect, String fallbackText) {
+        JsonElement contents = effectValue(effect, "contents");
+        if (contents != null && contents.isJsonArray()) {
+            for (JsonElement value : contents.getAsJsonArray()) {
+                if (value.isJsonPrimitive()) {
+                    String message = value.getAsString();
+                    if (!message.isBlank()) player.sendMessage(EffectTextFormatter.getInstance().text(message, 0xFFFFFF), false);
+                }
+            }
+            return;
+        }
+        if (!fallbackText.isBlank()) player.sendMessage(EffectTextFormatter.getInstance().text(fallbackText, 0xFFFFFF), false);
+    }
+
     private static String effectType(JsonObject effect) {
         return effectString(effect, "eventType", effectString(effect, "type", "PARTICLE")).trim().toUpperCase(java.util.Locale.ROOT);
     }

@@ -90,7 +90,6 @@ public final class EffectEditorImGuiView {
     private Runnable confirmedCloseAction;
     private final ImDouble beatField = new ImDouble();
     private final float[] playhead = new float[1];
-    private final ImString timelinePositionField = new ImString("0", 64);
     private double timelineZoomMin;
     private double timelineZoomMax = 1.0;
     private int timelineDraggedEvent = -1;
@@ -109,6 +108,7 @@ public final class EffectEditorImGuiView {
     private float timelineBoundsRight = -1.0f;
     private float timelineBoundsBottom = -1.0f;
     private int timelineVisibleRowCapacity;
+    private float timelineAvailableRowsHeight;
     private boolean applyDefaultDockLayout;
     private int libraryDockNodeId;
     private int inspectorDockNodeId;
@@ -482,7 +482,6 @@ public final class EffectEditorImGuiView {
             else divisionsField.set(chart.divisionsPerChunk);
         }
         ImGui.textWrapped(status);
-        ImGui.textWrapped("仅注册表中的类型允许新增；未知类型保留原 JSON 并只读显示。");
         ImGui.separator();
         for (EffectTypeDefinition definition : registry.definitions()) {
             ImGui.pushID(definition.eventType());
@@ -601,18 +600,6 @@ public final class EffectEditorImGuiView {
         if (RhythmcMakerClient.isEffectEditorPreviewPrepared()) {
             playhead[0] = (float) Math.max(0.0, Math.min(maxBeat, RhythmcMakerClient.effectEditorCurrentBeat()));
         }
-        float positionRowWidth = ImGui.getContentRegionAvailX();
-        float positionWidth = Math.max(56.0f, Math.min(170.0f, positionRowWidth * 0.24f));
-        ImGui.setNextItemWidth(positionWidth);
-        String positionLabel = "Chunk 分数##position";
-        if (ImGui.inputText(positionLabel, timelinePositionField)) {
-            Double targetBeat = parseChunkPosition(timelinePositionField.get());
-            if (targetBeat != null) {
-                seekTimelineBeat(targetBeat, maxBeat);
-            }
-        }
-        if (!ImGui.isItemActive()) timelinePositionField.set(formatChunkPosition(playhead[0]));
-        ImGui.sameLine();
         String positionText = formatChunkPosition(playhead[0]);
         ImGui.text(positionText);
 
@@ -697,7 +684,6 @@ public final class EffectEditorImGuiView {
             case RETURN_TO_START -> {
                 replayAction.run();
                 playhead[0] = 0.0f;
-                timelinePositionField.set(formatChunkPosition(0.0));
                 timelineLastSeekBeat = 0.0;
                 status = "已回到开头";
             }
@@ -783,12 +769,20 @@ public final class EffectEditorImGuiView {
         float rulerHeight = 34.0f;
         float footerHeight = 20.0f;
         float availableRowsHeight = Math.max(24.0f, height - rulerHeight - footerHeight);
+        timelineAvailableRowsHeight = availableRowsHeight;
         int visibleRowCapacity = Math.max(1, (int) Math.floor(availableRowsHeight / 24.0f));
         List<TimelineRow> allRows = buildTimelineRows();
-        int rowStart = Math.min(Math.max(0, timelineRowOffset), Math.max(0, allRows.size() - visibleRowCapacity));
+        int rowStart = Math.min(Math.max(0, timelineRowOffset), maxTimelineRowOffset());
         timelineRowOffset = rowStart;
-        List<TimelineRow> rows = allRows.subList(rowStart,
-                Math.min(allRows.size(), rowStart + visibleRowCapacity));
+        int rowEnd = rowStart;
+        float rowsHeight = 0.0f;
+        while (rowEnd < allRows.size()) {
+            float nextHeight = timelineRowHeight(allRows.get(rowEnd));
+            if (rowEnd > rowStart && rowsHeight + nextHeight > availableRowsHeight) break;
+            rowsHeight += nextHeight;
+            rowEnd++;
+        }
+        List<TimelineRow> rows = allRows.subList(rowStart, rowEnd);
         if (rows.isEmpty()) rows = List.of(new TimelineRow("事件", "暂无事件", -1, List.of(), false));
         float trackWidth = Math.min(240.0f, Math.max(96.0f, width * 0.26f));
         float timelineLeft = left + trackWidth;
@@ -1304,17 +1298,35 @@ public final class EffectEditorImGuiView {
     }
 
     private int totalTimelineRows() {
-        return layoutModel.tracks().size();
+        return cachedTimelineRows == null ? buildTimelineRows().size() : cachedTimelineRows.size();
+    }
+
+    private float timelineRowHeight(TimelineRow row) {
+        return row.groupHeader() ? 21.0f : 24.0f;
+    }
+
+    private float timelineRowsHeight(int start, int end) {
+        if (cachedTimelineRows == null) buildTimelineRows();
+        float height = 0.0f;
+        for (int index = Math.max(0, start); index < Math.min(end, cachedTimelineRows.size()); index++) {
+            height += timelineRowHeight(cachedTimelineRows.get(index));
+        }
+        return height;
     }
 
     private int maxTimelineRowOffset() {
-        return Math.max(0, totalTimelineRows() - Math.max(1, timelineVisibleRowCapacity));
+        int totalRows = totalTimelineRows();
+        int maxOffset = 0;
+        for (int offset = 0; offset < totalRows; offset++) {
+            if (timelineRowsHeight(offset, totalRows) <= timelineAvailableRowsHeight + 0.01f) maxOffset = offset;
+        }
+        return maxOffset;
     }
 
     private void drawTimelineScrollBar(ImDrawList drawList, float left, float top, float bottom, int visibleRows) {
-        int totalRows = Math.max(1, totalTimelineRows());
+        float contentHeight = Math.max(1.0f, timelineRowsHeight(0, totalTimelineRows()));
         float trackHeight = Math.max(1.0f, bottom - top);
-        float thumbHeight = Math.max(24.0f, trackHeight * Math.min(1.0f, visibleRows / (float) totalRows));
+        float thumbHeight = Math.max(24.0f, trackHeight * Math.min(1.0f, timelineAvailableRowsHeight / contentHeight));
         float travel = Math.max(0.0f, trackHeight - thumbHeight);
         float progress = maxTimelineRowOffset() == 0 ? 0.0f : timelineRowOffset / (float) maxTimelineRowOffset();
         float thumbTop = top + travel * progress;
@@ -1323,18 +1335,18 @@ public final class EffectEditorImGuiView {
     }
 
     private float timelineScrollBarTop(float top, float bottom) {
-        int totalRows = Math.max(1, totalTimelineRows());
+        float contentHeight = Math.max(1.0f, timelineRowsHeight(0, totalTimelineRows()));
         float trackHeight = Math.max(1.0f, bottom - top);
-        float thumbHeight = Math.max(24.0f, trackHeight * Math.min(1.0f, timelineVisibleRowCapacity / (float) totalRows));
+        float thumbHeight = Math.max(24.0f, trackHeight * Math.min(1.0f, timelineAvailableRowsHeight / contentHeight));
         float travel = Math.max(0.0f, trackHeight - thumbHeight);
         float progress = maxTimelineRowOffset() == 0 ? 0.0f : timelineRowOffset / (float) maxTimelineRowOffset();
         return top + travel * progress;
     }
 
     private void moveTimelineScrollBar(float mouseY, float top, float bottom) {
-        int totalRows = Math.max(1, totalTimelineRows());
+        float contentHeight = Math.max(1.0f, timelineRowsHeight(0, totalTimelineRows()));
         float trackHeight = Math.max(1.0f, bottom - top);
-        float thumbHeight = Math.max(24.0f, trackHeight * Math.min(1.0f, timelineVisibleRowCapacity / (float) totalRows));
+        float thumbHeight = Math.max(24.0f, trackHeight * Math.min(1.0f, timelineAvailableRowsHeight / contentHeight));
         float travel = Math.max(1.0f, trackHeight - thumbHeight);
         float target = Math.max(0.0f, Math.min(travel, mouseY - timelineScrollBarDragOffset - top));
         timelineRowOffset = (int) Math.round(target / travel * maxTimelineRowOffset());

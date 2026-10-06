@@ -56,10 +56,13 @@ public final class EffectEditorLayout {
 
         public String label() {
             int chunk = (int) Math.floor(beat);
-            double numerator = (beat - chunk) * denominator;
-            String text = Math.abs(numerator - Math.rint(numerator)) < 1.0e-8
-                    ? Long.toString(Math.round(numerator)) : Double.toString(numerator);
-            return "Chunk " + (chunk + 1) + " + " + text + "/" + denominator;
+            int safeDenominator = Math.max(1, Math.min(32, denominator));
+            long numerator = Math.round((beat - chunk) * safeDenominator);
+            if (numerator >= safeDenominator) {
+                chunk++;
+                numerator = 0;
+            }
+            return "Chunk " + (chunk + 1) + " + " + numerator + "/" + safeDenominator;
         }
     }
 }
