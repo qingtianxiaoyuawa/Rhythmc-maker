@@ -474,8 +474,8 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     public static void adjustEffectEditorCamera(double mouseDeltaX, double mouseDeltaY) {
         if (!effectEditorPreviewPrepared || !Double.isFinite(mouseDeltaX) || !Double.isFinite(mouseDeltaY)) return;
         effectEditorCameraLocked = true;
-        effectEditorCameraZOffset += mouseDeltaX * EFFECT_EDITOR_CAMERA_DRAG_SCALE;
-        effectEditorCameraX -= mouseDeltaY * EFFECT_EDITOR_CAMERA_DRAG_SCALE;
+        effectEditorCameraZOffset += mouseDeltaX * EFFECT_EDITOR_CAMERA_DRAG_SCALE * 0.5;
+        effectEditorCameraX -= mouseDeltaY * EFFECT_EDITOR_CAMERA_DRAG_SCALE * 0.5;
     }
 
     public static void adjustEffectEditorCameraHeight(double wheelDelta) {

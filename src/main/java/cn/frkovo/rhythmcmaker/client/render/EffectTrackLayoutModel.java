@@ -66,6 +66,22 @@ public final class EffectTrackLayoutModel {
         return saved;
     }
 
+    public void restore(EffectEditorLayout saved) {
+        tracks.clear();
+        positions.clear();
+        if (saved == null) return;
+        if (saved.tracks != null) {
+            for (EffectEditorLayout.Track track : saved.tracks) {
+                tracks.add(new EffectEditorLayout.Track(track.id, track.type));
+            }
+        }
+        if (saved.positions != null) {
+            for (EffectEditorLayout.Position position : saved.positions) {
+                positions.add(new EffectEditorLayout.Position(position.trackId, position.beat, position.denominator));
+            }
+        }
+    }
+
     private String availableTrack(String type, double beat, String preferred, int excluded) {
         for (EffectEditorLayout.Track track : tracks) {
             if (track.id.equals(preferred) && track.type.equals(type) && free(track.id, beat, excluded)) return track.id;

@@ -2001,7 +2001,11 @@ private static void showSceneBoundary(MinecraftServer server) {
         if ("scroll".equals(mode)) {
             SCROLL_JUDGEMENT_SESSIONS.put(player.getUuid(), new ScrollJudgementSession(world, chart, player, startSeconds, startNanos, rate));
         } else {
-            PlaybackSession session = new PlaybackSession(world, player.getX(), player.getY(), player.getZ(), player.getYaw(), player.getPitch(), chart, startSeconds, startNanos, mode, rate);
+            java.util.List<net.minecraft.entity.effect.StatusEffectInstance> originalEffects = new java.util.ArrayList<>();
+            for (net.minecraft.entity.effect.StatusEffectInstance effect : player.getStatusEffects()) {
+                originalEffects.add(new net.minecraft.entity.effect.StatusEffectInstance(effect));
+            }
+            PlaybackSession session = new PlaybackSession(world, player.getX(), player.getY(), player.getZ(), player.getYaw(), player.getPitch(), chart, startSeconds, startNanos, mode, rate, originalEffects);
             PLAYBACK_SESSIONS.put(player.getUuid(), session);
             player.teleport(world, PLAYBACK_PLATFORM_X + 0.5, PLAYBACK_PLATFORM_Y + 1.0, PLAYBACK_PLATFORM_Z + 0.5, Set.of(), 180.0f, 0.0f, false);
         }
@@ -2492,7 +2496,6 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
         PlaybackSession session = PLAYBACK_SESSIONS.remove(player.getUuid());
         if (session == null) return;
-        player.clearStatusEffects();
         try {
             session.resetClientTime(player);
             session.clearGlowTeam();
@@ -2509,6 +2512,13 @@ private static void showSceneBoundary(MinecraftServer server) {
         } catch (RuntimeException exception) {
             LOGGER.error("Failed to clean playback displays for {}", player.getUuid(), exception);
         } finally {
+            if (session.formal) {
+                player.clearStatusEffects();
+                for (net.minecraft.entity.effect.StatusEffectInstance effect : session.originalStatusEffects) {
+                    player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(effect));
+                }
+                player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.ClearTitleS2CPacket(true));
+            }
             if (session.formal && session.sceneChanged) {
                 restoreInitialPlaybackScene(server, session);
             }
@@ -2691,6 +2701,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final Map<String, Double> noteTimes = new java.util.HashMap<>();
 
         private final double endSeconds;
+        private final java.util.List<net.minecraft.entity.effect.StatusEffectInstance> originalStatusEffects;
         private int nextNoteIndex;
         private final Map<String, DisplayEntity.BlockDisplayEntity> displays = new java.util.HashMap<>();
         private final Map<String, DisplayEntity.TextDisplayEntity> textDisplays = new java.util.HashMap<>();
@@ -2725,7 +2736,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             nextEffectIndex = 0;
             while (nextNoteIndex < notes.size() && noteTimes.getOrDefault(notes.get(nextNoteIndex).id, Double.POSITIVE_INFINITY) < corrected) nextNoteIndex++;
         }
-        private PlaybackSession(ServerWorld world, double returnX, double returnY, double returnZ, float returnYaw, float returnPitch, ChartManifest chart, double startSeconds, long startNanos, String mode, double rate) {
+        private PlaybackSession(ServerWorld world, double returnX, double returnY, double returnZ, float returnYaw, float returnPitch, ChartManifest chart, double startSeconds, long startNanos, String mode, double rate, java.util.List<net.minecraft.entity.effect.StatusEffectInstance> originalStatusEffects) {
             this.world = world;
             this.returnX = returnX;
             this.returnY = returnY;
@@ -2741,6 +2752,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             this.startNanos = startNanos;
             this.formal = !"scroll".equalsIgnoreCase(mode);
             this.rate = rate;
+            this.originalStatusEffects = new java.util.ArrayList<>(originalStatusEffects);
             this.notes = new java.util.ArrayList<>(chart.notes == null ? java.util.List.of() : chart.notes);
             this.effects = new java.util.ArrayList<>(chart.effects == null ? java.util.List.of() : chart.effects);
             this.effects.sort(java.util.Comparator.comparingDouble(this::effectSeconds));
