@@ -791,8 +791,9 @@ public final class EffectEditorImGuiView {
         float rowsTop = top + 34.0f;
         if (!popupWasOpen && hovered && ImGui.isMouseClicked(1)) {
             List<TimelineRow> rows = buildTimelineRows();
-            int rowIndex = timelineRowOffset + (int) Math.floor((mouseY - rowsTop) / 24.0f);
-            if (mouseY >= rowsTop && mouseY < footerTop && rowIndex >= 0 && rowIndex < rows.size()) {
+            int rowIndex = timelineRowAt(rows, timelineRowOffset, rowsTop, mouseY);
+            if (mouseY >= rowsTop && mouseY < footerTop && rowIndex >= 0 && rowIndex < rows.size()
+                    && !rows.get(rowIndex).groupHeader()) {
                 contextTrackId = rows.get(rowIndex).groupLabel();
                 contextBeat = Math.max(0.0, Math.round(timelineXToBeat(mouseX, timelineLeft, timelineWidth, minBeat, maxVisibleBeat)
                         * chart.divisionsPerChunk) / (double) chart.divisionsPerChunk);
@@ -997,8 +998,18 @@ public final class EffectEditorImGuiView {
         if (cachedTimelineRows != null) return cachedTimelineRows;
         List<TimelineRow> rows = new ArrayList<>();
         cachedTimelineMaxBeat = Math.max(1.0, chart == null ? 1.0 : chart.totalBeats);
+        List<EffectEditorLayout.Track> orderedTracks = new ArrayList<>(layoutModel.tracks());
+        List<EffectTypeDefinition> definitions = registry.definitions();
+        orderedTracks.sort((left, right) -> Integer.compare(definitionOrder(definitions, left.type), definitionOrder(definitions, right.type)));
         int trackNumber = 0;
-        for (EffectEditorLayout.Track track : layoutModel.tracks()) {
+        String previousType = "";
+        for (EffectEditorLayout.Track track : orderedTracks) {
+            EffectTypeDefinition definition = registry.find(track.type);
+            if (!track.type.equals(previousType)) {
+                String groupLabel = definition == null ? track.type : definition.displayName();
+                rows.add(new TimelineRow(groupLabel, groupLabel, -1, List.of(), true));
+                previousType = track.type;
+            }
             List<TimelineMarker> markers = new ArrayList<>();
             int firstEvent = -1;
             for (int eventIndex = 0; eventIndex < workingEffects.size(); eventIndex++) {
@@ -1006,7 +1017,6 @@ public final class EffectEditorImGuiView {
                 if (firstEvent < 0) firstEvent = eventIndex;
                 markers.addAll(timelineMarkers(eventIndex, workingEffects.get(eventIndex)));
             }
-            EffectTypeDefinition definition = registry.find(track.type);
             String label = ++trackNumber + " · " + (definition == null ? track.type : definition.displayName());
             rows.add(new TimelineRow(track.id, label, firstEvent, markers, false));
             for (TimelineMarker marker : markers) cachedTimelineMaxBeat = Math.max(cachedTimelineMaxBeat, marker.beat());
@@ -1015,6 +1025,21 @@ public final class EffectEditorImGuiView {
         return cachedTimelineRows;
     }
 
+    private int definitionOrder(List<EffectTypeDefinition> definitions, String type) {
+        for (int index = 0; index < definitions.size(); index++) {
+            if (definitions.get(index).eventType().equals(type)) return index;
+        }
+        return Integer.MAX_VALUE;
+    }
+    private int timelineRowAt(List<TimelineRow> rows, int offset, float rowsTop, float mouseY) {
+        float rowY = rowsTop;
+        for (int index = offset; index < rows.size(); index++) {
+            float rowHeight = rows.get(index).groupHeader() ? 21.0f : 24.0f;
+            if (mouseY >= rowY && mouseY < rowY + rowHeight) return index;
+            rowY += rowHeight;
+        }
+        return -1;
+    }
     private List<TimelineMarker> timelineMarkers(int eventIndex, JsonObject event) {
         List<TimelineMarker> markers = new ArrayList<>();
         markers.add(new TimelineMarker(eventIndex, -1, -1, eventBeat(event), TimelineMarkerKind.EVENT));
@@ -1072,6 +1097,11 @@ public final class EffectEditorImGuiView {
         }
         dirty = true;
         cachedTimelineRows = null;
+    }
+
+    private double snapPosition(double beat) {
+        int denominator = Math.max(1, Math.min(32, chart.divisionsPerChunk));
+        return Math.max(0.0, Math.round(beat * denominator) / (double) denominator);
     }
 
     private void seekTimelineBeat(double beat, double maxBeat) {
