@@ -66,6 +66,7 @@ public final class EffectEditorImGuiView {
     private final Consumer<Double> seekAction;
     private final Consumer<String> statusAction;
     private final EffectTypeRegistry registry = EffectTypeRegistry.getInstance();
+    private final ImGuiDockNodeAccess dockNodeAccess = ImGuiDockNodeAccess.getInstance();
     private final EffectParameterEditor parameterEditor = new EffectParameterEditor();
     private final EffectTrackLayoutModel layoutModel;
     private final EffectPreviewViewport viewport = new EffectPreviewViewport();
@@ -229,31 +230,33 @@ public final class EffectEditorImGuiView {
         ImGui.setNextWindowSize(width, Math.max(1.0f, height - 46.0f), ImGuiCond.Always);
         ImGui.pushStyleVar(ImGuiStyleVar.WindowPadding, 0.0f, 0.0f);
         if (ImGui.begin("##effect-editor-dockspace", DOCKSPACE_FLAGS)) {
-        int dockspaceId = ImGui.getID("##effect-editor-dockspace-node-v4");
+            int dockspaceId = ImGui.getID("##effect-editor-dockspace-node-v4");
             initializeDefaultDockLayout(dockspaceId, ImGui.getContentRegionAvailX(),
                     ImGui.getContentRegionAvailY());
             ImGui.dockSpace(dockspaceId, 0.0f, 0.0f,
                     ImGuiDockNodeFlags.PassthruCentralNode);
-            imgui.internal.ImGuiDockNode root = imgui.internal.ImGui.dockBuilderGetNode(dockspaceId);
-            imgui.internal.ImGuiDockNode center = root == null ? null : root.getCentralNode();
-            if (center != null) viewport.setBounds(center.getPosX(), center.getPosY(), center.getSizeX(), center.getSizeY());
+            if (dockNodeAccess.hasCentralDockspace(dockspaceId)) {
+                imgui.internal.ImGuiDockNode center = dockNodeAccess.centralNode(dockspaceId);
+                viewport.setBounds(center.getPosX(), center.getPosY(), center.getSizeX(), center.getSizeY());
+            }
         }
         ImGui.end();
         ImGui.popStyleVar();
     }
 
     private void initializeDefaultDockLayout(int dockspaceId, float width, float height) {
-        if (imgui.internal.ImGui.dockBuilderGetNode(dockspaceId) != null) return;
+        if (dockNodeAccess.hasCentralDockspace(dockspaceId)) return;
+        if (dockNodeAccess.exists(dockspaceId)) imgui.internal.ImGui.dockBuilderRemoveNode(dockspaceId);
 
         int previousDockspaceId = ImGui.getID("##effect-editor-dockspace-node");
-        if (imgui.internal.ImGui.dockBuilderGetNode(previousDockspaceId) != null) {
+        if (dockNodeAccess.exists(previousDockspaceId)) {
             imgui.internal.ImGui.dockBuilderRemoveNode(previousDockspaceId);
         }
         int incompleteDockspaceId = ImGui.getID("##effect-editor-dockspace-node-v2");
-        if (imgui.internal.ImGui.dockBuilderGetNode(incompleteDockspaceId) != null) {
+        if (dockNodeAccess.exists(incompleteDockspaceId)) {
             imgui.internal.ImGui.dockBuilderRemoveNode(incompleteDockspaceId);
         }
-        imgui.internal.ImGui.dockBuilderAddNode(dockspaceId);
+        dockNodeAccess.addDockSpaceNode(dockspaceId);
         imgui.internal.ImGui.dockBuilderSetNodeSize(dockspaceId, Math.max(1.0f, width), Math.max(1.0f, height));
 
         ImInt timelineNode = new ImInt();
