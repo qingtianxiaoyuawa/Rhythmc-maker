@@ -30,6 +30,7 @@ public final class EffectParameterEditor {
         EffectParameterType type = EffectParameterSchema.getInstance().find(codec.type(event));
         if (type == null) return false;
         EventForm form = form(event);
+        ImGui.textColored(0xFF9CCBFF, type.official() ? "Reborn 3.0 官方参数" : "Maker 本地扩展参数");
         if (!type.official()) ImGui.textWrapped(type.eventType().equals("ACTIONBAR")
                 ? "Maker 本地扩展：可编辑和保存，但不能直接导出为官方 3.0 特效。导出前请改为 TITLE 或 MESSAGE。"
                 : "旧 Maker 名称；导出时转换为官方 ARENA。");
@@ -113,6 +114,9 @@ public final class EffectParameterEditor {
         FieldState state = state(form, field);
         ImGui.textWrapped(field.label() + "  ·  " + field.name());
         if (!field.help().isBlank()) ImGui.textWrapped(field.help());
+        if (field.name().equals("effectId") && actual != null && actual.isJsonPrimitive() && actual.getAsJsonPrimitive().isNumber()) {
+            ImGui.textDisabled("对应效果：" + labels.potion(actual.getAsInt()) + "；导出仍保存原始 Bukkit 数字 ID。");
+        }
         if (field.optional()) {
             ImBoolean enabled = new ImBoolean(actual != null);
             if (ImGui.checkbox("启用此可选参数", enabled)) {
@@ -124,7 +128,13 @@ public final class EffectParameterEditor {
             }
             if (actual == null) {
                 if (field.name().equals("duration")) ImGui.textDisabled("省略时使用官方默认值：31536000000 毫秒。");
+                else ImGui.textDisabled("未设置：沿用 Reborn 官方的省略语义。");
                 return;
+            }
+            if (actual.isJsonArray()) {
+                ImGui.textDisabled(actual.getAsJsonArray().isEmpty()
+                        ? "显式空数组：不处理任何目标，不等同于省略该参数。"
+                        : "显式数组值：仅处理列出的目标。" );
             }
         } else if (actual == null) {
             ImGui.textColored(0xFF7777FF, "缺少必填参数，不会静默写入默认值。");
