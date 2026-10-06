@@ -419,8 +419,9 @@ public final class RhythmcMaker implements ModInitializer {
                 .then(net.minecraft.server.command.CommandManager.argument("startChunk", com.mojang.brigadier.arguments.IntegerArgumentType.integer(1, 4096))
                     .executes(context -> togglePlayback(context.getSource(), com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "startChunk")))
                     .then(net.minecraft.server.command.CommandManager.argument("mode", com.mojang.brigadier.arguments.StringArgumentType.word())
-                        .then(net.minecraft.server.command.CommandManager.argument("rate", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg(0.25, 2.0))
-                            .executes(context -> togglePlayback(context.getSource(), com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "startChunk"), com.mojang.brigadier.arguments.StringArgumentType.getString(context, "mode"), com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "rate")))))));
+                        .executes(context -> togglePlayback(context.getSource(),
+                                com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "startChunk"),
+                                com.mojang.brigadier.arguments.StringArgumentType.getString(context, "mode"))))));
             dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_effect_preview_prepare")
                 .executes(context -> prepareEffectPreview(context.getSource())));
             dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_effect_preview_close")
@@ -431,10 +432,8 @@ public final class RhythmcMaker implements ModInitializer {
                         com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "beat")))));
             dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_effect_preview_play")
                 .then(net.minecraft.server.command.CommandManager.argument("beat", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg(0.0))
-                    .then(net.minecraft.server.command.CommandManager.argument("rate", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg(0.25, 2.0))
-                        .executes(context -> playEffectPreview(context.getSource(),
-                            com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "beat"),
-                            com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "rate"))))));
+                    .executes(context -> playEffectPreview(context.getSource(),
+                        com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "beat")))));
         });
     }
 
@@ -1978,9 +1977,9 @@ private static void showSceneBoundary(MinecraftServer server) {
         session.resync(songSeconds);
         return 1;
     }
-    private static int togglePlayback(net.minecraft.server.command.ServerCommandSource source) throws com.mojang.brigadier.exceptions.CommandSyntaxException { return togglePlayback(source, -1, "formal", 1.0); }
-    private static int togglePlayback(net.minecraft.server.command.ServerCommandSource source, int requestedStartChunk) throws com.mojang.brigadier.exceptions.CommandSyntaxException { return togglePlayback(source, requestedStartChunk, "formal", 1.0); }
-    private static int togglePlayback(net.minecraft.server.command.ServerCommandSource source, int requestedStartChunk, String requestedMode, double requestedRate) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+    private static int togglePlayback(net.minecraft.server.command.ServerCommandSource source) throws com.mojang.brigadier.exceptions.CommandSyntaxException { return togglePlayback(source, -1, "formal"); }
+    private static int togglePlayback(net.minecraft.server.command.ServerCommandSource source, int requestedStartChunk) throws com.mojang.brigadier.exceptions.CommandSyntaxException { return togglePlayback(source, requestedStartChunk, "formal"); }
+    private static int togglePlayback(net.minecraft.server.command.ServerCommandSource source, int requestedStartChunk, String requestedMode) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayerEntity player = source.getPlayerOrThrow();
         if (ACTIVE_SCENE_EDITORS.containsKey(player.getUuid())) {
             player.sendMessage(Text.literal("场景搭建期间不能播放谱面"), true);
@@ -1995,7 +1994,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         int startChunk = requestedStartChunk > 0 ? Math.max(1, Math.min(Math.max(1, chart.chunkCount), requestedStartChunk)) : selectedStartChunk(player, chart);
         double startBeat = PlaybackCoordinates.beatAtChunkStart(startChunk);
         String mode = "scroll".equalsIgnoreCase(requestedMode) ? "scroll" : "formal";
-        double rate = normalizePlaybackRate(requestedRate);
+        double rate = playbackPitchRate();
         double startSeconds = PlaybackCoordinates.songTimeAtBeat(chart, ChartTiming.prepare(chart), startBeat);
         long startNanos = System.nanoTime() + PLAYBACK_START_DELAY_TICKS * 50_000_000L;
         if ("scroll".equals(mode)) {
@@ -2018,12 +2017,12 @@ private static void showSceneBoundary(MinecraftServer server) {
         ensureEffectPreviewPlayer(player, world, chart, 0.0);
         return 1;
     }
-    private static int playEffectPreview(net.minecraft.server.command.ServerCommandSource source, double requestedBeat, double requestedRate) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+    private static int playEffectPreview(net.minecraft.server.command.ServerCommandSource source, double requestedBeat) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayerEntity player = source.getPlayerOrThrow();
         ChartManifest chart = loadActiveChart(player, source.getServer());
         if (chart == null || !(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world) || chart.bpm <= 0) return 0;
         double beat = Math.max(0.0, Math.min(Math.max(0.0, chart.totalBeats), requestedBeat));
-        double rate = normalizePlaybackRate(requestedRate);
+        double rate = playbackPitchRate();
         ScrollJudgementSession session = SCROLL_JUDGEMENT_SESSIONS.get(player.getUuid());
         if (session == null || !session.effectPreview || session.world != world) {
             stopPlayback(source.getServer(), player, false);
@@ -2227,11 +2226,8 @@ private static void showSceneBoundary(MinecraftServer server) {
             }
         }
     }
-    private static double normalizePlaybackRate(double value) {
-        double[] choices = {0.25, 0.5, 0.75, 1.0, 1.5, 2.0};
-        double nearest = choices[0];
-        for (double choice : choices) if (Math.abs(choice - value) < Math.abs(nearest - value)) nearest = choice;
-        return nearest;
+    private static double playbackPitchRate() {
+        return config.playbackPitchPercent / 100.0;
     }
     private static void playHitSound(PlaybackSession session, ServerPlayerEntity player, ChartManifest.Note note) {
         if (note.type == 3) return;
@@ -2505,8 +2501,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         return scaledPotionDurationTicks(effectInt(effect, "duration", 100), playbackRate);
     }
     private static int scaledPotionDurationTicks(int durationTicks, double playbackRate) {
-        double normalizedRate = normalizePlaybackRate(playbackRate);
-        long scaled = (long) Math.ceil(Math.max(1L, durationTicks) / normalizedRate);
+        long scaled = (long) Math.ceil(Math.max(1L, durationTicks) / playbackRate);
         return (int) Math.min(Integer.MAX_VALUE, Math.max(1L, scaled));
     }
     private static void stopPlayback(MinecraftServer server, ServerPlayerEntity player, boolean returnPlayer) {

@@ -4,14 +4,15 @@ import cn.frkovo.rhythmcmaker.chart.ChartManifest;
 import cn.frkovo.rhythmcmaker.client.render.EffectEditorImGuiView;
 import cn.frkovo.rhythmcmaker.client.render.ImGuiRuntime;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.Click;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.input.CharInput;
 import net.minecraft.client.input.KeyInput;
 import net.minecraft.text.Text;
 
-/** ImGui-backed effect editor screen. The world remains visible behind the editor. */
+/**
+ * ImGui-backed effect editor screen. The world remains visible behind the editor.
+ */
 public final class EffectTrackScreen extends Screen {
     private final ChartManifest chart;
     private final EffectEditorImGuiView editor;
@@ -34,7 +35,8 @@ public final class EffectTrackScreen extends Screen {
         this.editor = new EffectEditorImGuiView(chart, this::save, this::closeEditor,
                 RhythmcMakerClient::toggleEffectEditorPlayback,
                 RhythmcMakerClient::replayEffectEditorPlayback,
-                RhythmcMakerClient::seekEffectEditorPreview, ClientChartAccess::status, this::requestDivisions);
+                RhythmcMakerClient::seekEffectEditorPreview, ClientChartAccess::status, this::requestDivisions,
+                RhythmcMakerClient::setPlaybackPitchPercent);
     }
 
     @Override
@@ -109,8 +111,16 @@ public final class EffectTrackScreen extends Screen {
         editor.handlePlaybackKeyRelease(input);
         return true;
     }
-    @Override public boolean charTyped(CharInput input) { return true; }
-    @Override public boolean shouldCloseOnEsc() { return true; }
+
+    @Override
+    public boolean charTyped(CharInput input) {
+        return true;
+    }
+
+    @Override
+    public boolean shouldCloseOnEsc() {
+        return true;
+    }
 
     private void save() {
         if (chart == null || editor.isInputLocked() || !editor.validateParameters()) return;

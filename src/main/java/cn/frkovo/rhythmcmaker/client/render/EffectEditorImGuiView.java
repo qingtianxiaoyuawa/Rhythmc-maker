@@ -65,6 +65,7 @@ public final class EffectEditorImGuiView {
     private final Runnable replayAction;
     private final Consumer<Double> seekAction;
     private final Consumer<String> statusAction;
+    private final Consumer<Double> pitchAction;
     private final EffectTypeRegistry registry = EffectTypeRegistry.getInstance();
     private final ImGuiDockNodeAccess dockNodeAccess = ImGuiDockNodeAccess.getInstance();
     private final EffectParameterEditor parameterEditor = new EffectParameterEditor();
@@ -72,6 +73,7 @@ public final class EffectEditorImGuiView {
     private final EffectPreviewViewport viewport = new EffectPreviewViewport();
     private final Consumer<Integer> divisionsAction;
     private final ImInt divisionsField = new ImInt();
+    private final ImDouble pitchPercentField = new ImDouble(100.0);
     private boolean inputLocked;
     private final List<EffectEditorLayout.KeyframePosition> keyframePositions = new ArrayList<>();
     private List<TimelineRow> cachedTimelineRows;
@@ -128,7 +130,8 @@ public final class EffectEditorImGuiView {
 
     public EffectEditorImGuiView(ChartManifest chart, Runnable saveAction, Runnable closeAction,
                                  Runnable togglePlaybackAction, Runnable replayAction,
-                                 Consumer<Double> seekAction, Consumer<String> statusAction, Consumer<Integer> divisionsAction) {
+                                 Consumer<Double> seekAction, Consumer<String> statusAction, Consumer<Integer> divisionsAction,
+                                 Consumer<Double> pitchAction) {
         this.chart = chart;
         this.saveAction = saveAction;
         this.closeAction = closeAction;
@@ -137,6 +140,8 @@ public final class EffectEditorImGuiView {
         this.seekAction = seekAction;
         this.statusAction = statusAction;
         this.divisionsAction = divisionsAction;
+        this.pitchAction = pitchAction;
+        pitchPercentField.set(RhythmcMakerClient.getPlaybackPitchPercent());
         divisionsField.set(chart == null ? 1 : chart.divisionsPerChunk);
         this.layoutModel = new EffectTrackLayoutModel(chart == null ? null : chart.effectEditorLayout);
         if (chart != null && chart.effects != null) {
@@ -200,7 +205,7 @@ public final class EffectEditorImGuiView {
         }
         if (ImGui.beginPopupModal("正在同步轨道", ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoMove)) {
             if (!inputLocked) ImGui.closeCurrentPopup();
-            ImGui.textWrapped(status);
+            ImGui.text(status);
             ImGui.endPopup();
         }
         applyDefaultDockLayout = false;
@@ -238,6 +243,9 @@ public final class EffectEditorImGuiView {
             if (dockNodeAccess.hasCentralDockspace(dockspaceId)) {
                 imgui.internal.ImGuiDockNode center = dockNodeAccess.centralNode(dockspaceId);
                 viewport.setBounds(center.getPosX(), center.getPosY(), center.getSizeX(), center.getSizeY());
+                viewport.drawPreview(ImGui.getWindowDrawList());
+            } else {
+                viewport.setBounds(0.0f, 0.0f, 0.0f, 0.0f);
             }
         }
         ImGui.end();
@@ -532,6 +540,25 @@ public final class EffectEditorImGuiView {
             drawTimelineControl("timeline-next", "后移（→）", TimelineControl.NEXT);
             ImGui.unindent();
         }
+        ImGui.sameLine();
+        ImGui.text("音高");
+        ImGui.sameLine();
+        ImGui.setNextItemWidth(78.0f);
+        if (ImGui.inputDouble("##effect-pitch-percent", pitchPercentField, 0.0, 0.0, "%.1f",
+                imgui.flag.ImGuiInputTextFlags.EnterReturnsTrue)) {
+            double requestedPercent = pitchPercentField.get();
+            if (Double.isFinite(requestedPercent)) {
+                double normalizedPercent = Math.max(1.0, Math.min(1000.0, requestedPercent));
+                pitchPercentField.set(normalizedPercent);
+                pitchAction.accept(normalizedPercent);
+            } else {
+                pitchPercentField.set(RhythmcMakerClient.getPlaybackPitchPercent());
+            }
+        }
+        boolean pitchHovered = ImGui.isItemHovered();
+        ImGui.sameLine();
+        ImGui.text("%");
+        if (pitchHovered) ImGui.setTooltip("范围：1%–1000%；100% 为原音高和原速度。该设置全局生效，按 Enter 应用。");
         ImGui.popStyleVar();
     }
 

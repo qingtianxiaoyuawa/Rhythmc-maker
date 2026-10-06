@@ -43,7 +43,7 @@ echo "== configure =="
   --enable-demuxer=lavfi,mov,mp3,flac,ogg,wav,aac,matroska \
   --enable-decoder=mp3,mp3float,flac,vorbis,opus,aac,alac,pcm_s16le,pcm_s24le,pcm_s32le,pcm_u8,pcm_f32le,pcm_f64le \
   --enable-parser=mpegaudio,flac,vorbis,opus,aac \
-  --enable-filter=movie,amovie,aresample,asetnsamples,anull,anullsink,abuffer,abuffersink,highpass,bandpass,aspectralstats,volume,atempo,aformat,format,copy,afifo \
+  --enable-filter=movie,amovie,aresample,asetrate,asetnsamples,anull,anullsink,abuffer,abuffersink,highpass,bandpass,aspectralstats,volume,aformat,format,copy,afifo \
   --extra-cflags="-O2" \
   --extra-ldflags="-static -static-libgcc -L$SDLROOT/lib" \
   --extra-libs="-lmingw32 -lSDL2main -lSDL2 -lwinmm -lgdi32 -lole32 -loleaut32 -limm32 -lversion -luuid -lsetupapi"

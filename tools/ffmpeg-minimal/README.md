@@ -16,7 +16,7 @@ Rhythmc maker only ever uses these two tools for audio:
 1. **ffprobe** — read audio duration (`-show_entries format=duration`) and run the
    onset / spectral-flux filter chain used by `BpmDetector`
    (`amovie → aresample → asetnsamples → highpass/bandpass → aspectralstats`).
-2. **ffplay** — play the chart audio (`-nodisp ... -af volume,atempo`).
+2. **ffplay** — play the chart audio (`-nodisp ... -af volume,aresample,asetrate`).
 
 Neither touches video. The previous builds shipped every video codec/accelerator
 (x264, x265, aom, vpx, nvenc, cuda, libvmaf ...) plus, for ffplay, an entirely
@@ -58,7 +58,7 @@ src/main/resources/rhythmc_maker/native/windows-x86_64/
 | demuxers | `lavfi`, `mov`, `mp3`, `flac`, `ogg`, `wav`, `aac`, `matroska` |
 | decoders | `mp3`, `mp3float`, `flac`, `vorbis`, `opus`, `aac`, `alac`, pcm (`s16le`,`s24le`,`s32le`,`u8`,`f32le`,`f64le`) |
 | parsers | `mpegaudio`, `flac`, `vorbis`, `opus`, `aac` |
-| filters | `movie`/`amovie`, `aresample`, `asetnsamples`, `anull`, `highpass`, `bandpass`, `aspectralstats`, `volume`, `atempo`, `aformat`, `format`, `copy`, `afifo`, `abuffer`, `abuffersink` |
+| filters | `movie`/`amovie`, `aresample`, `asetrate`, `asetnsamples`, `anull`, `highpass`, `bandpass`, `aspectralstats`, `volume`, `aformat`, `format`, `copy`, `afifo`, `abuffer`, `abuffersink` |
 | programs | `ffprobe`, `ffplay` |
 | external | SDL2 (static, mingw-w64) for ffplay |
 
