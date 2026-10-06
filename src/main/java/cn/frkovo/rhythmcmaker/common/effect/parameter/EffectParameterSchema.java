@@ -11,7 +11,7 @@ public final class EffectParameterSchema {
 
     private EffectParameterSchema() {
         add("HOLOGRAM", "全息文字", true,
-                vector("location", "位置偏移 [x,y,z]（格）", "[0,2,0]", "相对播放中心 (200.5, 66, -1) 的偏移，不是绝对世界坐标。"),
+                vector("location", "位置偏移 [x,y,z]（格）", "[0,2,0]", "相对播放中心 (200.5, 66, -1.5) 的偏移，不是绝对世界坐标。"),
                 field("contents", "文字内容（每行一条）", STRING_LIST, "[\"全息文字\"]", "保存为字符串数组，每个条目可包含多行文字。"),
                 optional(field("id", "全息文字 ID", TEXT, "\"hologram-1\"", "不启用时由服务端生成 ID；删除时需使用同一 ID。")), duration());
         add("REMOVE_HOLOGRAM", "移除全息文字", true, id("hologram-1"));
@@ -44,7 +44,7 @@ public final class EffectParameterSchema {
                 "DARK_GRAY", "BLUE", "GREEN", "AQUA", "RED", "LIGHT_PURPLE", "YELLOW", "WHITE")));
         add("MESSAGE", "聊天消息", true, field("contents", "消息内容（每行一条）", STRING_LIST, "[\"消息\"]", "保存为字符串数组，每个条目可包含多行文字。"));
         add("TEXT_DISPLAY", "文本展示实体", true,
-                vector("position", "位置偏移 [x,y,z]（格）", "[0,0,0]", "相对固定播放中心 (200.5, 66, -1) 的偏移；不填写绝对世界坐标。"),
+                vector("position", "位置偏移 [x,y,z]（格）", "[0,0,0]", "相对固定播放中心 (200.5, 66, -1.5) 的偏移；不填写绝对世界坐标。"),
                 vector("rotation", "旋转 [x,y,z]（弧度）", "[0,0,0]", "绕 X、Y、Z 轴旋转，单位为弧度，不是角度。"),
                 vector("scale", "缩放 [x,y,z]", "[1,1,1]", "每个坐标轴独立缩放。"),
                 field("text", "文本", MULTILINE_TEXT, "\"文本\"", ""), id("text-display-1"));
