@@ -82,7 +82,6 @@ public final class EffectEditorImGuiView {
     private final List<EffectEditorLayout.KeyframePosition> keyframePositions = new ArrayList<>();
     private List<TimelineRow> cachedTimelineRows;
     private double cachedTimelineMaxBeat;
-    private final ImString eventPositionField = new ImString(96);
     private String contextTrackId;
     private double contextBeat;
     private String pendingDeleteTrack;
@@ -553,17 +552,7 @@ public final class EffectEditorImGuiView {
             ImGui.end();
             return;
         }
-        if (ImGui.inputText("位置##effect-position", eventPositionField, imgui.flag.ImGuiInputTextFlags.EnterReturnsTrue)) {
-            Double position = parseChunkPosition(eventPositionField.get());
-            Integer denominator = parsePositionDenominator(eventPositionField.get());
-            if (position != null && position >= 0.0 && denominator != null) {
-                rememberForUndo();
-                layoutModel.position(selectedIndex).denominator = denominator;
-                updateTimelineMarkerBeat(new TimelineMarker(selectedIndex, -1, -1, position, TimelineMarkerKind.EVENT), position);
-                seekTimelineBeat(position, timelineMaxBeat());
-            }
-            eventPositionField.set(layoutModel.position(selectedIndex).label());
-        }
+        ImGui.text("位置：" + layoutModel.position(selectedIndex).label());
         ImGui.separator();
         boolean parameterChanged = parameterEditor.render(event);
         if (parameterChanged) {
@@ -1215,7 +1204,6 @@ public final class EffectEditorImGuiView {
             layoutModel.move(marker.eventIndex(), eventType(event), beat);
             layoutModel.position(marker.eventIndex()).denominator = Math.max(1, Math.min(32, chart.divisionsPerChunk));
             if (marker.eventIndex() == selectedIndex) beatField.set(beat);
-            if (marker.eventIndex() == selectedIndex) eventPositionField.set(layoutModel.position(selectedIndex).label());
         } else if (event.has("animation") && event.get("animation").isJsonObject()) {
             JsonObject animation = event.getAsJsonObject("animation");
             if (!animation.has("channels") || !animation.get("channels").isJsonArray()) return;
@@ -1531,7 +1519,6 @@ public final class EffectEditorImGuiView {
         bufferIndex = selectedIndex;
         bufferType = type;
         beatField.set(event == null ? 0.0 : eventBeat(event));
-        eventPositionField.set(event == null ? "" : layoutModel.position(selectedIndex).label());
     }
 
     private void syncEventFromBuffers() {
