@@ -1416,7 +1416,8 @@ public final class EffectEditorImGuiView {
         JsonObject event = new JsonObject();
         event.addProperty("eventType", definition.eventType());
         event.addProperty("beat", Math.max(0.0, contextBeat));
-        JsonObject properties = cn.frkovo.rhythmcmaker.common.effect.parameter.EffectParameterCodec.getInstance().createDefaults(definition.eventType());
+        JsonObject properties = cn.frkovo.rhythmcmaker.common.effect.parameter.EffectParameterCodec.getInstance()
+                .createDefaults(definition.eventType(), workingEffects);
         event.add("properties", properties);
         workingEffects.add(event);
         layoutModel.addEvent(definition.eventType(), eventBeat(event), chart.divisionsPerChunk, contextTrackId);

@@ -1,5 +1,6 @@
 package cn.frkovo.rhythmcmaker.client.render;
 
+import cn.frkovo.rhythmcmaker.client.ClientSceneAccess;
 import cn.frkovo.rhythmcmaker.common.effect.parameter.EffectParameterCodec;
 import cn.frkovo.rhythmcmaker.common.effect.parameter.EffectParameterControl;
 import cn.frkovo.rhythmcmaker.common.effect.parameter.EffectParameterField;
@@ -23,7 +24,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.HashSet;
-import java.util.concurrent.ThreadLocalRandom;
 
 public final class EffectParameterEditor {
     private final EffectParameterCodec codec = EffectParameterCodec.getInstance();
@@ -32,6 +32,7 @@ public final class EffectParameterEditor {
     private boolean changed;
     private List<JsonObject> availableEvents = List.of();
     private List<String> availableSceneNames = List.of();
+    private String sceneReadError = "";
     private List<Integer> availableTrackIds = List.of();
 
     public boolean render(JsonObject event, List<JsonObject> events, ChartManifest chart) {
@@ -187,7 +188,6 @@ public final class EffectParameterEditor {
         }
         renderTextPreview(form, field, state);
         if (isHologramId(form, field) || isTextDisplayId(form, field)) {
-            ImGui.sameLine();
             if (ImGui.smallButton("随机生成 ID")) {
                 commitValue(form, state, new JsonPrimitive(isTextDisplayId(form, field)
                         ? generateTextDisplayId() : generateHologramId()));
@@ -256,30 +256,15 @@ public final class EffectParameterEditor {
     }
 
     private String generateHologramId() {
-        Set<String> used = new HashSet<>();
-        for (JsonObject event : availableEvents) {
-            JsonElement id = codec.read(event, "id");
-            if (id != null && id.isJsonPrimitive() && id.getAsJsonPrimitive().isString()) used.add(id.getAsString());
-        }
-        for (int attempt = 0; attempt < 100000; attempt++) {
-            String candidate = String.format(Locale.ROOT, "H%05d", ThreadLocalRandom.current().nextInt(100000));
-            if (!used.contains(candidate)) return candidate;
-        }
-        throw new IllegalStateException("无法生成未重复的全息文字 ID");
+        return generateUniqueEffectId("H", Set.of("HOLOGRAM", "REMOVE_HOLOGRAM"), "全息文字");
     }
 
     private String generateTextDisplayId() {
-        Set<String> used = new HashSet<>();
-        for (JsonObject event : availableEvents) {
-            if (!codec.type(event).startsWith("TEXT_DISPLAY")) continue;
-            JsonElement id = codec.read(event, "id");
-            if (id != null && id.isJsonPrimitive() && id.getAsJsonPrimitive().isString()) used.add(id.getAsString());
-        }
-        for (int attempt = 0; attempt < 100000; attempt++) {
-            String candidate = String.format(Locale.ROOT, "T%05d", ThreadLocalRandom.current().nextInt(100000));
-            if (!used.contains(candidate)) return candidate;
-        }
-        throw new IllegalStateException("无法生成未重复的文本展示实体 ID");
+        return generateUniqueEffectId("T", Set.of("TEXT_DISPLAY", "TEXT_DISPLAY_EFFECT", "TEXT_DISPLAY_SYNC_TRACK", "TEXT_DISPLAY_DESYNC_TRACK", "TEXT_DISPLAY_REMOVE"), "文本展示实体");
+    }
+
+    private String generateUniqueEffectId(String prefix, Set<String> types, String displayName) {
+        return codec.nextEffectId(prefix, types, availableEvents);
     }
 
     private boolean isVectorListWithItemReset(EffectParameterField field) {
@@ -327,11 +312,13 @@ public final class EffectParameterEditor {
     }
 
     private List<String> sceneNames(ChartManifest chart) {
-        if (chart == null) return List.of();
-        Set<String> names = new java.util.TreeSet<>();
-        if (chart.initialArena != null && !chart.initialArena.isBlank()) names.add(chart.initialArena);
-        if (chart.arenaBindings != null) for (String name : chart.arenaBindings.keySet()) if (name != null && !name.isBlank()) names.add(name);
-        return List.copyOf(names);
+        sceneReadError = "";
+        try {
+            return ClientSceneAccess.savedSceneNames();
+        } catch (java.io.IOException exception) {
+            sceneReadError = "读取已保存场景失败：" + exception.getMessage();
+            return List.of();
+        }
     }
 
     private List<Integer> trackIds(ChartManifest chart) {
@@ -360,6 +347,10 @@ public final class EffectParameterEditor {
     }
 
     private void renderArena(EventForm form, FieldState state) {
+        if (!sceneReadError.isEmpty()) {
+            ImGui.textColored(0xFF7777FF, sceneReadError);
+            return;
+        }
         String value = state.value == null ? "" : state.value.getAsString();
         if (availableSceneNames.isEmpty()) {
             ImGui.textColored(0xFF7777FF, "当前谱面没有可用场景。");
