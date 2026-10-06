@@ -61,8 +61,8 @@ public final class EffectParameterLabels {
         return List.of("X 轴", "Y 轴", "Z 轴").get(index);
     }
 
-    public String potion(int id) {
-        String name = switch (id) {
+    public String potionName(int id) {
+        return switch (id) {
             case 1 -> "速度";
             case 2 -> "缓慢";
             case 3 -> "急迫";
@@ -98,6 +98,5 @@ public final class EffectParameterLabels {
             case 33 -> "黑暗";
             default -> "未知效果";
         };
-        return name + "（" + id + "）";
     }
 }

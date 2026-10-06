@@ -554,7 +554,7 @@ public final class EffectEditorImGuiView {
         }
         ImGui.text("位置：" + layoutModel.position(selectedIndex).label());
         ImGui.separator();
-        boolean parameterChanged = parameterEditor.render(event);
+        boolean parameterChanged = parameterEditor.render(event, workingEffects, chart);
         if (parameterChanged) {
             if (!parameterEditHistoryArmed && !restoringSnapshot) rememberForUndo();
             parameterEditHistoryArmed = true;

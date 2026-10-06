@@ -135,6 +135,12 @@ public final class EffectParameterCodec {
             String error = value == null ? "缺少必填参数" : validate(field, value);
             if (!error.isEmpty()) errors.add(field.label() + "：" + error);
         }
+        if (type.eventType().equals("CLEAR_EFFECT")) {
+            JsonElement selectedEffects = read(event, "effects");
+            if (selectedEffects != null && selectedEffects.isJsonArray() && selectedEffects.getAsJsonArray().isEmpty()) {
+                errors.add("至少选择一个药水效果，或选择全部药水效果；若不清除药水效果，请删除此特效。");
+            }
+        }
         if (type.eventType().equals("TITLE") && errors.isEmpty()) {
             long total = read(event, "fadeIn").getAsLong() + read(event, "stay").getAsLong() + read(event, "fadeOut").getAsLong();
             if (total > Integer.MAX_VALUE) errors.add("标题淡入、停留和淡出时间之和不能超过 2147483647 毫秒");
