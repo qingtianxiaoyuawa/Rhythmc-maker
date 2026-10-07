@@ -68,7 +68,6 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     private static boolean playbackAudioRequested;
     private static String pendingPlaybackCommand;
     private static String playbackMode = "formal";
-    private static double playbackRate = 1.0;
     private static boolean effectEditorPreviewPrepared;
     private static boolean effectEditorPlaybackRequested;
     private static boolean effectEditorCameraLocked;
@@ -228,7 +227,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             if (playbackAudioRequested && !effectEditorPreviewPrepared && System.nanoTime() - lastFormalSyncNanos >= 250_000_000L
                     && audioStartedAtNanos > 0L) {
                 double songSeconds = playbackStartSeconds
-                        + Math.max(0.0, (System.nanoTime() - audioStartedAtNanos) / 1_000_000_000.0) * playbackRate;
+                        + Math.max(0.0, (System.nanoTime() - audioStartedAtNanos) / 1_000_000_000.0) * playbackPitchRate();
                 sendCommand(client, "rhythmc_sync_formal_playback " + String.format(Locale.ROOT, "%.6f", songSeconds));
                 lastFormalSyncNanos = System.nanoTime();
             }
@@ -278,7 +277,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         audioSessionCreatedAtNanos = 0L;
         playbackTimingProfile = null;
         playbackTrackProfile = null;
-        pendingPlaybackCommand = "rhythmc_play " + startChunk + " " + playbackMode + " " + String.format(Locale.ROOT, "%.2f", playbackRate);
+        pendingPlaybackCommand = "rhythmc_play " + startChunk + " " + playbackMode;
         startAudio(startChunk);
         if (audioProcess != null && audioProcess.isAlive()) {
             sendCommand(client, pendingPlaybackCommand);
@@ -332,6 +331,27 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     static void replayEffectEditorPlayback() {
         if (effectEditorPlaybackRequested && playbackAudioRequested) stopEffectEditorPlaybackAudio();
         seekEffectEditorPreview(0.0);
+    }
+
+    public static double getPlaybackPitchPercent() {
+        return ClientChartAccess.config().playbackPitchPercent;
+    }
+
+    public static void setPlaybackPitchPercent(double percent) {
+        if (!Double.isFinite(percent)) return;
+        double normalizedPercent = Math.max(1.0, Math.min(1000.0, percent));
+        var config = ClientChartAccess.config();
+        if (Double.compare(config.playbackPitchPercent, normalizedPercent) == 0) return;
+
+        boolean restartPlayback = effectEditorPreviewPrepared && effectEditorPlaybackRequested && playbackAudioRequested;
+        double currentBeat = restartPlayback ? effectEditorCurrentBeat() : effectEditorPlayheadBeat;
+        config.playbackPitchPercent = normalizedPercent;
+        try {
+            ClientChartAccess.saveConfig(config);
+        } catch (IOException exception) {
+            ClientChartAccess.status("全局音高设置保存失败");
+        }
+        if (restartPlayback) seekEffectEditorPreview(currentBeat);
     }
 
     static void pauseEffectEditorPlayback() {
@@ -454,8 +474,8 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     public static void adjustEffectEditorCamera(double mouseDeltaX, double mouseDeltaY) {
         if (!effectEditorPreviewPrepared || !Double.isFinite(mouseDeltaX) || !Double.isFinite(mouseDeltaY)) return;
         effectEditorCameraLocked = true;
-        effectEditorCameraZOffset += mouseDeltaX * EFFECT_EDITOR_CAMERA_DRAG_SCALE;
-        effectEditorCameraX -= mouseDeltaY * EFFECT_EDITOR_CAMERA_DRAG_SCALE;
+        effectEditorCameraZOffset += mouseDeltaX * EFFECT_EDITOR_CAMERA_DRAG_SCALE * 0.5;
+        effectEditorCameraX -= mouseDeltaY * EFFECT_EDITOR_CAMERA_DRAG_SCALE * 0.5;
     }
 
     public static void adjustEffectEditorCameraHeight(double wheelDelta) {
@@ -478,8 +498,13 @@ public final class RhythmcMakerClient implements ClientModInitializer {
 
     private static double effectEditorCurrentSongTime() {
         if (audioStartedAtNanos <= 0) return playbackStartSeconds;
-        double elapsed = Math.max(0.0, (System.nanoTime() - audioStartedAtNanos) / 1_000_000_000.0) * playbackRate;
+        double elapsed = Math.max(0.0, (System.nanoTime() - audioStartedAtNanos) / 1_000_000_000.0)
+                * playbackPitchRate();
         return playbackStartSeconds + elapsed;
+    }
+
+    private static double playbackPitchRate() {
+        return ClientChartAccess.config().playbackPitchPercent / 100.0;
     }
 
     public static boolean isEffectEditorPlaybackActive() {
@@ -497,14 +522,6 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     private static void syncPlaybackPreference() {
         var config = ClientChartAccess.config();
         playbackMode = "scroll".equals(config.playbackMode) ? "scroll" : "formal";
-        playbackRate = normalizePlaybackRate(config.playbackSpeed);
-    }
-
-    private static double normalizePlaybackRate(double value) {
-        double[] choices = {0.25, 0.5, 0.75, 1.0, 1.5, 2.0};
-        double nearest = choices[0];
-        for (double choice : choices) if (Math.abs(choice - value) < Math.abs(nearest - value)) nearest = choice;
-        return nearest;
     }
 
     private static boolean isShiftPressed(MinecraftClient client) {
@@ -514,10 +531,12 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             || GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_RIGHT_SHIFT) == GLFW.GLFW_PRESS;
     }
 
-    private static String tempoFilter(double rate) {
-        if (Math.abs(rate - 1.0) < 0.001) return "";
-        if (Math.abs(rate - 0.25) < 0.001) return "atempo=0.5,atempo=0.5";
-        return "atempo=" + String.format(Locale.ROOT, "%.2f", rate);
+    private static String pitchFilter(double pitchPercent) {
+        if (Math.abs(pitchPercent - 100.0) < 0.000000001) return "";
+        int baseSampleRate = 48_000;
+        int shiftedSampleRate = (int) Math.round(baseSampleRate * pitchPercent / 100.0);
+        return "aresample=" + baseSampleRate + ",asetrate=" + shiftedSampleRate
+                + ",aresample=" + baseSampleRate;
     }
 
     static void setFlightSpeed(int multiplier) {
@@ -602,7 +621,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     private static SidebarSnapshot playbackSidebar(ChartManifest chart) {
         double startSeconds = playbackStartSeconds;
         long clockStart = audioStartedAtNanos;
-        double elapsed = clockStart <= 0 ? 0.0 : Math.max(0.0, (System.nanoTime() - clockStart) / 1_000_000_000.0) * playbackRate;
+        double elapsed = clockStart <= 0 ? 0.0 : Math.max(0.0, (System.nanoTime() - clockStart) / 1_000_000_000.0) * playbackPitchRate();
         double totalSeconds = chart.durationSeconds > 0.0 ? chart.durationSeconds : ChartTiming.beatToSeconds(chart, chart.totalBeats);
         if (!Double.isFinite(totalSeconds) || totalSeconds <= 0.0) totalSeconds = Math.max(1.0, chart.chunkCount * 60.0 / chart.bpm);
         double currentSeconds = Math.max(0.0, Math.min(totalSeconds, startSeconds + elapsed));
@@ -733,8 +752,9 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             double startSeconds = PlaybackCoordinates.songTimeAtBeat(chart, playbackTimingProfile, playbackStartBeat);
             audioAttempted = true;
             audioErrorLog = Path.of(System.getProperty("java.io.tmpdir"), "rhythmc-maker", "audio-error.log");
-            String tempo = tempoFilter(playbackRate);
-            String audioFilter = "volume=" + String.format(Locale.ROOT, "%.3f", ClientChartAccess.config().musicVolumeMultiplier) + (tempo.isBlank() ? "" : "," + tempo);
+            String pitch = pitchFilter(getPlaybackPitchPercent());
+            String audioFilter = "volume=" + String.format(Locale.ROOT, "%.3f", ClientChartAccess.config().musicVolumeMultiplier)
+                    + (pitch.isBlank() ? "" : "," + pitch);
             audioProcess = new ProcessBuilder(player.toString(), "-nodisp", "-autoexit", "-loglevel", "error", "-probesize", "32", "-analyzeduration", "0", "-ss", String.format(Locale.ROOT, "%.6f", startSeconds), "-i", audio.toString(), "-vn", "-af", audioFilter)
                 .redirectError(ProcessBuilder.Redirect.to(audioErrorLog.toFile()))
                 .redirectOutput(ProcessBuilder.Redirect.DISCARD)
@@ -747,10 +767,10 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             playbackTrackProfile = PlaybackCoordinates.prepareDefaultTrack(chart);
             playbackTrackSpeed = ClientChartAccess.config().playerSpeed;
             playbackStartSeconds = startSeconds;
-            audioDurationSeconds = Math.max(0, chart.durationSeconds - startSeconds) / playbackRate;
+            double pitchRate = playbackPitchRate();
+            audioDurationSeconds = Math.max(0, chart.durationSeconds - startSeconds) / pitchRate;
             if (effectEditorPreviewPrepared) {
-                pendingPlaybackCommand = "rhythmc_effect_preview_play " + String.format(Locale.ROOT, "%.6f", playbackStartBeat)
-                        + " " + String.format(Locale.ROOT, "%.2f", playbackRate);
+                pendingPlaybackCommand = "rhythmc_effect_preview_play " + String.format(Locale.ROOT, "%.6f", playbackStartBeat);
             }
         } catch (IOException | CompletionException exception) {
             audioAttempted = true;
@@ -834,7 +854,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         } else {
             if (playbackTimingProfile == null || playbackTrackProfile == null) return;
             double songTime = playbackStartSeconds
-                    + Math.max(0.0, (System.nanoTime() - audioStartedAtNanos) / 1_000_000_000.0) * playbackRate;
+                    + Math.max(0.0, (System.nanoTime() - audioStartedAtNanos) / 1_000_000_000.0) * playbackPitchRate();
             double beat = PlaybackCoordinates.beatAtSongTime(chart, playbackTimingProfile, songTime);
             centerZ = PlaybackCoordinates.editorWorldZAtBeat(chart, beat);
         }

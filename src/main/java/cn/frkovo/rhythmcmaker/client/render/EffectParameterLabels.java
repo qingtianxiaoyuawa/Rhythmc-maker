@@ -60,4 +60,43 @@ public final class EffectParameterLabels {
         }
         return List.of("X 轴", "Y 轴", "Z 轴").get(index);
     }
+
+    public String potionName(int id) {
+        return switch (id) {
+            case 1 -> "速度";
+            case 2 -> "缓慢";
+            case 3 -> "急迫";
+            case 4 -> "挖掘疲劳";
+            case 5 -> "力量";
+            case 6 -> "瞬间治疗";
+            case 7 -> "瞬间伤害";
+            case 8 -> "跳跃提升";
+            case 9 -> "反胃";
+            case 10 -> "生命恢复";
+            case 11 -> "抗性提升";
+            case 12 -> "防火";
+            case 13 -> "水下呼吸";
+            case 14 -> "隐身";
+            case 15 -> "失明";
+            case 16 -> "夜视";
+            case 17 -> "饥饿";
+            case 18 -> "虚弱";
+            case 19 -> "中毒";
+            case 20 -> "凋零";
+            case 21 -> "生命提升";
+            case 22 -> "吸收";
+            case 23 -> "饱和";
+            case 24 -> "发光";
+            case 25 -> "漂浮";
+            case 26 -> "幸运";
+            case 27 -> "霉运";
+            case 28 -> "缓降";
+            case 29 -> "潮涌能量";
+            case 30 -> "海豚的恩惠";
+            case 31 -> "不祥之兆";
+            case 32 -> "村庄英雄";
+            case 33 -> "黑暗";
+            default -> "未知效果";
+        };
+    }
 }

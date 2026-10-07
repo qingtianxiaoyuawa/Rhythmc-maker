@@ -8,7 +8,7 @@ import com.google.gson.JsonPrimitive;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.UUID;
+import java.util.Set;
 import cn.frkovo.rhythmcmaker.common.text.EffectTextFormatter;
 
 public final class EffectParameterCodec {
@@ -22,6 +22,10 @@ public final class EffectParameterCodec {
     }
 
     public JsonObject createDefaults(String eventType) {
+        return createDefaults(eventType, List.of());
+    }
+
+    public JsonObject createDefaults(String eventType, List<JsonObject> existingEvents) {
         EffectParameterType type = EffectParameterSchema.getInstance().find(eventType);
         if (type == null) throw new IllegalArgumentException("Unknown effect type: " + eventType);
         JsonObject properties = new JsonObject();
@@ -29,8 +33,24 @@ public final class EffectParameterCodec {
             if (!field.optional() && field.branches().isEmpty()) properties.add(field.name(), JsonParser.parseString(field.defaultJson()));
         }
         addBranchDefaults(type, properties);
-        if (eventType.equals("TEXT_DISPLAY")) properties.addProperty("id", "text-display-" + UUID.randomUUID());
+        if (eventType.equals("HOLOGRAM")) properties.addProperty("id", nextEffectId("H", Set.of("HOLOGRAM", "REMOVE_HOLOGRAM"), existingEvents));
+        if (eventType.equals("TEXT_DISPLAY")) properties.addProperty("id", nextEffectId("T", Set.of("TEXT_DISPLAY", "TEXT_DISPLAY_EFFECT", "TEXT_DISPLAY_SYNC_TRACK", "TEXT_DISPLAY_DESYNC_TRACK", "TEXT_DISPLAY_REMOVE"), existingEvents));
         return properties;
+    }
+
+    public String nextEffectId(String prefix, Set<String> types, List<JsonObject> existingEvents) {
+        Set<String> used = new java.util.HashSet<>();
+        for (JsonObject event : existingEvents) {
+            String normalizedType = type(event).toUpperCase(java.util.Locale.ROOT).replace("_", "").replace("-", "").replace(" ", "");
+            if (types.stream().noneMatch(candidate -> candidate.replace("_", "").equals(normalizedType))) continue;
+            JsonElement id = read(event, "id");
+            if (id != null && id.isJsonPrimitive() && id.getAsJsonPrimitive().isString()) used.add(id.getAsString());
+        }
+        for (int number = 1; number <= 99999; number++) {
+            String candidate = String.format(java.util.Locale.ROOT, "%s%05d", prefix, number);
+            if (!used.contains(candidate)) return candidate;
+        }
+        throw new IllegalStateException("无法生成未重复的特效 ID");
     }
 
     public void addBranchDefaults(EffectParameterType type, JsonObject properties) {
@@ -134,6 +154,12 @@ public final class EffectParameterCodec {
             if (value == null && field.optional()) continue;
             String error = value == null ? "缺少必填参数" : validate(field, value);
             if (!error.isEmpty()) errors.add(field.label() + "：" + error);
+        }
+        if (type.eventType().equals("CLEAR_EFFECT")) {
+            JsonElement selectedEffects = read(event, "effects");
+            if (selectedEffects != null && selectedEffects.isJsonArray() && selectedEffects.getAsJsonArray().isEmpty()) {
+                errors.add("至少选择一个药水效果，或选择全部药水效果；若不清除药水效果，请删除此特效。");
+            }
         }
         if (type.eventType().equals("TITLE") && errors.isEmpty()) {
             long total = read(event, "fadeIn").getAsLong() + read(event, "stay").getAsLong() + read(event, "fadeOut").getAsLong();

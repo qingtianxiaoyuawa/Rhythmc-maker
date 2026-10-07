@@ -34,10 +34,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 
 /**
@@ -65,6 +69,7 @@ public final class EffectEditorImGuiView {
     private final Runnable replayAction;
     private final Consumer<Double> seekAction;
     private final Consumer<String> statusAction;
+    private final Consumer<Double> pitchAction;
     private final EffectTypeRegistry registry = EffectTypeRegistry.getInstance();
     private final ImGuiDockNodeAccess dockNodeAccess = ImGuiDockNodeAccess.getInstance();
     private final EffectParameterEditor parameterEditor = new EffectParameterEditor();
@@ -72,11 +77,11 @@ public final class EffectEditorImGuiView {
     private final EffectPreviewViewport viewport = new EffectPreviewViewport();
     private final Consumer<Integer> divisionsAction;
     private final ImInt divisionsField = new ImInt();
+    private final ImDouble pitchPercentField = new ImDouble(100.0);
     private boolean inputLocked;
     private final List<EffectEditorLayout.KeyframePosition> keyframePositions = new ArrayList<>();
     private List<TimelineRow> cachedTimelineRows;
     private double cachedTimelineMaxBeat;
-    private final ImString eventPositionField = new ImString(96);
     private String contextTrackId;
     private double contextBeat;
     private String pendingDeleteTrack;
@@ -84,7 +89,6 @@ public final class EffectEditorImGuiView {
     private Runnable confirmedCloseAction;
     private final ImDouble beatField = new ImDouble();
     private final float[] playhead = new float[1];
-    private final ImString timelinePositionField = new ImString("0", 64);
     private double timelineZoomMin;
     private double timelineZoomMax = 1.0;
     private int timelineDraggedEvent = -1;
@@ -103,6 +107,7 @@ public final class EffectEditorImGuiView {
     private float timelineBoundsRight = -1.0f;
     private float timelineBoundsBottom = -1.0f;
     private int timelineVisibleRowCapacity;
+    private float timelineAvailableRowsHeight;
     private boolean applyDefaultDockLayout;
     private int libraryDockNodeId;
     private int inspectorDockNodeId;
@@ -113,6 +118,16 @@ public final class EffectEditorImGuiView {
     private boolean dirty;
     private String status = "就绪";
     private boolean cameraDragLogged;
+    private final Set<Integer> selectedIndices = new LinkedHashSet<>();
+    private final Deque<EditorSnapshot> undoHistory = new ArrayDeque<>();
+    private final Deque<EditorSnapshot> redoHistory = new ArrayDeque<>();
+    private boolean restoringSnapshot;
+    private boolean selectionDragging;
+    private float selectionStartX;
+    private float selectionStartY;
+    private float selectionEndX;
+    private float selectionEndY;
+    private boolean parameterEditHistoryArmed;
 
     private enum TimelineMarkerKind { EVENT, KEYFRAME }
 
@@ -126,9 +141,14 @@ public final class EffectEditorImGuiView {
                                boolean groupHeader) {
     }
 
+    private record EditorSnapshot(List<JsonObject> effects, EffectEditorLayout layout,
+                                  List<EffectEditorLayout.KeyframePosition> keyframes, int selectedIndex) {
+    }
+
     public EffectEditorImGuiView(ChartManifest chart, Runnable saveAction, Runnable closeAction,
                                  Runnable togglePlaybackAction, Runnable replayAction,
-                                 Consumer<Double> seekAction, Consumer<String> statusAction, Consumer<Integer> divisionsAction) {
+                                 Consumer<Double> seekAction, Consumer<String> statusAction, Consumer<Integer> divisionsAction,
+                                 Consumer<Double> pitchAction) {
         this.chart = chart;
         this.saveAction = saveAction;
         this.closeAction = closeAction;
@@ -137,6 +157,8 @@ public final class EffectEditorImGuiView {
         this.seekAction = seekAction;
         this.statusAction = statusAction;
         this.divisionsAction = divisionsAction;
+        this.pitchAction = pitchAction;
+        pitchPercentField.set(RhythmcMakerClient.getPlaybackPitchPercent());
         divisionsField.set(chart == null ? 1 : chart.divisionsPerChunk);
         this.layoutModel = new EffectTrackLayoutModel(chart == null ? null : chart.effectEditorLayout);
         if (chart != null && chart.effects != null) {
@@ -200,7 +222,7 @@ public final class EffectEditorImGuiView {
         }
         if (ImGui.beginPopupModal("正在同步轨道", ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoMove)) {
             if (!inputLocked) ImGui.closeCurrentPopup();
-            ImGui.textWrapped(status);
+            ImGui.text(status);
             ImGui.endPopup();
         }
         applyDefaultDockLayout = false;
@@ -238,6 +260,9 @@ public final class EffectEditorImGuiView {
             if (dockNodeAccess.hasCentralDockspace(dockspaceId)) {
                 imgui.internal.ImGuiDockNode center = dockNodeAccess.centralNode(dockspaceId);
                 viewport.setBounds(center.getPosX(), center.getPosY(), center.getSizeX(), center.getSizeY());
+                viewport.drawPreview(ImGui.getWindowDrawList());
+            } else {
+                viewport.setBounds(0.0f, 0.0f, 0.0f, 0.0f);
             }
         }
         ImGui.end();
@@ -308,6 +333,67 @@ public final class EffectEditorImGuiView {
         }
     }
 
+    private EditorSnapshot snapshot() {
+        List<JsonObject> effects = new ArrayList<>();
+        for (JsonObject effect : workingEffects) effects.add(effect.deepCopy());
+        EffectEditorLayout layout = layoutModel.snapshot();
+        layout.keyframes = new ArrayList<>();
+        for (EffectEditorLayout.KeyframePosition position : keyframePositions) {
+            layout.keyframes.add(new EffectEditorLayout.KeyframePosition(position.eventIndex,
+                    position.channelIndex, position.keyframeIndex, position.beat, position.denominator));
+        }
+        List<EffectEditorLayout.KeyframePosition> keyframes = new ArrayList<>();
+        for (EffectEditorLayout.KeyframePosition position : keyframePositions) {
+            keyframes.add(new EffectEditorLayout.KeyframePosition(position.eventIndex, position.channelIndex,
+                    position.keyframeIndex, position.beat, position.denominator));
+        }
+        return new EditorSnapshot(effects, layout, keyframes, selectedIndex);
+    }
+
+    private void rememberForUndo() {
+        if (restoringSnapshot) return;
+        undoHistory.push(snapshot());
+        redoHistory.clear();
+    }
+
+    private void restoreSnapshot(EditorSnapshot snapshot) {
+        restoringSnapshot = true;
+        try {
+            workingEffects.clear();
+            for (JsonObject effect : snapshot.effects()) workingEffects.add(effect.deepCopy());
+            layoutModel.restore(snapshot.layout());
+            keyframePositions.clear();
+            for (EffectEditorLayout.KeyframePosition position : snapshot.keyframes()) {
+                keyframePositions.add(new EffectEditorLayout.KeyframePosition(position.eventIndex,
+                        position.channelIndex, position.keyframeIndex, position.beat, position.denominator));
+            }
+            selectedIndex = snapshot.selectedIndex();
+            selectedIndices.clear();
+            if (selectedIndex >= 0) selectedIndices.add(selectedIndex);
+            cachedTimelineRows = null;
+            bufferIndex = Integer.MIN_VALUE;
+            syncBuffers();
+        } finally {
+            restoringSnapshot = false;
+        }
+    }
+
+    private void undo() {
+        if (undoHistory.isEmpty()) return;
+        redoHistory.push(snapshot());
+        restoreSnapshot(undoHistory.pop());
+        dirty = true;
+        status = "已撤销";
+    }
+
+    private void redo() {
+        if (redoHistory.isEmpty()) return;
+        undoHistory.push(snapshot());
+        restoreSnapshot(redoHistory.pop());
+        dirty = true;
+        status = "已恢复";
+    }
+
     public boolean hasUnsavedChanges() {
         return dirty;
     }
@@ -350,7 +436,15 @@ public final class EffectEditorImGuiView {
         ImGui.sameLine();
         ImGui.text(dirty ? "● 未保存" : "已保存");
         ImGui.sameLine();
-        if (ImGui.button("撤销##effect-undo")) status = "撤销由现有编辑历史接管";
+        boolean canUndo = !undoHistory.isEmpty();
+        boolean canRedo = !redoHistory.isEmpty();
+        ImGui.beginDisabled(!canUndo);
+        if (ImGui.button("撤销##effect-undo")) undo();
+        ImGui.endDisabled();
+        ImGui.sameLine();
+        ImGui.beginDisabled(!canRedo);
+        if (ImGui.button("恢复##effect-redo")) redo();
+        ImGui.endDisabled();
         ImGui.sameLine();
         if (ImGui.button("保存##effect-save")) saveAction.run();
         ImGui.sameLine();
@@ -380,15 +474,18 @@ public final class EffectEditorImGuiView {
         ImGui.textColored(0xFF66CCFF, "特效库");
         if (ImGui.inputInt("每 Chunk 分数", divisionsField, 1, 1, imgui.flag.ImGuiInputTextFlags.EnterReturnsTrue)) {
             int divisions = divisionsField.get();
-            if (divisions >= 1 && divisions <= 32 && divisions != chart.divisionsPerChunk) divisionsAction.accept(divisions);
+            if (divisions >= 1 && divisions <= 32 && divisions != chart.divisionsPerChunk) {
+                rememberForUndo();
+                divisionsAction.accept(divisions);
+            }
             else divisionsField.set(chart.divisionsPerChunk);
         }
         ImGui.textWrapped(status);
-        ImGui.textWrapped("仅注册表中的类型允许新增；未知类型保留原 JSON 并只读显示。");
         ImGui.separator();
         for (EffectTypeDefinition definition : registry.definitions()) {
             ImGui.pushID(definition.eventType());
             if (ImGui.selectable(displayText(definition.displayName()) + "##add", false, ImGuiSelectableFlags.SpanAllColumns)) {
+                rememberForUndo();
                 layoutModel.addTrack(definition.eventType());
                 cachedTimelineRows = null;
                 dirty = true;
@@ -433,9 +530,17 @@ public final class EffectEditorImGuiView {
             return;
         }
         ImGui.textColored(0xFF66CCFF, "特效参数设置");
+        if (selectedIndices.size() > 1) {
+            ImGui.textDisabled("无法设置多个特效参数");
+            if (ImGui.button("复制选中特效##copy-selected")) copySelectedEffects();
+            ImGui.sameLine();
+            if (ImGui.button("删除选中特效##delete-selected")) deleteSelectedEffects();
+            ImGui.end();
+            return;
+        }
         JsonObject event = selectedEvent();
         if (event == null) {
-            ImGui.textDisabled("请选择一个事件。");
+            ImGui.textDisabled("请选择特效");
             ImGui.end();
             return;
         }
@@ -447,18 +552,15 @@ public final class EffectEditorImGuiView {
             ImGui.end();
             return;
         }
-        if (ImGui.inputText("位置##effect-position", eventPositionField, imgui.flag.ImGuiInputTextFlags.EnterReturnsTrue)) {
-            Double position = parseChunkPosition(eventPositionField.get());
-            Integer denominator = parsePositionDenominator(eventPositionField.get());
-            if (position != null && position >= 0.0 && denominator != null) {
-                layoutModel.position(selectedIndex).denominator = denominator;
-                updateTimelineMarkerBeat(new TimelineMarker(selectedIndex, -1, -1, position, TimelineMarkerKind.EVENT), position);
-                seekTimelineBeat(position, timelineMaxBeat());
-            }
-            eventPositionField.set(layoutModel.position(selectedIndex).label());
-        }
+        ImGui.text("位置：" + layoutModel.position(selectedIndex).label());
         ImGui.separator();
-        if (parameterEditor.render(event)) dirty = true;
+        boolean parameterChanged = parameterEditor.render(event, workingEffects, chart);
+        if (parameterChanged) {
+            if (!parameterEditHistoryArmed && !restoringSnapshot) rememberForUndo();
+            parameterEditHistoryArmed = true;
+            dirty = true;
+        }
+        if (!ImGui.isAnyItemActive()) parameterEditHistoryArmed = false;
         EffectAnimationEvaluator.evaluate(event, RhythmcMakerClient.effectEditorCurrentBeat()).ifPresent(sample -> {
             if (!sample.values().isEmpty()) {
                 ImGui.separator();
@@ -487,18 +589,6 @@ public final class EffectEditorImGuiView {
         if (RhythmcMakerClient.isEffectEditorPreviewPrepared()) {
             playhead[0] = (float) Math.max(0.0, Math.min(maxBeat, RhythmcMakerClient.effectEditorCurrentBeat()));
         }
-        float positionRowWidth = ImGui.getContentRegionAvailX();
-        float positionWidth = Math.max(56.0f, Math.min(170.0f, positionRowWidth * 0.24f));
-        ImGui.setNextItemWidth(positionWidth);
-        String positionLabel = "Chunk 分数##position";
-        if (ImGui.inputText(positionLabel, timelinePositionField)) {
-            Double targetBeat = parseChunkPosition(timelinePositionField.get());
-            if (targetBeat != null) {
-                seekTimelineBeat(targetBeat, maxBeat);
-            }
-        }
-        if (!ImGui.isItemActive()) timelinePositionField.set(formatChunkPosition(playhead[0]));
-        ImGui.sameLine();
         String positionText = formatChunkPosition(playhead[0]);
         ImGui.text(positionText);
 
@@ -532,6 +622,25 @@ public final class EffectEditorImGuiView {
             drawTimelineControl("timeline-next", "后移（→）", TimelineControl.NEXT);
             ImGui.unindent();
         }
+        ImGui.sameLine();
+        ImGui.text("音高");
+        ImGui.sameLine();
+        ImGui.setNextItemWidth(78.0f);
+        if (ImGui.inputDouble("##effect-pitch-percent", pitchPercentField, 0.0, 0.0, "%.1f",
+                imgui.flag.ImGuiInputTextFlags.EnterReturnsTrue)) {
+            double requestedPercent = pitchPercentField.get();
+            if (Double.isFinite(requestedPercent)) {
+                double normalizedPercent = Math.max(1.0, Math.min(1000.0, requestedPercent));
+                pitchPercentField.set(normalizedPercent);
+                pitchAction.accept(normalizedPercent);
+            } else {
+                pitchPercentField.set(RhythmcMakerClient.getPlaybackPitchPercent());
+            }
+        }
+        boolean pitchHovered = ImGui.isItemHovered();
+        ImGui.sameLine();
+        ImGui.text("%");
+        if (pitchHovered) ImGui.setTooltip("范围：1%–1000%；100% 为原音高和原速度。该设置全局生效，按 Enter 应用。");
         ImGui.popStyleVar();
     }
 
@@ -564,7 +673,6 @@ public final class EffectEditorImGuiView {
             case RETURN_TO_START -> {
                 replayAction.run();
                 playhead[0] = 0.0f;
-                timelinePositionField.set(formatChunkPosition(0.0));
                 timelineLastSeekBeat = 0.0;
                 status = "已回到开头";
             }
@@ -606,6 +714,16 @@ public final class EffectEditorImGuiView {
         if (inputLocked) return true;
         if (!ImGuiRuntime.isInitialized()) return false;
         ImGuiIO io = ImGui.getIO();
+        boolean control = (input.modifiers() & GLFW.GLFW_MOD_CONTROL) != 0;
+        if (control && input.key() == GLFW.GLFW_KEY_Z) {
+            if ((input.modifiers() & GLFW.GLFW_MOD_SHIFT) != 0) redo();
+            else undo();
+            return true;
+        }
+        if (control && input.key() == GLFW.GLFW_KEY_Y) {
+            redo();
+            return true;
+        }
         if (io.getWantCaptureKeyboard() || ImGui.isAnyItemActive()) return false;
         if (input.key() == GLFW.GLFW_KEY_SPACE) {
             if (!spaceKeyDown) {
@@ -637,18 +755,27 @@ public final class EffectEditorImGuiView {
 
     /** Returns the current ImGui preview window rectangle used for mouse camera controls. */
     private void drawTimelineCanvas(float left, float top, float width, float height, double maxBeat) {
-        int visibleRowCapacity = Math.max(1, (int) Math.floor((height - 54.0f) / 24.0f));
+        float rulerHeight = 34.0f;
+        float footerHeight = 20.0f;
+        float availableRowsHeight = Math.max(24.0f, height - rulerHeight - footerHeight);
+        timelineAvailableRowsHeight = availableRowsHeight;
+        int visibleRowCapacity = Math.max(1, (int) Math.floor(availableRowsHeight / 24.0f));
         List<TimelineRow> allRows = buildTimelineRows();
-        int rowStart = Math.min(Math.max(0, timelineRowOffset), Math.max(0, allRows.size() - visibleRowCapacity));
+        int rowStart = Math.min(Math.max(0, timelineRowOffset), maxTimelineRowOffset());
         timelineRowOffset = rowStart;
-        List<TimelineRow> rows = allRows.subList(rowStart,
-                Math.min(allRows.size(), rowStart + visibleRowCapacity));
+        int rowEnd = rowStart;
+        float rowsHeight = 0.0f;
+        while (rowEnd < allRows.size()) {
+            float nextHeight = timelineRowHeight(allRows.get(rowEnd));
+            if (rowEnd > rowStart && rowsHeight + nextHeight > availableRowsHeight) break;
+            rowsHeight += nextHeight;
+            rowEnd++;
+        }
+        List<TimelineRow> rows = allRows.subList(rowStart, rowEnd);
         if (rows.isEmpty()) rows = List.of(new TimelineRow("事件", "暂无事件", -1, List.of(), false));
         float trackWidth = Math.min(240.0f, Math.max(96.0f, width * 0.26f));
         float timelineLeft = left + trackWidth;
         float timelineRight = left + width;
-        float rulerHeight = 34.0f;
-        float footerHeight = 20.0f;
         float rowsTop = top + rulerHeight;
         float rowsBottom = Math.max(rowsTop + 24.0f, top + height - footerHeight);
         timelineBoundsLeft = left;
@@ -706,7 +833,7 @@ public final class EffectEditorImGuiView {
             for (TimelineMarker marker : row.markers()) {
                 float markerX = timelineBeatToX(marker.beat(), minBeat, maxVisibleBeat, timelineLeft, timelineWidth);
                 if (marker.beat() < minBeat || marker.beat() > maxVisibleBeat) continue;
-                boolean selected = marker.eventIndex() == selectedIndex;
+                boolean selected = selectedIndices.contains(marker.eventIndex());
                 int colour = marker.kind() == TimelineMarkerKind.EVENT ? 0xFF4DB7FF : 0xFFE9B96E;
                 if (selected && marker.kind() == TimelineMarkerKind.EVENT) {
                     drawList.addCircleFilled(markerX, markerY, 8.0f, 0xFFFFFFFF, 16);
@@ -734,6 +861,14 @@ public final class EffectEditorImGuiView {
         drawList.addLine(playheadX, top, playheadX, rowsBottom, 0xFFFFFFFF, 1.5f);
         drawList.addTriangleFilled(playheadX - 6.0f, top + 1.0f, playheadX + 6.0f, top + 1.0f,
                 playheadX, top + 11.0f, 0xFFFFFFFF);
+        if (selectionDragging) {
+            float selectionLeft = Math.min(selectionStartX, selectionEndX);
+            float selectionTop = Math.min(selectionStartY, selectionEndY);
+            float selectionRight = Math.max(selectionStartX, selectionEndX);
+            float selectionBottom = Math.max(selectionStartY, selectionEndY);
+            drawList.addRectFilled(selectionLeft, selectionTop, selectionRight, selectionBottom, 0x303D8CC7);
+            drawList.addRect(selectionLeft, selectionTop, selectionRight, selectionBottom, 0xFF69B8FF, 1.0f);
+        }
 
         float footerTop = top + height - footerHeight;
         drawList.addRectFilled(left, footerTop, timelineRight, top + height, 0xFF151B23);
@@ -743,7 +878,7 @@ public final class EffectEditorImGuiView {
         drawList.addRectFilled(rangeLeft, footerTop + 4.0f, rangeRight, footerTop + 16.0f, 0xFF61A7D8);
         drawList.addText(left + 8.0f, footerTop + 4.0f, 0xFF9CA9B8,
                 String.format(Locale.ROOT, "%.0f%%", (1.0 / zoomSpan) * 100.0));
-        drawTimelineScrollBar(drawList, left + 3.0f, rowsTop, rowsBottom, visibleRowCapacity);
+        drawTimelineScrollBar(drawList, left + 1.0f, rowsTop, rowsBottom, visibleRowCapacity);
         drawList.popClipRect();
 
         handleTimelineInteraction(left, top, width, height, timelineLeft, timelineWidth, footerTop,
@@ -803,13 +938,16 @@ public final class EffectEditorImGuiView {
             } else if (mouseY >= footerTop) {
                 timelineDraggingRange = true;
                 moveTimelineRange(mouseX, timelineLeft, timelineWidth);
+            } else if (mouseY >= top && mouseY < rowsTop) {
+                timelineDraggingPlayhead = true;
+                seekTimelineBeat(timelineXToBeat(mouseX, timelineLeft, timelineWidth, minBeat, maxVisibleBeat), maxBeat);
             } else if (contentHovered) {
                 TimelineHit hit = findTimelineHit(mouseX, mouseY, hits);
                 if (hit != null) {
                     TimelineMarker marker = hit.marker();
                     select(marker.eventIndex());
-                    seekTimelineBeat(marker.beat(), maxBeat);
-                    if (registry.find(eventType(workingEffects.get(marker.eventIndex()))) != null) {
+                    if (selectedIndices.size() <= 1 && registry.find(eventType(workingEffects.get(marker.eventIndex()))) != null) {
+                        rememberForUndo();
                         timelineDraggedEvent = marker.eventIndex();
                         timelineDraggedChannel = marker.channelIndex();
                         timelineDraggedKeyframe = marker.keyframeIndex();
@@ -817,8 +955,13 @@ public final class EffectEditorImGuiView {
                                 minBeat, maxVisibleBeat);
                     }
                 } else {
-                    timelineDraggingPlayhead = true;
-                    seekTimelineBeat(timelineXToBeat(mouseX, timelineLeft, timelineWidth, minBeat, maxVisibleBeat), maxBeat);
+                    selectedIndex = -1;
+                    selectedIndices.clear();
+                    bufferIndex = Integer.MIN_VALUE;
+                    syncBuffers();
+                    selectionDragging = true;
+                    selectionStartX = selectionEndX = mouseX;
+                    selectionStartY = selectionEndY = mouseY;
                 }
             }
         }
@@ -827,11 +970,13 @@ public final class EffectEditorImGuiView {
         if (timelineDraggingPlayhead && ImGui.isMouseDown(0)) {
             seekTimelineBeat(timelineXToBeat(mouseX, timelineLeft, timelineWidth, minBeat, maxVisibleBeat), maxBeat);
         }
+        if (selectionDragging && ImGui.isMouseDown(0)) {
+            selectionEndX = mouseX;
+            selectionEndY = mouseY;
+        }
         if (timelineDraggedEvent >= 0 && ImGui.isMouseDragging(0)) {
             double target = timelineXToBeat(mouseX, timelineLeft, timelineWidth, minBeat, maxVisibleBeat) + timelineDragBeatOffset;
-            int denominator = timelineDraggedChannel < 0 ? layoutModel.position(timelineDraggedEvent).denominator
-                    : keyframePosition(new TimelineMarker(timelineDraggedEvent, timelineDraggedChannel,
-                    timelineDraggedKeyframe, target, TimelineMarkerKind.KEYFRAME)).denominator;
+            int denominator = Math.max(1, Math.min(32, chart.divisionsPerChunk));
             target = Math.max(0.0, Math.round(target * denominator) / (double) denominator);
             TimelineMarker marker = new TimelineMarker(timelineDraggedEvent, timelineDraggedChannel,
                     timelineDraggedKeyframe, target,
@@ -840,6 +985,10 @@ public final class EffectEditorImGuiView {
             seekTimelineBeat(target, maxBeat);
         }
         if (ImGui.isMouseReleased(0)) {
+            if (selectionDragging) {
+                selectionDragging = false;
+                selectMarkersInRectangle(hits);
+            }
             timelineDraggingRange = false;
             timelineDraggingScrollBar = false;
             timelineDraggingPlayhead = false;
@@ -867,6 +1016,7 @@ public final class EffectEditorImGuiView {
         }
         if (ImGui.beginPopup("特效操作##event-context")) {
             if (ImGui.menuItem("复制特效") && selectedEvent() != null) {
+                rememberForUndo();
                 JsonObject copy = selectedEvent().deepCopy();
                 EffectEditorLayout.Position source = layoutModel.position(selectedIndex);
                 workingEffects.add(copy);
@@ -909,6 +1059,7 @@ public final class EffectEditorImGuiView {
     }
 
     private void copyTrack(String trackId) {
+        rememberForUndo();
         for (EffectEditorLayout.Track track : layoutModel.tracks()) {
             if (!track.id.equals(trackId)) continue;
             EffectEditorLayout.Track copy = layoutModel.addTrack(track.type);
@@ -927,6 +1078,7 @@ public final class EffectEditorImGuiView {
     }
 
     private void clearTrack(String trackId) {
+        rememberForUndo();
         for (int index = workingEffects.size() - 1; index >= 0; index--) {
             if (!layoutModel.position(index).trackId.equals(trackId)) continue;
             workingEffects.remove(index);
@@ -1050,8 +1202,8 @@ public final class EffectEditorImGuiView {
         if (marker.kind() == TimelineMarkerKind.EVENT) {
             event.addProperty("beat", beat);
             layoutModel.move(marker.eventIndex(), eventType(event), beat);
+            layoutModel.position(marker.eventIndex()).denominator = Math.max(1, Math.min(32, chart.divisionsPerChunk));
             if (marker.eventIndex() == selectedIndex) beatField.set(beat);
-            if (marker.eventIndex() == selectedIndex) eventPositionField.set(layoutModel.position(selectedIndex).label());
         } else if (event.has("animation") && event.get("animation").isJsonObject()) {
             JsonObject animation = event.getAsJsonObject("animation");
             if (!animation.has("channels") || !animation.get("channels").isJsonArray()) return;
@@ -1067,6 +1219,7 @@ public final class EffectEditorImGuiView {
             if (!keyframeElement.isJsonObject()) return;
             keyframeElement.getAsJsonObject().addProperty("beat", beat);
             keyframePosition(marker).beat = beat;
+            keyframePosition(marker).denominator = Math.max(1, Math.min(32, chart.divisionsPerChunk));
         }
         dirty = true;
         cachedTimelineRows = null;
@@ -1078,13 +1231,35 @@ public final class EffectEditorImGuiView {
     }
 
     private void seekTimelineBeat(double beat, double maxBeat) {
-        double target = Math.max(0.0, Math.min(maxBeat, beat));
+        double target = snapPosition(Math.max(0.0, Math.min(maxBeat, beat)));
+        target = Math.max(0.0, Math.min(maxBeat, target));
         playhead[0] = (float) target;
         if (Double.isNaN(timelineLastSeekBeat) || Math.abs(timelineLastSeekBeat - target) > 0.0001) {
             seekAction.accept(target);
             timelineLastSeekBeat = target;
         }
         status = "播放头已跳转到 " + formatChunkPosition(target);
+    }
+
+    private void selectMarkersInRectangle(List<TimelineHit> hits) {
+        float selectionLeft = Math.min(selectionStartX, selectionEndX);
+        float selectionTop = Math.min(selectionStartY, selectionEndY);
+        float selectionRight = Math.max(selectionStartX, selectionEndX);
+        float selectionBottom = Math.max(selectionStartY, selectionEndY);
+        selectedIndices.clear();
+        for (TimelineHit hit : hits) {
+            if (hit.x() >= selectionLeft && hit.x() <= selectionRight
+                    && hit.y() >= selectionTop && hit.y() <= selectionBottom) {
+                selectedIndices.add(hit.marker().eventIndex());
+            }
+        }
+        if (selectedIndices.isEmpty()) {
+            selectedIndex = -1;
+        } else {
+            selectedIndex = selectedIndices.iterator().next();
+        }
+        bufferIndex = Integer.MIN_VALUE;
+        syncBuffers();
     }
 
     private void handleCameraWheelOutsideTimeline() {
@@ -1111,17 +1286,35 @@ public final class EffectEditorImGuiView {
     }
 
     private int totalTimelineRows() {
-        return layoutModel.tracks().size();
+        return cachedTimelineRows == null ? buildTimelineRows().size() : cachedTimelineRows.size();
+    }
+
+    private float timelineRowHeight(TimelineRow row) {
+        return row.groupHeader() ? 21.0f : 24.0f;
+    }
+
+    private float timelineRowsHeight(int start, int end) {
+        if (cachedTimelineRows == null) buildTimelineRows();
+        float height = 0.0f;
+        for (int index = Math.max(0, start); index < Math.min(end, cachedTimelineRows.size()); index++) {
+            height += timelineRowHeight(cachedTimelineRows.get(index));
+        }
+        return height;
     }
 
     private int maxTimelineRowOffset() {
-        return Math.max(0, totalTimelineRows() - Math.max(1, timelineVisibleRowCapacity));
+        int totalRows = totalTimelineRows();
+        int maxOffset = 0;
+        for (int offset = 0; offset < totalRows; offset++) {
+            if (timelineRowsHeight(offset, totalRows) <= timelineAvailableRowsHeight + 0.01f) maxOffset = offset;
+        }
+        return maxOffset;
     }
 
     private void drawTimelineScrollBar(ImDrawList drawList, float left, float top, float bottom, int visibleRows) {
-        int totalRows = Math.max(1, totalTimelineRows());
+        float contentHeight = Math.max(1.0f, timelineRowsHeight(0, totalTimelineRows()));
         float trackHeight = Math.max(1.0f, bottom - top);
-        float thumbHeight = Math.max(24.0f, trackHeight * Math.min(1.0f, visibleRows / (float) totalRows));
+        float thumbHeight = Math.max(24.0f, trackHeight * Math.min(1.0f, timelineAvailableRowsHeight / contentHeight));
         float travel = Math.max(0.0f, trackHeight - thumbHeight);
         float progress = maxTimelineRowOffset() == 0 ? 0.0f : timelineRowOffset / (float) maxTimelineRowOffset();
         float thumbTop = top + travel * progress;
@@ -1130,18 +1323,18 @@ public final class EffectEditorImGuiView {
     }
 
     private float timelineScrollBarTop(float top, float bottom) {
-        int totalRows = Math.max(1, totalTimelineRows());
+        float contentHeight = Math.max(1.0f, timelineRowsHeight(0, totalTimelineRows()));
         float trackHeight = Math.max(1.0f, bottom - top);
-        float thumbHeight = Math.max(24.0f, trackHeight * Math.min(1.0f, timelineVisibleRowCapacity / (float) totalRows));
+        float thumbHeight = Math.max(24.0f, trackHeight * Math.min(1.0f, timelineAvailableRowsHeight / contentHeight));
         float travel = Math.max(0.0f, trackHeight - thumbHeight);
         float progress = maxTimelineRowOffset() == 0 ? 0.0f : timelineRowOffset / (float) maxTimelineRowOffset();
         return top + travel * progress;
     }
 
     private void moveTimelineScrollBar(float mouseY, float top, float bottom) {
-        int totalRows = Math.max(1, totalTimelineRows());
+        float contentHeight = Math.max(1.0f, timelineRowsHeight(0, totalTimelineRows()));
         float trackHeight = Math.max(1.0f, bottom - top);
-        float thumbHeight = Math.max(24.0f, trackHeight * Math.min(1.0f, timelineVisibleRowCapacity / (float) totalRows));
+        float thumbHeight = Math.max(24.0f, trackHeight * Math.min(1.0f, timelineAvailableRowsHeight / contentHeight));
         float travel = Math.max(1.0f, trackHeight - thumbHeight);
         float target = Math.max(0.0f, Math.min(travel, mouseY - timelineScrollBarDragOffset - top));
         timelineRowOffset = (int) Math.round(target / travel * maxTimelineRowOffset());
@@ -1219,10 +1412,12 @@ public final class EffectEditorImGuiView {
     }
 
     private void addEffect(EffectTypeDefinition definition) {
+        rememberForUndo();
         JsonObject event = new JsonObject();
         event.addProperty("eventType", definition.eventType());
         event.addProperty("beat", Math.max(0.0, contextBeat));
-        JsonObject properties = cn.frkovo.rhythmcmaker.common.effect.parameter.EffectParameterCodec.getInstance().createDefaults(definition.eventType());
+        JsonObject properties = cn.frkovo.rhythmcmaker.common.effect.parameter.EffectParameterCodec.getInstance()
+                .createDefaults(definition.eventType(), workingEffects);
         event.add("properties", properties);
         workingEffects.add(event);
         layoutModel.addEvent(definition.eventType(), eventBeat(event), chart.divisionsPerChunk, contextTrackId);
@@ -1233,6 +1428,7 @@ public final class EffectEditorImGuiView {
     }
 
     private void addKeyframe(JsonObject event) {
+        rememberForUndo();
         JsonObject animation = event.has("animation") && event.get("animation").isJsonObject() ? event.getAsJsonObject("animation") : new JsonObject();
         JsonArray channels = animation.has("channels") && animation.get("channels").isJsonArray() ? animation.getAsJsonArray("channels") : new JsonArray();
         JsonObject channel = new JsonObject();
@@ -1258,6 +1454,7 @@ public final class EffectEditorImGuiView {
     private void deleteSelected() {
         JsonObject event = selectedEvent();
         if (event == null || registry.find(eventType(event)) == null) return;
+        rememberForUndo();
         workingEffects.remove(selectedIndex);
         layoutModel.removeEvent(selectedIndex);
         removeKeyframePositions(selectedIndex);
@@ -1268,9 +1465,49 @@ public final class EffectEditorImGuiView {
         syncBuffers();
     }
 
+    private void copySelectedEffects() {
+        if (selectedIndices.isEmpty()) return;
+        rememberForUndo();
+        List<Integer> sourceIndices = new ArrayList<>(selectedIndices);
+        selectedIndices.clear();
+        for (int sourceIndex : sourceIndices) {
+            if (sourceIndex < 0 || sourceIndex >= workingEffects.size()) continue;
+            JsonObject copy = workingEffects.get(sourceIndex).deepCopy();
+            EffectEditorLayout.Position source = layoutModel.position(sourceIndex);
+            workingEffects.add(copy);
+            layoutModel.addEvent(eventType(copy), eventBeat(copy), source.denominator, source.trackId);
+            copyKeyframePositions(sourceIndex, workingEffects.size() - 1);
+            selectedIndices.add(workingEffects.size() - 1);
+        }
+        selectedIndex = selectedIndices.isEmpty() ? -1 : selectedIndices.iterator().next();
+        dirty = true;
+        cachedTimelineRows = null;
+        syncBuffers();
+    }
+
+    private void deleteSelectedEffects() {
+        if (selectedIndices.isEmpty()) return;
+        rememberForUndo();
+        List<Integer> indices = new ArrayList<>(selectedIndices);
+        indices.sort(java.util.Collections.reverseOrder());
+        for (int index : indices) {
+            if (index < 0 || index >= workingEffects.size()) continue;
+            workingEffects.remove(index);
+            layoutModel.removeEvent(index);
+            removeKeyframePositions(index);
+        }
+        selectedIndices.clear();
+        selectedIndex = workingEffects.isEmpty() ? -1 : Math.min(indices.get(indices.size() - 1), workingEffects.size() - 1);
+        dirty = true;
+        cachedTimelineRows = null;
+        syncBuffers();
+    }
+
     private void select(int index) {
         if (chart == null || index < 0 || index >= workingEffects.size()) return;
         selectedIndex = index;
+        selectedIndices.clear();
+        selectedIndices.add(index);
         playhead[0] = (float) eventBeat(workingEffects.get(index));
         seekAction.accept((double) playhead[0]);
         syncBuffers();
@@ -1283,7 +1520,6 @@ public final class EffectEditorImGuiView {
         bufferIndex = selectedIndex;
         bufferType = type;
         beatField.set(event == null ? 0.0 : eventBeat(event));
-        eventPositionField.set(event == null ? "" : layoutModel.position(selectedIndex).label());
     }
 
     private void syncEventFromBuffers() {

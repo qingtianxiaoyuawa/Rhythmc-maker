@@ -2001,7 +2001,11 @@ private static void showSceneBoundary(MinecraftServer server) {
         if ("scroll".equals(mode)) {
             SCROLL_JUDGEMENT_SESSIONS.put(player.getUuid(), new ScrollJudgementSession(world, chart, player, startSeconds, startNanos, rate));
         } else {
-            PlaybackSession session = new PlaybackSession(world, player.getX(), player.getY(), player.getZ(), player.getYaw(), player.getPitch(), chart, startSeconds, startNanos, mode, rate);
+            java.util.List<net.minecraft.entity.effect.StatusEffectInstance> originalEffects = new java.util.ArrayList<>();
+            for (net.minecraft.entity.effect.StatusEffectInstance effect : player.getStatusEffects()) {
+                originalEffects.add(new net.minecraft.entity.effect.StatusEffectInstance(effect));
+            }
+            PlaybackSession session = new PlaybackSession(world, player.getX(), player.getY(), player.getZ(), player.getYaw(), player.getPitch(), chart, startSeconds, startNanos, mode, rate, originalEffects);
             PLAYBACK_SESSIONS.put(player.getUuid(), session);
             player.teleport(world, PLAYBACK_PLATFORM_X + 0.5, PLAYBACK_PLATFORM_Y + 1.0, PLAYBACK_PLATFORM_Z + 0.5, Set.of(), 180.0f, 0.0f, false);
         }
@@ -2110,7 +2114,16 @@ private static void showSceneBoundary(MinecraftServer server) {
             session.playedTapSoundThisTick = false;
             session.playedLookSoundThisTick = false;
             session.updateClientTime(player);
-            session.updateTextDisplays(songTime);
+            if (session.formal) {
+                try {
+                    session.updateTextDisplays(songTime);
+                } catch (RuntimeException exception) {
+                    LOGGER.error("Failed to update formal-playback text displays; clearing affected displays", exception);
+                    session.clearTextDisplays();
+                }
+            } else {
+                session.updateTextDisplays(songTime);
+            }
             if (session.formal) {
                 int effectsProcessedThisTick = 0;
                 while (session.nextEffectIndex < session.effects.size()) {
@@ -2118,7 +2131,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                     if (session.effectSeconds(effect) > songTime) break;
                     if (effectsProcessedThisTick++ >= PLAYBACK_MAX_EFFECTS_PER_TICK) break;
                     session.nextEffectIndex++;
-                    playTrackEffect(session, player, effect);
+                    playTrackEffectSafely(session, player, effect);
                 }
             }
             if (session.formal) {
@@ -2195,12 +2208,21 @@ private static void showSceneBoundary(MinecraftServer server) {
             session.playedLookSoundThisTick = false;
             int processed = 0;
             PlaybackSession effectSession = session.effectSession;
-            if (effectSession != null) { effectSession.updateClientTime(player); effectSession.updateTextDisplays(songTime); }
+            if (effectSession != null) {
+                effectSession.updateClientTime(player);
+                try {
+                    effectSession.updateTextDisplays(songTime);
+                } catch (RuntimeException exception) {
+                    LOGGER.error("Failed to update formal scroll-playback text displays; clearing affected displays", exception);
+                    effectSession.clearTextDisplays();
+                }
+            }
             while (effectSession != null && effectSession.nextEffectIndex < effectSession.effects.size()
                     && effectSession.effectTimes.get(effectSession.nextEffectIndex) <= songTime
                     && processed++ < PLAYBACK_MAX_PRELOADS_PER_TICK) {
                 JsonObject effect = effectSession.effects.get(effectSession.nextEffectIndex++);
-                playTrackEffect(effectSession, player, effect);
+                if (session.effectPreview) playTrackEffect(effectSession, player, effect);
+                else playTrackEffectSafely(effectSession, player, effect);
             }
             while (session.nextNoteIndex < session.notes.size()
                     && session.noteTimes.get(session.nextNoteIndex) <= songTime
@@ -2281,7 +2303,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             case "GLOW_COLOR" -> session.applyGlowColor(effect);
             case "HIDE_NOTES" -> session.updateHiddenNotes(effect);
             case "TITLE" -> session.applyTitle(player, effect);
-            case "MESSAGE" -> { if (!text.isBlank()) player.sendMessage(EffectTextFormatter.getInstance().text(text, 0xFFFFFF), false); }
+            case "MESSAGE" -> sendMessageEffect(player, effect, text);
             case "TEXT_DISPLAY", "TEXT_DISPLAY_EFFECT", "TEXT_DISPLAY_SYNC_TRACK", "TEXT_DISPLAY_DESYNC_TRACK", "TEXT_DISPLAY_REMOVE", "HOLOGRAM", "REMOVE_HOLOGRAM" -> session.applyTextEffect(effect);
             case "EFFECT" -> session.applyPotionProxy(player, effect);
             case "CLEAR_EFFECT" -> session.clearPotionEffect(player, effect);
@@ -2292,6 +2314,29 @@ private static void showSceneBoundary(MinecraftServer server) {
             default -> LOGGER.warn("Ignoring unsupported RhythMC effect '{}' instead of substituting a particle placeholder", type);
         }
     }
+    private static void playTrackEffectSafely(PlaybackSession session, ServerPlayerEntity player, JsonObject effect) {
+        try {
+            playTrackEffect(session, player, effect);
+        } catch (RuntimeException exception) {
+            LOGGER.error("Failed to apply formal-playback effect: type={}, beat={}",
+                    effectType(effect), effectDouble(effect, "beat", -1.0), exception);
+        }
+    }
+
+    private static void sendMessageEffect(ServerPlayerEntity player, JsonObject effect, String fallbackText) {
+        JsonElement contents = effectValue(effect, "contents");
+        if (contents != null && contents.isJsonArray()) {
+            for (JsonElement value : contents.getAsJsonArray()) {
+                if (value.isJsonPrimitive()) {
+                    String message = value.getAsString();
+                    if (!message.isBlank()) player.sendMessage(EffectTextFormatter.getInstance().text(message, 0xFFFFFF), false);
+                }
+            }
+            return;
+        }
+        if (!fallbackText.isBlank()) player.sendMessage(EffectTextFormatter.getInstance().text(fallbackText, 0xFFFFFF), false);
+    }
+
     private static String effectType(JsonObject effect) {
         return effectString(effect, "eventType", effectString(effect, "type", "PARTICLE")).trim().toUpperCase(java.util.Locale.ROOT);
     }
@@ -2492,7 +2537,6 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
         PlaybackSession session = PLAYBACK_SESSIONS.remove(player.getUuid());
         if (session == null) return;
-        player.clearStatusEffects();
         try {
             session.resetClientTime(player);
             session.clearGlowTeam();
@@ -2509,6 +2553,13 @@ private static void showSceneBoundary(MinecraftServer server) {
         } catch (RuntimeException exception) {
             LOGGER.error("Failed to clean playback displays for {}", player.getUuid(), exception);
         } finally {
+            if (session.formal) {
+                player.clearStatusEffects();
+                for (net.minecraft.entity.effect.StatusEffectInstance effect : session.originalStatusEffects) {
+                    player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(effect));
+                }
+                player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.ClearTitleS2CPacket(true));
+            }
             if (session.formal && session.sceneChanged) {
                 restoreInitialPlaybackScene(server, session);
             }
@@ -2691,6 +2742,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final Map<String, Double> noteTimes = new java.util.HashMap<>();
 
         private final double endSeconds;
+        private final java.util.List<net.minecraft.entity.effect.StatusEffectInstance> originalStatusEffects;
         private int nextNoteIndex;
         private final Map<String, DisplayEntity.BlockDisplayEntity> displays = new java.util.HashMap<>();
         private final Map<String, DisplayEntity.TextDisplayEntity> textDisplays = new java.util.HashMap<>();
@@ -2725,7 +2777,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             nextEffectIndex = 0;
             while (nextNoteIndex < notes.size() && noteTimes.getOrDefault(notes.get(nextNoteIndex).id, Double.POSITIVE_INFINITY) < corrected) nextNoteIndex++;
         }
-        private PlaybackSession(ServerWorld world, double returnX, double returnY, double returnZ, float returnYaw, float returnPitch, ChartManifest chart, double startSeconds, long startNanos, String mode, double rate) {
+        private PlaybackSession(ServerWorld world, double returnX, double returnY, double returnZ, float returnYaw, float returnPitch, ChartManifest chart, double startSeconds, long startNanos, String mode, double rate, java.util.List<net.minecraft.entity.effect.StatusEffectInstance> originalStatusEffects) {
             this.world = world;
             this.returnX = returnX;
             this.returnY = returnY;
@@ -2741,6 +2793,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             this.startNanos = startNanos;
             this.formal = !"scroll".equalsIgnoreCase(mode);
             this.rate = rate;
+            this.originalStatusEffects = new java.util.ArrayList<>(originalStatusEffects);
             this.notes = new java.util.ArrayList<>(chart.notes == null ? java.util.List.of() : chart.notes);
             this.effects = new java.util.ArrayList<>(chart.effects == null ? java.util.List.of() : chart.effects);
             this.effects.sort(java.util.Comparator.comparingDouble(this::effectSeconds));

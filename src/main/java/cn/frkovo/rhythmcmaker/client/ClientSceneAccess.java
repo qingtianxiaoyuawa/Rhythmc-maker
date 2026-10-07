@@ -9,7 +9,7 @@ import net.minecraft.registry.Registries;
 import java.io.IOException;
 import java.util.List;
 
-final class ClientSceneAccess {
+public final class ClientSceneAccess {
     private ClientSceneAccess() {}
     private static MinecraftServer server() throws IOException {
         MinecraftServer server = MinecraftClient.getInstance().getServer();
@@ -17,6 +17,10 @@ final class ClientSceneAccess {
         return server;
     }
     static List<SceneEditStorage.Scene> list() throws IOException { return RhythmcMaker.sceneEditors(server(), chartId()); }
+    public static List<String> savedSceneNames() throws IOException {
+        return list().stream().filter(scene -> scene.saved && scene.name != null && !scene.name.isBlank())
+                .map(scene -> scene.name).distinct().toList();
+    }
     static SceneEditStorage.Scene create() throws IOException {
         var player = MinecraftClient.getInstance().player;
         String icon = player == null || player.getMainHandStack().isEmpty() ? null : Registries.ITEM.getId(player.getMainHandStack().getItem()).toString();
