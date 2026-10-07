@@ -34,7 +34,7 @@ public final class EffectParameterSchema {
                 number("amplifier", "效果等级（0 为一级）", INTEGER, "0", 0, Integer.MAX_VALUE), duration());
         add("CLEAR_EFFECT", "清除药水效果", true,
                 optional(field("effects", "要清除的药水 ID 列表", INTEGER_LIST, "[]", "不启用此字段时清除全部；启用后只清除数组中的 ID，空数组不清除任何效果。")));
-        add("WEATHER", "天气", true, enumeration("weather", "天气", "CLEAR", List.of("DOWNFALL", "CLEAR")));
+        add("WEATHER", "天气", true, enumeration("weather", "天气", "CLEAR", List.of("CLEAR", "RAIN", "THUNDER")));
         add("ARENA", "切换场景", true, field("arena", "场景名称", TEXT, "\"arena\"", "使用已导入或保存的场景名称。"));
         add("HIDE_NOTES", "隐藏音符", true,
                 optional(choices(field("noteTypes", "隐藏的音符类型", NOTE_TYPES, "[]", "点击 / 视角 / 长按 / 闪避音符；空数组恢复显示全部类型。"), List.of("TAP", "LOOK", "HOLD", "DODGE"))),

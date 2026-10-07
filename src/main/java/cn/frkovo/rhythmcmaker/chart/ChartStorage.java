@@ -172,10 +172,12 @@ public final class ChartStorage {
             }
         }
         if (chart.effects != null) for (JsonObject effect : chart.effects) {
-            if (effect == null || !effect.has("arena")) continue;
-            String arena = effect.get("arena").getAsString();
+            if (effect == null) continue;
+            JsonObject properties = effect.has("properties") && effect.get("properties").isJsonObject() ? effect.getAsJsonObject("properties") : effect;
+            if (!properties.has("arena")) continue;
+            String arena = properties.get("arena").getAsString();
             String path = chart.arenaBindings.get(arena);
-            if (path != null) effect.addProperty("arenaPath", path);
+            if (path != null) properties.addProperty("arenaPath", path);
         }
         RhythmcMaker.installImportedScenes(server, chart, scenes);
         writeManifest(manifestPath(server, chart.id), chart);
@@ -318,12 +320,20 @@ public final class ChartStorage {
         if (legacy.equals("VISIBLE")) {
             JsonArray noteTypes = new JsonArray();
             if (old.has("visible") && !old.get("visible").getAsBoolean()) {
-                if (old.has("note-types")) for (JsonElement noteType : old.getAsJsonArray("note-types"))
-                    noteTypes.add(switch (oldNoteType(noteType.getAsString())) { case 1 -> "LOOK"; case 2 -> "HOLD"; case 3 -> "DODGE"; default -> "TAP"; });
-                else for (String noteType : List.of("TAP", "LOOK", "HOLD", "DODGE")) noteTypes.add(noteType);
+                JsonElement legacyTypes = firstJsonElement(old, properties, "note-types", "noteTypes");
+                if (legacyTypes != null && legacyTypes.isJsonArray()) for (JsonElement noteType : legacyTypes.getAsJsonArray()) {
+                    int value = noteType.isJsonPrimitive() && noteType.getAsJsonPrimitive().isNumber() ? noteType.getAsInt() : oldNoteType(noteType.getAsString());
+                    noteTypes.add(switch (value) { case 1 -> "LOOK"; case 2 -> "HOLD"; case 3 -> "DODGE"; default -> "TAP"; });
+                } else for (String noteType : List.of("TAP", "LOOK", "HOLD", "DODGE")) noteTypes.add(noteType);
             }
             properties.add("noteTypes", noteTypes);
-            properties.add("tracks", new JsonArray());
+            JsonArray tracks = new JsonArray();
+            JsonElement legacyTracks = firstJsonElement(old, properties, "tracks", "track-ids", "trackIds", "track");
+            if (legacyTracks != null) {
+                if (legacyTracks.isJsonArray()) for (JsonElement value : legacyTracks.getAsJsonArray()) if (value.isJsonPrimitive()) tracks.add(value.getAsInt());
+                else if (legacyTracks.isJsonPrimitive()) tracks.add(legacyTracks.getAsInt());
+            }
+            properties.add("tracks", tracks);
         }
         converted.add("properties", properties); return converted;
     }
@@ -419,6 +429,14 @@ public final class ChartStorage {
     private static boolean jsonBoolean(JsonObject first, JsonObject second, String firstKey, String secondKey, boolean fallback) {
         JsonElement value = firstJsonElement(first, second, firstKey, secondKey);
         try { return value != null ? value.getAsBoolean() : fallback; } catch (RuntimeException ignored) { return fallback; }
+    }
+    private static String normalizeWeather(String value) {
+        String normalized = value == null ? "CLEAR" : value.trim().toUpperCase(java.util.Locale.ROOT).replace('-', '_').replace(' ', '_');
+        return switch (normalized) {
+            case "RAIN", "DOWNFALL" -> "RAIN";
+            case "THUNDER", "THUNDERSTORM", "STORM" -> "THUNDER";
+            default -> "CLEAR";
+        };
     }
     private static String normalizePotionEffectId(String value) {
         if (value == null || value.isBlank()) return "UNKNOWN";

@@ -2928,9 +2928,10 @@ private static void showSceneBoundary(MinecraftServer server) {
                     world.getTime(), world.getTimeOfDay(), world.getGameRules().getValue(GameRules.ADVANCE_TIME)));
         }
         private void applyWeather(JsonObject effect) {
-            String weather = effectString(effect, "weather", effectString(effect, "type", "clear")).toLowerCase(java.util.Locale.ROOT);
-            boolean raining = weather.contains("rain") || weather.contains("storm");
-            world.setWeather(0, raining ? 6000 : 0, raining, weather.contains("storm"));
+            String weather = effectString(effect, "weather", effectString(effect, "type", "clear")).trim().toUpperCase(java.util.Locale.ROOT);
+            boolean thunder = weather.equals("THUNDER") || weather.equals("THUNDERSTORM") || weather.equals("STORM");
+            boolean raining = thunder || weather.equals("RAIN") || weather.equals("DOWNFALL");
+            world.setWeather(0, raining ? 6000 : 0, raining, thunder);
         }
         private double calculateEndSeconds() {
             double end = chart.durationSeconds + chart.offsetMillis / 1000.0;
@@ -3197,7 +3198,8 @@ private static void showSceneBoundary(MinecraftServer server) {
         private void applyArena(JsonObject effect) {
             String arena = effectString(effect, "arena", "").trim();
             if (arena.isBlank()) return;
-            String binding = chart.arenaBindings.get(arena);
+            String binding = effectString(effect, "arenaPath", "").trim();
+            if (binding.isBlank()) binding = chart.arenaBindings.get(arena);
             if (binding == null || binding.isBlank()) {
                 LOGGER.warn("RhythMC arena effect has no binding: {}", arena);
                 return;
