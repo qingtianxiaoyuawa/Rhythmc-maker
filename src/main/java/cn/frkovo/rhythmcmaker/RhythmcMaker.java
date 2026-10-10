@@ -116,6 +116,7 @@ public final class RhythmcMaker implements ModInitializer {
     private static final Map<UUID, String> PENDING_EDITOR_ENTRIES = new ConcurrentHashMap<>();
     private static final Set<UUID> DIMENSION_TRAVEL_READY = ConcurrentHashMap.newKeySet();
     private static final Map<UUID, Integer> SELECTED_START_CHUNKS = new ConcurrentHashMap<>();
+    private static final Map<UUID, TrackSnapUndo> TRACK_SNAP_UNDOS = new ConcurrentHashMap<>();
     private static final Map<UUID, PlaybackSession> PLAYBACK_SESSIONS = new ConcurrentHashMap<>();
     private static final Map<UUID, ScrollJudgementSession> SCROLL_JUDGEMENT_SESSIONS = new ConcurrentHashMap<>();
     /** Original player transform for the effect-editor preview. The player entity follows the
@@ -377,6 +378,10 @@ public final class RhythmcMaker implements ModInitializer {
                         .executes(context -> setEditorLayout(context.getSource(),
                             com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "divisions"),
                             com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "lanes"))))));
+            dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_track_snap")
+                .executes(context -> snapFractionalNotes(context.getSource())));
+            dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_track_snap_undo")
+                .executes(context -> undoFractionalNoteSnap(context.getSource())));
             dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_start_chunk")
                 .then(net.minecraft.server.command.CommandManager.argument("delta", com.mojang.brigadier.arguments.IntegerArgumentType.integer(-16, 16))
                 .executes(context -> adjustStartChunk(context.getSource(), com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "delta")))));
@@ -815,6 +820,101 @@ public final class RhythmcMaker implements ModInitializer {
         }
     }
 
+    private static int snapFractionalNotes(net.minecraft.server.command.ServerCommandSource source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayerEntity player = source.getPlayerOrThrow();
+        ChartManifest chart = loadActiveChart(player, source.getServer());
+        if (chart == null || !(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world)) return 0;
+        if (hasPlaybackSession(player.getUuid()) || isSceneOperationBusy(player.getUuid()) || rejectEditorTrackAdjustment(player)) return 0;
+        java.util.List<ChartManifest.Note> original = copyNotes(chart.notes);
+        java.util.List<ChartManifest.Note> retained = new java.util.ArrayList<>();
+        java.util.List<TrackSnapChangedNote> changed = new java.util.ArrayList<>();
+        java.util.List<TrackSnapRemovedNote> removed = new java.util.ArrayList<>();
+        Set<TrackSnapKey> retainedKeys = new java.util.HashSet<>();
+        for (int index = 0; index < chart.notes.size(); index++) {
+            ChartManifest.Note note = chart.notes.get(index);
+            if (note == null) continue;
+            boolean fractional = hasFraction(note.z);
+            double targetZ = fractional ? Math.ceil(note.z - 0.5) : note.z;
+            TrackSnapKey key = new TrackSnapKey(note.x, note.y, targetZ, note.type);
+            if (retainedKeys.contains(key)) {
+                removed.add(new TrackSnapRemovedNote(index, copyNote(note)));
+                continue;
+            }
+            if (fractional) {
+                changed.add(new TrackSnapChangedNote(note.id, note.z, note.beat, note.time));
+                note.z = targetZ;
+                note.beat = PlaybackCoordinates.editorBeatAtWorldZ(chart, targetZ);
+                note.time = ChartTiming.beatToSeconds(chart, note.beat);
+            }
+            retained.add(note);
+            retainedKeys.add(key);
+        }
+        if (changed.isEmpty() && removed.isEmpty()) {
+            player.sendMessage(Text.literal("没有需要吸附的音符"), true);
+            return 1;
+        }
+        chart.notes = retained;
+        try {
+            saveChartSynchronously(source.getServer(), chart);
+            TRACK_SNAP_UNDOS.put(player.getUuid(), new TrackSnapUndo(chart.id, changed, removed));
+            refreshNoteDisplays(world, chart);
+            player.sendMessage(Text.literal("轨道吸附完成：修改 " + changed.size() + " 个，删除重复 " + removed.size() + " 个，剩余 " + retained.size() + " 个"), true);
+            return 1;
+        } catch (IOException exception) {
+            chart.notes = original;
+            player.sendMessage(Text.literal("轨道吸附保存失败，已完全回滚"), true);
+            LOGGER.warn("Failed to save fractional note snap for chart {}", chart.id, exception);
+            return 0;
+        }
+    }
+    private static int undoFractionalNoteSnap(net.minecraft.server.command.ServerCommandSource source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayerEntity player = source.getPlayerOrThrow();
+        TrackSnapUndo undo = TRACK_SNAP_UNDOS.get(player.getUuid());
+        ChartManifest chart = loadActiveChart(player, source.getServer());
+        if (undo == null || chart == null || !undo.chartId.equals(chart.id) || !(player.getEntityWorld() instanceof ServerWorld world)) {
+            player.sendMessage(Text.literal("没有可撤销的轨道吸附"), true);
+            return 0;
+        }
+        java.util.List<ChartManifest.Note> current = copyNotes(chart.notes);
+        try {
+            for (TrackSnapChangedNote changed : undo.changed) {
+                ChartManifest.Note note = chart.notes.stream().filter(value -> value != null && changed.id.equals(value.id)).findFirst().orElse(null);
+                if (note == null) continue;
+                note.z = changed.z;
+                note.beat = changed.beat;
+                note.time = changed.time;
+            }
+            for (TrackSnapRemovedNote removed : undo.removed) {
+                if (chart.notes.stream().noneMatch(value -> value != null && removed.note.id.equals(value.id))) {
+                    int insertion = Math.min(removed.index, chart.notes.size());
+                    chart.notes.add(insertion, copyNote(removed.note));
+                }
+            }
+            saveChartSynchronously(source.getServer(), chart);
+            TRACK_SNAP_UNDOS.remove(player.getUuid());
+            refreshNoteDisplays(world, chart);
+            player.sendMessage(Text.literal("已撤销上次轨道吸附"), true);
+            return 1;
+        } catch (IOException exception) {
+            chart.notes = current;
+            player.sendMessage(Text.literal("撤销保存失败，已完全回滚"), true);
+            LOGGER.warn("Failed to undo fractional note snap for chart {}", chart.id, exception);
+            return 0;
+        }
+    }
+    private static java.util.List<ChartManifest.Note> copyNotes(java.util.List<ChartManifest.Note> notes) {
+        java.util.List<ChartManifest.Note> result = new java.util.ArrayList<>();
+        if (notes != null) for (ChartManifest.Note note : notes) if (note != null) result.add(copyNote(note));
+        return result;
+    }
+    private static ChartManifest.Note copyNote(ChartManifest.Note source) {
+        ChartManifest.Note target = new ChartManifest.Note();
+        target.id = source.id; target.type = source.type; target.trackId = source.trackId; target.beat = source.beat; target.time = source.time;
+        target.x = source.x; target.y = source.y; target.z = source.z; target.sourceX = source.sourceX; target.sourceY = source.sourceY; target.sourceZ = source.sourceZ;
+        target.scaleX = source.scaleX; target.scaleY = source.scaleY; target.scaleZ = source.scaleZ; target.rotationX = source.rotationX; target.rotationY = source.rotationY; target.rotationZ = source.rotationZ; target.holdGroup = source.holdGroup;
+        return target;
+    }
+
     private static boolean saveActiveChart(MinecraftServer server, ServerPlayerEntity player) {
         String id = ACTIVE_CHARTS.get(player.getUuid());
         if (id == null) return false;
@@ -823,6 +923,19 @@ public final class RhythmcMaker implements ModInitializer {
             try { state = cacheChart(server, ChartStorage.find(server, id)); } catch (IOException ignored) { return false; }
         }
         return state != null && queueChartSave(server, state);
+    }
+    private static void saveChartSynchronously(MinecraftServer server, ChartManifest chart) throws IOException {
+        CachedChartState state = cacheChart(server, chart);
+        if (state == null) throw new IOException("谱面缓存无效");
+        synchronized (state) {
+            state.revision++;
+            state.saving = false;
+            state.dirty = true;
+        }
+        ChartStorage.update(server, chart);
+        synchronized (state) {
+            state.dirty = false;
+        }
     }
     private static void saveChart(MinecraftServer server, ChartManifest chart) throws IOException {
         CachedChartState state = cacheChart(server, chart);
@@ -4154,6 +4267,11 @@ private static void showSceneBoundary(MinecraftServer server) {
         RegistryKey<Item> key = RegistryKey.of(RegistryKeys.ITEM, identifier);
         return Registry.register(Registries.ITEM, key, new MenuItem(new Item.Settings().registryKey(key).maxCount(1), name));
     }
+
+    private record TrackSnapKey(double x, double y, double z, int type) {}
+    private record TrackSnapChangedNote(String id, double z, double beat, double time) {}
+    private record TrackSnapRemovedNote(int index, ChartManifest.Note note) {}
+    private record TrackSnapUndo(String chartId, java.util.List<TrackSnapChangedNote> changed, java.util.List<TrackSnapRemovedNote> removed) {}
 
     private static final class MenuItem extends Item {
         private final Text name;

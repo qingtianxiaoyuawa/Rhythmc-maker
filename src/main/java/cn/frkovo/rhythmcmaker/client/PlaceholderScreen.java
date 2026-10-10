@@ -14,9 +14,15 @@ import net.minecraft.client.gui.screen.option.ControlsOptionsScreen;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 
+import java.util.HashSet;
+import java.util.Set;
+
 final class PlaceholderScreen extends RhythmcScreen {
     private final String title;
     private final String section;
+    private static boolean trackSnapUndoAvailable;
+    private static String trackSnapChartId;
+    private static TrackSnapSummary lastTrackSnapSummary;
 
     PlaceholderScreen(String title) {
         this(title, "root");
@@ -109,6 +115,51 @@ final class PlaceholderScreen extends RhythmcScreen {
             }).horizontalSizing(Sizing.fill()));
         } else if (section.equals("quick-functions")) {
             page.child(UIComponents.button(Text.literal("快捷传送"), button -> MinecraftClient.getInstance().setScreen(new PlaceholderScreen("快捷传送", "quick-teleport-select"))).horizontalSizing(Sizing.fill()));
+            page.child(UIComponents.button(Text.literal("轨道吸附"), button -> MinecraftClient.getInstance().setScreen(new PlaceholderScreen("轨道吸附", "track-snap"))).horizontalSizing(Sizing.fill()));
+        } else if (section.equals("track-snap")) {
+            var chart = ClientChartAccess.resolveActiveChart();
+            TrackSnapSummary summary = trackSnapSummary(chart);
+            if (chart != null && chart.id.equals(trackSnapChartId) && lastTrackSnapSummary != null) {
+                summary = lastTrackSnapSummary;
+            }
+            page.child(UIComponents.label(Text.literal("谱面基础 BPM：" + (chart == null ? "-" : String.format(java.util.Locale.ROOT, "%.2f", chart.bpm)))));
+            page.child(UIComponents.label(Text.literal("当前每 Chunk 分数：" + (chart == null ? "-" : Math.max(1, chart.divisionsPerChunk)))));
+            page.child(UIComponents.label(Text.literal("待吸附音符数量：" + summary.fractionalCount)));
+            page.child(UIComponents.label(Text.literal("预计重复删除数量：" + summary.duplicateCount)));
+            page.child(UIComponents.label(Text.literal("吸附后剩余音符数量：" + summary.remainingCount)));
+            if (summary.fractionalCount == 0) page.child(UIComponents.label(Text.literal("没有需要吸附的音符")));
+            page.child(UIComponents.label(Text.literal("这项操作会改变音符时机，可能造成偏差，请确认操作")));
+            var confirm = UIComponents.button(Text.literal("继续确认"), button -> MinecraftClient.getInstance().setScreen(new PlaceholderScreen("轨道吸附确认", "track-snap-confirm")));
+            confirm.active(summary.fractionalCount > 0);
+            page.child(confirm.horizontalSizing(Sizing.fill()));
+            var undo = UIComponents.button(Text.literal("撤销上次吸附"), button -> {
+                RhythmcMakerClient.sendChartCommand("rhythmc_track_snap_undo");
+                trackSnapUndoAvailable = false;
+                lastTrackSnapSummary = null;
+                MinecraftClient.getInstance().setScreen(new PlaceholderScreen("轨道吸附", "track-snap"));
+            });
+            undo.active(trackSnapUndoAvailable && chart != null && chart.id.equals(trackSnapChartId));
+            page.child(undo.horizontalSizing(Sizing.fill()));
+        } else if (section.equals("track-snap-confirm")) {
+            var chart = ClientChartAccess.resolveActiveChart();
+            TrackSnapSummary summary = trackSnapSummary(chart);
+            if (chart != null && chart.id.equals(trackSnapChartId) && lastTrackSnapSummary != null) summary = lastTrackSnapSummary;
+            page.child(UIComponents.label(Text.literal("谱面基础 BPM：" + (chart == null ? "-" : String.format(java.util.Locale.ROOT, "%.2f", chart.bpm)))));
+            page.child(UIComponents.label(Text.literal("当前每 Chunk 分数：" + (chart == null ? "-" : Math.max(1, chart.divisionsPerChunk)))));
+            page.child(UIComponents.label(Text.literal("待吸附音符数量：" + summary.fractionalCount)));
+            page.child(UIComponents.label(Text.literal("预计重复删除数量：" + summary.duplicateCount)));
+            page.child(UIComponents.label(Text.literal("吸附后剩余音符数量：" + summary.remainingCount)));
+            TrackSnapSummary confirmedSummary = summary;
+            page.child(UIComponents.label(Text.literal("这项操作会改变音符时机，可能造成偏差，请确认你真的要吸附")));
+            page.child(UIComponents.button(Text.literal("确认吸附"), button -> {
+                if (chart == null || confirmedSummary.fractionalCount == 0) return;
+                RhythmcMakerClient.sendChartCommand("rhythmc_track_snap");
+                trackSnapUndoAvailable = true;
+                trackSnapChartId = chart.id;
+                lastTrackSnapSummary = new TrackSnapSummary(0, confirmedSummary.duplicateCount, confirmedSummary.remainingCount);
+                MinecraftClient.getInstance().setScreen(new PlaceholderScreen("轨道吸附", "track-snap"));
+            }).horizontalSizing(Sizing.fill()));
+            page.child(UIComponents.button(Text.literal("取消"), button -> MinecraftClient.getInstance().setScreen(new PlaceholderScreen("轨道吸附", "track-snap"))).horizontalSizing(Sizing.fill()));
         } else if (section.equals("quick-teleport-select")) {
             page.child(UIComponents.label(Text.literal("选择传送目标")));
             page.child(UIComponents.button(Text.literal("按 Chunk 传送"), button -> MinecraftClient.getInstance().setScreen(new PlaceholderScreen("快捷传送", "quick-teleport-chunk"))).horizontalSizing(Sizing.fill()));
@@ -206,6 +257,27 @@ final class PlaceholderScreen extends RhythmcScreen {
         var scroll = UIContainers.verticalScroll(Sizing.fixed(pageWidth), Sizing.fixed(Math.max(180, this.height - 30)), page);
         root.child(centered(UIContainers.horizontalFlow(Sizing.fill(), Sizing.fill())).child(scroll));
     }
+
+    private static TrackSnapSummary trackSnapSummary(cn.frkovo.rhythmcmaker.chart.ChartManifest chart) {
+        if (chart == null || chart.notes == null) return new TrackSnapSummary(0, 0, 0);
+        int fractional = 0;
+        int duplicates = 0;
+        Set<TrackSnapKey> retained = new HashSet<>();
+        for (var note : chart.notes) {
+            if (note == null) continue;
+            boolean isFractional = Math.abs(note.z - Math.rint(note.z)) > 0.000001;
+            double targetZ = isFractional ? Math.ceil(note.z - 0.5) : note.z;
+            TrackSnapKey key = new TrackSnapKey(note.x, note.y, targetZ, note.type);
+            if (isFractional) {
+                fractional++;
+                if (!retained.add(key)) duplicates++;
+            } else if (!retained.add(key)) duplicates++;
+        }
+        return new TrackSnapSummary(fractional, duplicates, chart.notes.size() - duplicates);
+    }
+
+    private record TrackSnapKey(double x, double y, double z, int type) {}
+    private record TrackSnapSummary(int fractionalCount, int duplicateCount, int remainingCount) {}
 
     @Override
     public void close() {
