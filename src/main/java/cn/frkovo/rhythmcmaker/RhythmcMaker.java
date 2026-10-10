@@ -1975,7 +1975,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         ServerPlayerEntity player = source.getPlayerOrThrow();
         PlaybackSession session = PLAYBACK_SESSIONS.get(player.getUuid());
         if (session == null || !session.formal || !Double.isFinite(songSeconds)) return 0;
-        session.resync(songSeconds);
+        session.resync(player, songSeconds);
         return 1;
     }
     private static int togglePlayback(net.minecraft.server.command.ServerCommandSource source) throws com.mojang.brigadier.exceptions.CommandSyntaxException { return togglePlayback(source, -1, "formal"); }
@@ -2759,7 +2759,7 @@ private static void showSceneBoundary(MinecraftServer server) {
 
         private boolean playedTapSoundThisTick;
         private boolean playedLookSoundThisTick;
-        private void resync(double songSeconds) {
+        private void resync(ServerPlayerEntity player, double songSeconds) {
             long now = System.nanoTime();
             if (now - lastResyncNanos < 100_000_000L) return;
             double current = startSeconds + Math.max(0.0, (now - startNanos) / 1_000_000_000.0) * rate;
@@ -2775,7 +2775,39 @@ private static void showSceneBoundary(MinecraftServer server) {
             startNanos = now;
             nextNoteIndex = 0;
             while (nextNoteIndex < notes.size() && noteTimes.getOrDefault(notes.get(nextNoteIndex).id, Double.POSITIVE_INFINITY) < corrected) nextNoteIndex++;
-            while (nextEffectIndex < effects.size() && effectSeconds(effects.get(nextEffectIndex)) < corrected) nextEffectIndex++;
+            rebuildPersistentEffectState(player, corrected);
+            nextEffectIndex = 0;
+            while (nextEffectIndex < effects.size() && effectSeconds(effects.get(nextEffectIndex)) <= corrected) nextEffectIndex++;
+        }
+        private void rebuildPersistentEffectState(ServerPlayerEntity player, double targetSeconds) {
+            resetClientTime(player);
+            clearTextDisplays();
+            clearGlowTeam();
+            hiddenNoteTypes.clear();
+            hiddenTracks.clear();
+            hiddenAllNotes = false;
+            observerGlowColor = Formatting.WHITE;
+            player.clearStatusEffects();
+            for (net.minecraft.entity.effect.StatusEffectInstance effect : originalStatusEffects) {
+                player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(effect));
+            }
+            int latestTimeEffect = -1;
+            for (int index = 0; index < effects.size(); index++) {
+                JsonObject effect = effects.get(index);
+                double effectTime = effectSeconds(effect);
+                if (!Double.isFinite(effectTime) || effectTime > targetSeconds) break;
+                String type = effectType(effect);
+                if (type.equals("TIME")) {
+                    latestTimeEffect = index;
+                    continue;
+                }
+                if (type.equals("TITLE") || type.equals("MESSAGE") || type.equals("FIREWORK")) continue;
+                if (type.equals("EFFECT")) applyPotionProxy(player, effect, targetSeconds);
+                else playTrackEffectSafely(this, player, effect);
+            }
+            if (latestTimeEffect >= 0) playTrackEffectSafely(this, player, effects.get(latestTimeEffect));
+            applyVisualState();
+            updateTextDisplays(targetSeconds);
         }
         private PlaybackSession(ServerWorld world, double returnX, double returnY, double returnZ, float returnYaw, float returnPitch, ChartManifest chart, double startSeconds, long startNanos, String mode, double rate, java.util.List<net.minecraft.entity.effect.StatusEffectInstance> originalStatusEffects) {
             this.world = world;
@@ -2900,6 +2932,15 @@ private static void showSceneBoundary(MinecraftServer server) {
             glowTeams.clear();
         }
         private void applyPotionProxy(ServerPlayerEntity player, JsonObject effect) {
+            applyPotionProxy(player, effect, potionDurationTicks(effect, rate));
+        }
+        private void applyPotionProxy(ServerPlayerEntity player, JsonObject effect, double targetSeconds) {
+            double elapsedSeconds = Math.max(0.0, targetSeconds - effectSeconds(effect));
+            int duration = potionDurationTicks(effect, rate) - (int) Math.ceil(elapsedSeconds * 20.0);
+            if (duration <= 0) return;
+            applyPotionProxy(player, effect, duration);
+        }
+        private void applyPotionProxy(ServerPlayerEntity player, JsonObject effect, int duration) {
             String type = effectString(effect, "effectId", effectString(effect, "type", effectString(effect, "effect", effectString(effect, "potion", "UNKNOWN"))));
             if (type.isBlank() || type.equalsIgnoreCase("UNKNOWN")) {
                 LOGGER.warn("Skipping RhythMC potion effect without a type: {}", effect);
@@ -2913,11 +2954,10 @@ private static void showSceneBoundary(MinecraftServer server) {
                     return;
                 }
                 int amplifier = Math.max(0, Math.min(255, effectInt(effect, "amplifier", effectInt(effect, "level", 0))));
-                int duration = potionDurationTicks(effect, rate);
                 player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(entry, duration, amplifier,
                         effectBoolean(effect, "ambient", false), false, true));
             } catch (RuntimeException exception) {
-                LOGGER.warn("Failed to apply RhythMC potion effect '{}'", type, exception);
+                LOGGER.warn("Failed to apply RhythMC potion effect '{}': {}", type, exception);
             }
         }
         private void clearPotionEffect(ServerPlayerEntity player, JsonObject effect) {
