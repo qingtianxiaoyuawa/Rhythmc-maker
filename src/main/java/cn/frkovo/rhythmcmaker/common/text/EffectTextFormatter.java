@@ -29,7 +29,7 @@ public final class EffectTextFormatter {
                 segment.append(character);
                 continue;
             }
-            Formatting formatting = Formatting.byCode(value.charAt(index + 1));
+            Formatting formatting = Formatting.byCode(Character.toLowerCase(value.charAt(index + 1)));
             if (formatting == null) {
                 segment.append(character);
                 continue;
@@ -53,7 +53,7 @@ public final class EffectTextFormatter {
         for (int index = 0; index < value.length(); index++) {
             char character = value.charAt(index);
             if (character == '\u00A7' && index + 1 < value.length()
-                    && Formatting.byCode(value.charAt(index + 1)) != null) {
+                    && Formatting.byCode(Character.toLowerCase(value.charAt(index + 1))) != null) {
                 result.append('&');
             } else {
                 result.append(character);
@@ -73,14 +73,14 @@ public final class EffectTextFormatter {
                 text.append(character);
                 continue;
             }
-            Formatting formatting = Formatting.byCode(value.charAt(index + 1));
+            Formatting formatting = Formatting.byCode(Character.toLowerCase(value.charAt(index + 1)));
             if (formatting == null) {
                 text.append(character);
                 continue;
             }
             if (!text.isEmpty()) {
                 segments.add(new PreviewSegment(text.toString(), style.getColor() == null ? fallbackColor : style.getColor().getRgb(),
-                        style.isBold(), style.isItalic(), style.isObfuscated()));
+                        style.isBold(), style.isItalic(), style.isObfuscated(), style.isStrikethrough(), style.isUnderlined()));
                 text.setLength(0);
             }
             if (formatting == Formatting.RESET) style = Style.EMPTY.withColor(fallbackColor);
@@ -90,11 +90,11 @@ public final class EffectTextFormatter {
         }
         if (!text.isEmpty()) {
             segments.add(new PreviewSegment(text.toString(), style.getColor() == null ? fallbackColor : style.getColor().getRgb(),
-                    style.isBold(), style.isItalic(), style.isObfuscated()));
+                    style.isBold(), style.isItalic(), style.isObfuscated(), style.isStrikethrough(), style.isUnderlined()));
         }
         return List.copyOf(segments);
     }
 
-    public record PreviewSegment(String text, int color, boolean bold, boolean italic, boolean obfuscated) {
+    public record PreviewSegment(String text, int color, boolean bold, boolean italic, boolean obfuscated, boolean strikethrough, boolean underlined) {
     }
 }

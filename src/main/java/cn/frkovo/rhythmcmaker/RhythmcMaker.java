@@ -172,7 +172,7 @@ public final class RhythmcMaker implements ModInitializer {
     private static final int SCENE_EDIT_MAX_Z = 63;
     private static final int SCENE_EDIT_MIN_Y = PLAYBACK_PLATFORM_Y - SCENE_SIZE / 2;
     private static final int SCENE_EDIT_MAX_Y = SCENE_EDIT_MIN_Y + SCENE_SIZE - 1;
-    private static final int PLAYBACK_FRAME_Z = (int) PlaybackCoordinates.CHART_ORIGIN_Z;
+    private static final double PLAYBACK_FRAME_Z = PlaybackCoordinates.CHART_ORIGIN_Z;
     private static final double PLAYBACK_APPROACH_DISTANCE = 25.0;
     private static final int PLAYBACK_MAX_PRELOADS_PER_TICK = 64;
     private static final int PLAYBACK_MAX_EFFECTS_PER_TICK = 256;
@@ -270,6 +270,7 @@ public final class RhythmcMaker implements ModInitializer {
             processEditorNoteDisplaySweepTasks(server);
             processScrollJudgementSessions(server);
             processPlaybackSessions(server);
+            for (ServerWorld world : server.getWorlds()) if (isEditorWorld(world)) ensurePlaybackChunksLoaded(world);
             long tick = server.getTicks();
             if (tick % SCENE_BORDER_INTERVAL_TICKS == 0) showSceneBoundary(server);
             if (tick - lastAutosaveTick < ticksForSeconds(config.autosaveIntervalSeconds)) return;
@@ -1932,11 +1933,11 @@ private static void showSceneBoundary(MinecraftServer server) {
             showParticle(world, player, PLAYBACK_FRAME_GLOW, x, y, PLAYBACK_FRAME_Z);
             showParticle(world, player, PLAYBACK_FRAME_GLOW, x, y, PLAYBACK_FRAME_Z + 3);
         }
-        for (int y = 66; y <= 68; y++) for (int z = PLAYBACK_FRAME_Z; z <= PLAYBACK_FRAME_Z + 3; z++) {
+        for (int y = 66; y <= 68; y++) for (double z = PLAYBACK_FRAME_Z; z <= PLAYBACK_FRAME_Z + 3.0; z += 1.0) {
             showParticle(world, player, PLAYBACK_FRAME_GLOW, left, y, z);
             showParticle(world, player, PLAYBACK_FRAME_GLOW, right, y, z);
         }
-        for (int x = left; x <= right; x++) for (int z = PLAYBACK_FRAME_Z; z <= PLAYBACK_FRAME_Z + 3; z++) {
+        for (int x = left; x <= right; x++) for (double z = PLAYBACK_FRAME_Z; z <= PLAYBACK_FRAME_Z + 3.0; z += 1.0) {
             showParticle(world, player, PLAYBACK_FRAME_GLOW, x, 66, z);
             showParticle(world, player, PLAYBACK_FRAME_GLOW, x, 68, z);
         }
@@ -1957,10 +1958,15 @@ private static void showSceneBoundary(MinecraftServer server) {
         showParticle(world, player, effect, x, y, z, 128.0);
     }
     private static void showParticle(ServerWorld world, ServerPlayerEntity player, DustParticleEffect effect, int x, int y, int z) {
+        showParticle(world, player, effect, (double) x + 0.5, (double) y + 0.5, (double) z + 0.5, 64.0);
+    }
+    private static void showParticle(ServerWorld world, ServerPlayerEntity player, DustParticleEffect effect, double x, double y, double z) {
         showParticle(world, player, effect, x, y, z, 64.0);
     }
     private static void showParticle(ServerWorld world, ServerPlayerEntity player, DustParticleEffect effect, int x, int y, int z, double maximumDistance) {
-        double px = x + 0.5, py = y + 0.5, pz = z + 0.5;
+        showParticle(world, player, effect, (double) x + 0.5, (double) y + 0.5, (double) z + 0.5, maximumDistance);
+    }
+    private static void showParticle(ServerWorld world, ServerPlayerEntity player, DustParticleEffect effect, double px, double py, double pz, double maximumDistance) {
         double dx = player.getX() - px, dy = player.getY() - py, dz = player.getZ() - pz;
         if (dx * dx + dy * dy + dz * dz > maximumDistance * maximumDistance) return;
         world.spawnParticles(player, effect, false, false, px, py, pz, 1, 0.0, 0.0, 0.0, 0.0);
@@ -1992,6 +1998,8 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
         ChartManifest chart = loadActiveChart(player, source.getServer());
         if (chart == null || !(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world) || chart.bpm <= 0) return 0;
+        cleanupPlaybackDisplayEntities(world, player.getUuid(), chart.id);
+        ensurePlaybackChunksLoaded(world);
         int startChunk = requestedStartChunk > 0 ? Math.max(1, Math.min(Math.max(1, chart.chunkCount), requestedStartChunk)) : selectedStartChunk(player, chart);
         double startBeat = PlaybackCoordinates.beatAtChunkStart(startChunk);
         String mode = "scroll".equalsIgnoreCase(requestedMode) ? "scroll" : "formal";
@@ -2065,6 +2073,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         double targetX = laneWallRightX(chart) + 0.5;
         double targetY = 72.0;
         double targetZ = PlaybackCoordinates.editorWorldZAtBeat(chart, beat);
+        ensurePlaybackChunkLoaded(world, new ChunkPos(BlockPos.ofFloored(targetX, targetY, targetZ)));
         if (state.matchesPreviewPosition(player, targetX, targetY, targetZ)) return;
         if (player.getGameMode() != GameMode.SPECTATOR) player.changeGameMode(GameMode.SPECTATOR);
         player.teleport(world, targetX, targetY, targetZ, Set.of(), -90.0f, 90.0f, false);
@@ -2097,6 +2106,31 @@ private static void showSceneBoundary(MinecraftServer server) {
         if (display == null || !display.getCommandTags().stream().anyMatch(RhythmcMaker::isEffectPreviewDisplay)) return;
         if (display.getViewRange() != EFFECT_PREVIEW_DISPLAY_VIEW_RANGE) display.setViewRange(EFFECT_PREVIEW_DISPLAY_VIEW_RANGE);
     }
+    private static void ensurePlaybackChunksLoaded(ServerWorld world) {
+        int centerChunkX = Math.floorDiv(PLAYBACK_PLATFORM_X, 16);
+        int centerChunkZ = Math.floorDiv(PLAYBACK_PLATFORM_Z, 16);
+        for (int chunkX = centerChunkX - 4; chunkX <= centerChunkX + 4; chunkX++) {
+            for (int chunkZ = centerChunkZ - 4; chunkZ <= centerChunkZ + 4; chunkZ++) {
+                ensurePlaybackChunkLoaded(world, new ChunkPos(chunkX, chunkZ));
+            }
+        }
+    }
+    private static void ensurePlaybackChunkLoaded(ServerWorld world, ChunkPos chunkPos) {
+        BlockPos probe = new BlockPos(chunkPos.getStartX(), PLAYBACK_PLATFORM_Y, chunkPos.getStartZ());
+        if (world.isChunkLoaded(probe)) return;
+        world.setChunkForced(chunkPos.x, chunkPos.z, true);
+        world.getChunk(chunkPos.x, chunkPos.z);
+    }
+    private static void cleanupPlaybackDisplayEntities(ServerWorld world, UUID playerId, String chartId) {
+        String playerTag = "rhythmc_preview:" + playerId;
+        String effectTag = "rhythmc_effect:" + chartId;
+        for (DisplayEntity.BlockDisplayEntity display : world.getEntitiesByType(EntityType.BLOCK_DISPLAY, entity -> entity.getCommandTags().contains(playerTag))) {
+            display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+        }
+        for (DisplayEntity.TextDisplayEntity display : world.getEntitiesByType(EntityType.TEXT_DISPLAY, entity -> entity.getCommandTags().contains(effectTag))) {
+            display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+        }
+    }
     private static boolean isEffectPreviewDisplay(String tag) {
         return tag.equals("rhythmc_preview")
                 || tag.startsWith("rhythmc_preview:")
@@ -2107,6 +2141,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
             PlaybackSession session = PLAYBACK_SESSIONS.get(player.getUuid());
             if (session == null) continue;
+            ensurePlaybackChunksLoaded(session.world);
             try {
             if (System.nanoTime() < session.startNanos) continue;
             double songTime = session.startSeconds + (System.nanoTime() - session.startNanos) / 1_000_000_000.0 * session.rate;
@@ -2528,6 +2563,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         restoreEffectPreviewPlayer(player);
         ScrollJudgementSession scrollSession = SCROLL_JUDGEMENT_SESSIONS.remove(player.getUuid());
         if (scrollSession != null) {
+            cleanupPlaybackDisplayEntities(scrollSession.world, player.getUuid(), scrollSession.chart.id);
             if (scrollSession.effectSession != null) {
                 scrollSession.effectSession.resetClientTime(player);
                 scrollSession.effectSession.clearTextDisplays();
@@ -2537,6 +2573,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
         PlaybackSession session = PLAYBACK_SESSIONS.remove(player.getUuid());
         if (session == null) return;
+        cleanupPlaybackDisplayEntities(session.world, player.getUuid(), session.chart.id);
         try {
             session.resetClientTime(player);
             session.clearGlowTeam();

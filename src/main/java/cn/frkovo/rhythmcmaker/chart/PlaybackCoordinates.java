@@ -2,7 +2,7 @@ package cn.frkovo.rhythmcmaker.chart;
 
 public final class PlaybackCoordinates {
     private static final double PLAYBACK_FLOW_MULTIPLIER = 5.0;
-    public static final double CHART_ORIGIN_Z = -3.0;
+    public static final double CHART_ORIGIN_Z = -2.5;
     private PlaybackCoordinates() {}
 
     public static TrackPlayback.Prepared prepareDefaultTrack(ChartManifest chart) {

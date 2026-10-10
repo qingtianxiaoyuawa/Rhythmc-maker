@@ -692,6 +692,8 @@ public final class EffectParameterEditor {
                 String text = segment.obfuscated() ? obfuscate(segment.text()) : segment.text();
                 if (segment.bold()) text = "▌" + text;
                 if (segment.italic()) text = "╱" + text;
+                if (segment.strikethrough()) text = decoratePreviewText(text, '\u0336');
+                if (segment.underlined()) text = decoratePreviewText(text, '\u0332');
                 ImGui.textColored(colour, text);
             }
             ImGui.newLine();
@@ -712,6 +714,15 @@ public final class EffectParameterEditor {
         for (int index = 0; index < value.length(); index++) {
             char character = value.charAt(index);
             result.append(Character.isWhitespace(character) ? character : '█');
+        }
+        return result.toString();
+    }
+    private String decoratePreviewText(String value, char decoration) {
+        StringBuilder result = new StringBuilder(value.length() * 2);
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            result.append(character);
+            if (!Character.isWhitespace(character)) result.append(decoration);
         }
         return result.toString();
     }
