@@ -172,7 +172,7 @@ public final class RhythmcMaker implements ModInitializer {
     private static final int SCENE_EDIT_MAX_Z = 63;
     private static final int SCENE_EDIT_MIN_Y = PLAYBACK_PLATFORM_Y - SCENE_SIZE / 2;
     private static final int SCENE_EDIT_MAX_Y = SCENE_EDIT_MIN_Y + SCENE_SIZE - 1;
-    private static final int PLAYBACK_FRAME_Z = -2;
+    private static final int PLAYBACK_FRAME_Z = (int) PlaybackCoordinates.CHART_ORIGIN_Z;
     private static final double PLAYBACK_APPROACH_DISTANCE = 25.0;
     private static final int PLAYBACK_MAX_PRELOADS_PER_TICK = 64;
     private static final int PLAYBACK_MAX_EFFECTS_PER_TICK = 256;
@@ -1929,14 +1929,14 @@ private static void showSceneBoundary(MinecraftServer server) {
         int left = centerX - laneHalfWidth;
         int right = centerX + laneHalfWidth;
         for (int x = left; x <= right; x++) for (int y = 66; y <= 68; y++) {
-            showParticle(world, player, PLAYBACK_FRAME_GLOW, x, y, -2);
-            showParticle(world, player, PLAYBACK_FRAME_GLOW, x, y, 1);
+            showParticle(world, player, PLAYBACK_FRAME_GLOW, x, y, PLAYBACK_FRAME_Z);
+            showParticle(world, player, PLAYBACK_FRAME_GLOW, x, y, PLAYBACK_FRAME_Z + 3);
         }
-        for (int y = 66; y <= 68; y++) for (int z = -2; z <= 1; z++) {
+        for (int y = 66; y <= 68; y++) for (int z = PLAYBACK_FRAME_Z; z <= PLAYBACK_FRAME_Z + 3; z++) {
             showParticle(world, player, PLAYBACK_FRAME_GLOW, left, y, z);
             showParticle(world, player, PLAYBACK_FRAME_GLOW, right, y, z);
         }
-        for (int x = left; x <= right; x++) for (int z = -2; z <= 1; z++) {
+        for (int x = left; x <= right; x++) for (int z = PLAYBACK_FRAME_Z; z <= PLAYBACK_FRAME_Z + 3; z++) {
             showParticle(world, player, PLAYBACK_FRAME_GLOW, x, 66, z);
             showParticle(world, player, PLAYBACK_FRAME_GLOW, x, 68, z);
         }
@@ -2774,8 +2774,8 @@ private static void showSceneBoundary(MinecraftServer server) {
             startSeconds = corrected;
             startNanos = now;
             nextNoteIndex = 0;
-            nextEffectIndex = 0;
             while (nextNoteIndex < notes.size() && noteTimes.getOrDefault(notes.get(nextNoteIndex).id, Double.POSITIVE_INFINITY) < corrected) nextNoteIndex++;
+            while (nextEffectIndex < effects.size() && effectSeconds(effects.get(nextEffectIndex)) < corrected) nextEffectIndex++;
         }
         private PlaybackSession(ServerWorld world, double returnX, double returnY, double returnZ, float returnYaw, float returnPitch, ChartManifest chart, double startSeconds, long startNanos, String mode, double rate, java.util.List<net.minecraft.entity.effect.StatusEffectInstance> originalStatusEffects) {
             this.world = world;
