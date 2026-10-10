@@ -117,6 +117,7 @@ public final class RhythmcMaker implements ModInitializer {
     private static final Set<UUID> DIMENSION_TRAVEL_READY = ConcurrentHashMap.newKeySet();
     private static final Map<UUID, Integer> SELECTED_START_CHUNKS = new ConcurrentHashMap<>();
     private static final Map<UUID, TrackSnapUndo> TRACK_SNAP_UNDOS = new ConcurrentHashMap<>();
+    private static final Map<UUID, TrackSnapTask> TRACK_SNAP_TASKS = new ConcurrentHashMap<>();
     private static final Map<UUID, PlaybackSession> PLAYBACK_SESSIONS = new ConcurrentHashMap<>();
     private static final Map<UUID, ScrollJudgementSession> SCROLL_JUDGEMENT_SESSIONS = new ConcurrentHashMap<>();
     /** Original player transform for the effect-editor preview. The player entity follows the
@@ -269,6 +270,7 @@ public final class RhythmcMaker implements ModInitializer {
             processEditorNoteRefreshTasks(server);
             processNoteDisplayChunkCleanupTasks(server);
             processEditorNoteDisplaySweepTasks(server);
+            processTrackSnapTasks(server);
             processScrollJudgementSessions(server);
             processPlaybackSessions(server);
             for (ServerWorld world : server.getWorlds()) if (isEditorWorld(world)) ensurePlaybackChunksLoaded(world);
@@ -349,6 +351,8 @@ public final class RhythmcMaker implements ModInitializer {
             queueSceneCaptureOnDisconnect(server, handler.getPlayer());
             ACTIVE_SCENE_EDITORS.remove(handler.getPlayer().getUuid());
             ACTIVE_SCENE_CHARTS.remove(handler.getPlayer().getUuid());
+            TRACK_SNAP_TASKS.remove(handler.getPlayer().getUuid());
+            SCENE_OPERATION_STATUS.remove(handler.getPlayer().getUuid());
             DIMENSION_TRAVEL_READY.remove(handler.getPlayer().getUuid());
             stopPlayback(server, handler.getPlayer(), false);
             saveActiveChart(server, handler.getPlayer());
@@ -826,47 +830,75 @@ public final class RhythmcMaker implements ModInitializer {
         if (chart == null || !(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world)) return 0;
         if (hasPlaybackSession(player.getUuid()) || isSceneOperationBusy(player.getUuid()) || rejectEditorTrackAdjustment(player)) return 0;
         java.util.List<ChartManifest.Note> original = copyNotes(chart.notes);
-        java.util.List<ChartManifest.Note> retained = new java.util.ArrayList<>();
-        java.util.List<TrackSnapChangedNote> changed = new java.util.ArrayList<>();
-        java.util.List<TrackSnapRemovedNote> removed = new java.util.ArrayList<>();
-        Set<TrackSnapKey> retainedKeys = new java.util.HashSet<>();
-        for (int index = 0; index < chart.notes.size(); index++) {
-            ChartManifest.Note note = chart.notes.get(index);
-            if (note == null) continue;
-            boolean fractional = hasFraction(note.z);
-            double targetZ = fractional ? Math.ceil(note.z - 0.5) : note.z;
-            TrackSnapKey key = new TrackSnapKey(note.x, note.y, targetZ, note.type);
-            if (retainedKeys.contains(key)) {
-                removed.add(new TrackSnapRemovedNote(index, copyNote(note)));
-                continue;
-            }
-            if (fractional) {
-                changed.add(new TrackSnapChangedNote(note.id, note.z, note.beat, note.time));
-                note.z = targetZ;
-                note.beat = PlaybackCoordinates.editorBeatAtWorldZ(chart, targetZ);
-                note.time = ChartTiming.beatToSeconds(chart, note.beat);
-            }
-            retained.add(note);
-            retainedKeys.add(key);
-        }
-        if (changed.isEmpty() && removed.isEmpty()) {
+        if (original.isEmpty()) {
             player.sendMessage(Text.literal("没有需要吸附的音符"), true);
             return 1;
         }
-        chart.notes = retained;
-        try {
-            saveChartSynchronously(source.getServer(), chart);
-            TRACK_SNAP_UNDOS.put(player.getUuid(), new TrackSnapUndo(chart.id, changed, removed));
-            refreshNoteDisplays(world, chart);
-            player.sendMessage(Text.literal("轨道吸附完成：修改 " + changed.size() + " 个，删除重复 " + removed.size() + " 个，剩余 " + retained.size() + " 个"), true);
-            return 1;
-        } catch (IOException exception) {
-            chart.notes = original;
-            player.sendMessage(Text.literal("轨道吸附保存失败，已完全回滚"), true);
-            LOGGER.warn("Failed to save fractional note snap for chart {}", chart.id, exception);
-            return 0;
+        TrackSnapTask task = new TrackSnapTask(player, chart, world, original);
+        TRACK_SNAP_TASKS.put(player.getUuid(), task);
+        beginSceneOperation(player.getUuid(), "正在吸附中：0%（0/" + task.total + "）");
+        player.sendMessage(Text.literal("正在吸附中"), true);
+        return 1;
+    }
+
+    private static boolean isTrackSnapBusy(UUID playerId) {
+        return playerId != null && TRACK_SNAP_TASKS.containsKey(playerId);
+    }
+    private static void processTrackSnapTasks(MinecraftServer server) {
+        long tick = server.getTicks();
+        for (var entry : TRACK_SNAP_TASKS.entrySet()) {
+            UUID playerId = entry.getKey();
+            TrackSnapTask task = entry.getValue();
+            int budget = 32;
+            while (budget-- > 0 && task.cursor < task.total) {
+                ChartManifest.Note note = task.original.get(task.cursor);
+                int index = task.cursor++;
+                if (note == null) continue;
+                boolean fractional = hasFraction(note.z);
+                double targetZ = fractional ? Math.ceil(note.z - 0.5) : note.z;
+                TrackSnapKey key = new TrackSnapKey(note.x, note.y, targetZ, note.type);
+                if (task.retainedKeys.contains(key)) {
+                    task.removed.add(new TrackSnapRemovedNote(index, copyNote(note)));
+                    continue;
+                }
+                ChartManifest.Note retained = copyNote(note);
+                if (fractional) {
+                    task.changed.add(new TrackSnapChangedNote(retained.id, retained.z, retained.beat, retained.time));
+                    retained.z = targetZ;
+                    retained.beat = PlaybackCoordinates.editorBeatAtWorldZ(task.chart, targetZ);
+                    retained.time = ChartTiming.beatToSeconds(task.chart, retained.beat);
+                }
+                task.retained.add(retained);
+                task.retainedKeys.add(key);
+            }
+            if (task.lastProgressTick < 0 || tick - task.lastProgressTick >= 20L) {
+                task.lastProgressTick = tick;
+                int percent = task.total == 0 ? 100 : Math.min(99, task.cursor * 100 / task.total);
+                updateSceneOperation(playerId, "正在吸附中：" + percent + "%（" + task.cursor + "/" + task.total + "）");
+            }
+            if (task.cursor >= task.total) finishTrackSnapTask(server, playerId, task);
         }
     }
+
+    private static void finishTrackSnapTask(MinecraftServer server, UUID playerId, TrackSnapTask task) {
+        if (!TRACK_SNAP_TASKS.remove(playerId, task)) return;
+        try {
+            if (task.changed.isEmpty() && task.removed.isEmpty()) {
+                completeSceneOperation(playerId, "没有需要吸附的音符");
+                return;
+            }
+            task.chart.notes = task.retained;
+            saveChartSynchronously(server, task.chart);
+            TRACK_SNAP_UNDOS.put(playerId, new TrackSnapUndo(task.chart.id, task.changed, task.removed));
+            refreshNoteDisplays(task.world, task.chart);
+            completeSceneOperation(playerId, "轨道吸附完成：修改 " + task.changed.size() + " 个，删除重复 " + task.removed.size() + " 个，剩余 " + task.retained.size() + " 个");
+        } catch (IOException | RuntimeException exception) {
+            task.chart.notes = task.original;
+            completeSceneOperation(playerId, "轨道吸附失败，已完全回滚");
+            LOGGER.warn("Failed to persist fractional note snap for chart {}", task.chart.id, exception);
+        }
+    }
+
     private static int undoFractionalNoteSnap(net.minecraft.server.command.ServerCommandSource source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayerEntity player = source.getPlayerOrThrow();
         TrackSnapUndo undo = TRACK_SNAP_UNDOS.get(player.getUuid());
@@ -1581,6 +1613,9 @@ public final class RhythmcMaker implements ModInitializer {
     private static void beginSceneOperation(UUID playerId, String status) {
         SCENE_OPERATION_NOTICES.remove(playerId);
         SCENE_OPERATION_STATUS.put(playerId, status);
+    }
+    private static void updateSceneOperation(UUID playerId, String status) {
+        if (playerId != null && SCENE_OPERATION_STATUS.containsKey(playerId)) SCENE_OPERATION_STATUS.put(playerId, status);
     }
 
     private static void completeSceneOperation(UUID playerId, String message) {
@@ -4272,6 +4307,27 @@ private static void showSceneBoundary(MinecraftServer server) {
     private record TrackSnapChangedNote(String id, double z, double beat, double time) {}
     private record TrackSnapRemovedNote(int index, ChartManifest.Note note) {}
     private record TrackSnapUndo(String chartId, java.util.List<TrackSnapChangedNote> changed, java.util.List<TrackSnapRemovedNote> removed) {}
+    private static final class TrackSnapTask {
+        private final UUID playerId;
+        private final ChartManifest chart;
+        private final ServerWorld world;
+        private final java.util.List<ChartManifest.Note> original;
+        private final java.util.List<ChartManifest.Note> retained = new java.util.ArrayList<>();
+        private final java.util.List<TrackSnapChangedNote> changed = new java.util.ArrayList<>();
+        private final java.util.List<TrackSnapRemovedNote> removed = new java.util.ArrayList<>();
+        private final Set<TrackSnapKey> retainedKeys = new java.util.HashSet<>();
+        private final int total;
+        private int cursor;
+        private long lastProgressTick = -1L;
+        private TrackSnapTask(ServerPlayerEntity player, ChartManifest chart, ServerWorld world, java.util.List<ChartManifest.Note> original) {
+            this.playerId = player.getUuid();
+            this.chart = chart;
+            this.world = world;
+            this.original = original;
+            this.total = original.size();
+        }
+    }
+
 
     private static final class MenuItem extends Item {
         private final Text name;

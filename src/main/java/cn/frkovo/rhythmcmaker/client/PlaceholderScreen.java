@@ -154,10 +154,7 @@ final class PlaceholderScreen extends RhythmcScreen {
             page.child(UIComponents.button(Text.literal("确认吸附"), button -> {
                 if (chart == null || confirmedSummary.fractionalCount == 0) return;
                 RhythmcMakerClient.sendChartCommand("rhythmc_track_snap");
-                trackSnapUndoAvailable = true;
-                trackSnapChartId = chart.id;
-                lastTrackSnapSummary = new TrackSnapSummary(0, confirmedSummary.duplicateCount, confirmedSummary.remainingCount);
-                MinecraftClient.getInstance().setScreen(new PlaceholderScreen("轨道吸附", "track-snap"));
+                MinecraftClient.getInstance().setScreen(null);
             }).horizontalSizing(Sizing.fill()));
             page.child(UIComponents.button(Text.literal("取消"), button -> MinecraftClient.getInstance().setScreen(new PlaceholderScreen("轨道吸附", "track-snap"))).horizontalSizing(Sizing.fill()));
         } else if (section.equals("quick-teleport-select")) {
@@ -278,6 +275,12 @@ final class PlaceholderScreen extends RhythmcScreen {
 
     private record TrackSnapKey(double x, double y, double z, int type) {}
     private record TrackSnapSummary(int fractionalCount, int duplicateCount, int remainingCount) {}
+
+    static void setTrackSnapUndoAvailable(java.util.UUID playerId, cn.frkovo.rhythmcmaker.chart.ChartManifest chart) {
+        if (playerId == null || chart == null) return;
+        trackSnapUndoAvailable = true;
+        trackSnapChartId = chart.id;
+    }
 
     @Override
     public void close() {

@@ -165,11 +165,16 @@ public final class RhythmcMakerClient implements ClientModInitializer {
                 if (playbackAudioRequested || audioProcess != null) finishPlayback(client, true);
             }
             String operationNotice = ClientSceneAccess.consumeOperationNotice();
-            if (operationNotice != null) ClientSceneAccess.status(operationNotice);
+            if (operationNotice != null) {
+                ClientSceneAccess.status(operationNotice);
+                if (operationNotice.startsWith("轨道吸附完成：") && client.player != null) {
+                    PlaceholderScreen.setTrackSnapUndoAvailable(client.player.getUuid(), ClientChartAccess.activeChart());
+                }
+            }
             if (ClientSceneAccess.operationBusy() && client.currentScreen != null) client.setScreen(null);
             if (ClientSceneAccess.operationBusy()) {
                 String operationStatus = ClientSceneAccess.operationStatus();
-                if (operationStatus != null && client.player != null && client.world != null && client.world.getTime() % 10L == 0L) client.player.sendMessage(Text.literal(operationStatus), true);
+                if (operationStatus != null && client.player != null && client.world != null && client.world.getTime() % 20L == 0L) client.player.sendMessage(Text.literal(operationStatus), true);
             }
             updateEditorSidebarSnapshot(client);
             while (settingsKey.wasPressed()) client.setScreen(new PlaceholderScreen("设置"));
