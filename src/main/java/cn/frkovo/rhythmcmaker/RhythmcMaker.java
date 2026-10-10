@@ -3840,11 +3840,6 @@ private static void showSceneBoundary(MinecraftServer server) {
                     CHART_CACHE_BY_WORLD.put(world.getRegistryKey(), chart);
                     markSelectedStartChunk(world, chart, chart.selectedStartChunk);
                     refreshNoteDisplays(world, chart, task.oldLength, task.previousLaneCount);
-                    ServerPlayerEntity player = server.getPlayerManager().getPlayer(task.playerId);
-                    if (player != null && config.preventChunkDisplacement && !hasPlaybackSession(task.playerId)) {
-                        double targetZ = PlaybackCoordinates.editorWorldZAtBeat(chart, task.previousChunk - 1.0);
-                        player.teleport(world, player.getX(), player.getY(), targetZ, Set.of(), player.getYaw(), player.getPitch(), false);
-                    }
                 }
                 task.displaysScheduled = true;
                 continue;

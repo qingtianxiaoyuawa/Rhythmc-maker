@@ -175,14 +175,14 @@ public final class EffectEditorImGuiView {
                     ? saved.denominator : inferDenominator(eventBeat(event));
             layoutModel.addEvent(eventType(event), eventBeat(event), denominator, saved == null ? null : saved.trackId);
         }
-        this.selectedIndex = workingEffects.isEmpty() ? -1 : 0;
+        this.selectedIndex = -1;
         if (chart != null && chart.effectEditorLayout != null && chart.effectEditorLayout.keyframes != null) {
             for (EffectEditorLayout.KeyframePosition position : chart.effectEditorLayout.keyframes) {
                 keyframePositions.add(new EffectEditorLayout.KeyframePosition(position.eventIndex,
                         position.channelIndex, position.keyframeIndex, position.beat, position.denominator));
             }
         }
-        this.playhead[0] = (float) selectedBeat();
+        this.playhead[0] = 0.0f;
         syncBuffers();
     }
 
@@ -878,7 +878,6 @@ public final class EffectEditorImGuiView {
         drawList.addRectFilled(rangeLeft, footerTop + 4.0f, rangeRight, footerTop + 16.0f, 0xFF61A7D8);
         drawList.addText(left + 8.0f, footerTop + 4.0f, 0xFF9CA9B8,
                 String.format(Locale.ROOT, "%.0f%%", (1.0 / zoomSpan) * 100.0));
-        drawTimelineScrollBar(drawList, left + 1.0f, rowsTop, rowsBottom, visibleRowCapacity);
         drawList.popClipRect();
 
         handleTimelineInteraction(left, top, width, height, timelineLeft, timelineWidth, footerTop,
@@ -1272,7 +1271,7 @@ public final class EffectEditorImGuiView {
         boolean overTimeline = mouseX >= timelineBoundsLeft && mouseX <= timelineBoundsRight
                 && mouseY >= timelineBoundsTop && mouseY <= timelineBoundsBottom;
         if (!overTimeline && viewport.contains(mouseX, mouseY)) {
-            RhythmcMakerClient.adjustEffectEditorCameraHeight(wheel);
+            RhythmcMakerClient.adjustEffectEditorCameraHeight(-wheel);
             io.setMouseWheel(0.0f);
         }
     }
@@ -1309,17 +1308,6 @@ public final class EffectEditorImGuiView {
             if (timelineRowsHeight(offset, totalRows) <= timelineAvailableRowsHeight + 0.01f) maxOffset = offset;
         }
         return maxOffset;
-    }
-
-    private void drawTimelineScrollBar(ImDrawList drawList, float left, float top, float bottom, int visibleRows) {
-        float contentHeight = Math.max(1.0f, timelineRowsHeight(0, totalTimelineRows()));
-        float trackHeight = Math.max(1.0f, bottom - top);
-        float thumbHeight = Math.max(24.0f, trackHeight * Math.min(1.0f, timelineAvailableRowsHeight / contentHeight));
-        float travel = Math.max(0.0f, trackHeight - thumbHeight);
-        float progress = maxTimelineRowOffset() == 0 ? 0.0f : timelineRowOffset / (float) maxTimelineRowOffset();
-        float thumbTop = top + travel * progress;
-        drawList.addRectFilled(left, top, left + 8.0f, bottom, 0xFF202832, 3.0f);
-        drawList.addRectFilled(left, thumbTop, left + 8.0f, thumbTop + thumbHeight, 0xFF6B91B5, 3.0f);
     }
 
     private float timelineScrollBarTop(float top, float bottom) {

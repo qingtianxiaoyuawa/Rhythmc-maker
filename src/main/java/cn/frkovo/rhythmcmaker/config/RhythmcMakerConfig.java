@@ -24,7 +24,6 @@ public final class RhythmcMakerConfig {
     public double noteJudgementVolumeMultiplier = 1.0;
     public String playbackMode = "formal";
     public double playbackPitchPercent = 100.0;
-    public boolean preventChunkDisplacement = true;
     public String lobbySidebarContent = "可以在设置修改此处显示内容~";
 
     public RhythmcMakerConfig() {

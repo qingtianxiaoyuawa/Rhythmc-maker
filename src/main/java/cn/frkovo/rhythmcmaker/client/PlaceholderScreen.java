@@ -187,15 +187,6 @@ final class PlaceholderScreen extends RhythmcScreen {
             page.child(UIComponents.label(Text.literal("默认每Chunk分数")));
             TextBoxComponent divisions = UIComponents.textBox(Sizing.fill(), Integer.toString(config.defaultDivisionsPerChunk));
             numericOnly(divisions); page.child(divisions);
-            page.child(UIComponents.label(Text.literal("防每Chunk分数修改位移")));
-            page.child(UIComponents.button(Text.literal(config.preventChunkDisplacement ? "已开启" : "已关闭"), button -> {
-                config.preventChunkDisplacement = !config.preventChunkDisplacement;
-                try {
-                    ClientChartAccess.saveConfig(config);
-                } catch (Exception ignored) {
-                }
-                MinecraftClient.getInstance().setScreen(new PlaceholderScreen("制谱器设置", "editor"));
-            }).horizontalSizing(Sizing.fill()));
             page.child(UIComponents.button(Text.literal("保存设置"), button -> {
                 try {
                     config.autosaveIntervalSeconds = Double.parseDouble(autosave.getText());
