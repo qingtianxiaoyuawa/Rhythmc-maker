@@ -641,7 +641,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
 
     private static SidebarSnapshot editorSidebar(MinecraftClient client, ChartManifest chart) {
         int divisions = Math.max(1, Math.min(32, chart.divisionsPerChunk > 0 ? chart.divisionsPerChunk : chart.beatsPerMeasure));
-        double progress = Math.max(0.0, -client.player.getZ() - 3.0) / divisions;
+        double progress = Math.max(0.0, (-client.player.getZ() - 2.0) / divisions);
         int totalChunks = Math.max(1, chart.chunkCount);
         int currentChunk = Math.max(1, Math.min(totalChunks, (int) Math.floor(progress) + 1));
         double totalSeconds = chart.durationSeconds > 0.0 ? chart.durationSeconds : ChartTiming.beatToSeconds(chart, chart.totalBeats);

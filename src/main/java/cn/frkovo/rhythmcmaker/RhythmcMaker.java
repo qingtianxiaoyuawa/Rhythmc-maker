@@ -1643,7 +1643,7 @@ public final class RhythmcMaker implements ModInitializer {
     }
     private static void markSelectedStartChunk(ServerWorld world, ChartManifest chart, int selectedChunk) {
         clearSelectedStartChunkColumn(world, chart, selectedChunk);
-        int z = (int) Math.round(PlaybackCoordinates.editorWorldZAtBeat(chart, Math.max(0, selectedChunk - 1.0)));
+        int z = (int) Math.floor(PlaybackCoordinates.editorWorldZAtBeat(chart, Math.max(0, selectedChunk - 1.0)));
         int left = laneWallLeftX(chart);
         int right = laneWallRightX(chart);
         for (int x = left; x <= right; x++) for (int y = 64; y <= 68; y++) {
@@ -1654,7 +1654,7 @@ public final class RhythmcMaker implements ModInitializer {
         }
     }
     private static void clearSelectedStartChunkColumn(ServerWorld world, ChartManifest chart, int selectedChunk) {
-        int z = (int) Math.round(PlaybackCoordinates.editorWorldZAtBeat(chart, Math.max(0, selectedChunk - 1.0)));
+        int z = (int) Math.floor(PlaybackCoordinates.editorWorldZAtBeat(chart, Math.max(0, selectedChunk - 1.0)));
         for (int x = laneWallLeftX(chart); x <= laneWallRightX(chart); x++) for (int y = 64; y <= 68; y++) {
             BlockPos pos = new BlockPos(x, y, z);
             if (world.getBlockState(pos).isOf(Blocks.LIME_CONCRETE)) world.setBlockState(pos, Blocks.RED_CONCRETE.getDefaultState(), 3);
@@ -1663,7 +1663,7 @@ public final class RhythmcMaker implements ModInitializer {
     private static void clearSelectedStartChunkMarkers(ServerWorld world, ChartManifest chart) {
         int length = Math.max(Math.max(1, chart.trackLength), calculateTrackLength(chart));
         for (int slot = 0; slot <= length; slot++) {
-            int z = (int) Math.round(PlaybackCoordinates.editorWorldZAtBeat(chart, slot));
+            int z = (int) Math.floor(PlaybackCoordinates.editorWorldZAtBeat(chart, slot));
             for (int x = laneWallLeftX(chart); x <= laneWallRightX(chart); x++) for (int y = 64; y <= 68; y++) {
                 BlockPos pos = new BlockPos(x, y, z);
                 if (world.getBlockState(pos).isOf(Blocks.LIME_CONCRETE)) world.setBlockState(pos, Blocks.RED_CONCRETE.getDefaultState(), 3);
