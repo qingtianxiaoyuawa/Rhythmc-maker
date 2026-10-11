@@ -5,6 +5,8 @@ import cn.frkovo.rhythmcmaker.chart.ChartManifest;
 import cn.frkovo.rhythmcmaker.chart.ChartTiming;
 import cn.frkovo.rhythmcmaker.chart.PlaybackCoordinates;
 import cn.frkovo.rhythmcmaker.chart.TrackPlayback;
+import cn.frkovo.rhythmcmaker.client.camera.EffectEditorCameraPreferences;
+import cn.frkovo.rhythmcmaker.client.camera.EffectEditorCameraState;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
@@ -295,15 +297,21 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         ChartManifest chart = ClientChartAccess.resolveActiveChart();
         if (client.player == null || chart == null || chart.bpm <= 0) return;
         if (effectEditorPreviewPrepared) return;
+        EffectEditorCameraState cameraState;
+        try {
+            cameraState = EffectEditorCameraPreferences.getInstance().load();
+        } catch (java.io.IOException exception) {
+            throw new java.io.UncheckedIOException("无法读取特效编辑器摄像头位置", exception);
+        }
         if (playbackAudioRequested || audioProcess != null) finishPlayback(client, true);
         syncPlaybackPreference();
         playbackMode = "scroll";
         effectEditorPreviewPrepared = true;
         effectEditorPlaybackRequested = false;
         effectEditorCameraLocked = true;
-        effectEditorCameraX = 0.0;
-        effectEditorCameraHeight = 74.0;
-        effectEditorCameraZOffset = 0.0;
+        effectEditorCameraX = cameraState.horizontalOffset();
+        effectEditorCameraHeight = cameraState.height();
+        effectEditorCameraZOffset = cameraState.timelineOffset();
         effectEditorPreviousPerspective = client.options.getPerspective();
         applyEffectEditorPerspective();
         effectEditorFov = client.options.getFov().getValue().floatValue();
@@ -432,13 +440,19 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     static void stopEffectEditorPreview() {
         MinecraftClient client = MinecraftClient.getInstance();
         boolean previewActive = effectEditorPreviewPrepared;
+        if (previewActive) {
+            try {
+                EffectEditorCameraPreferences.getInstance().save(new EffectEditorCameraState(
+                        effectEditorCameraX, effectEditorCameraHeight, effectEditorCameraZOffset));
+            } catch (java.io.IOException exception) {
+                org.slf4j.LoggerFactory.getLogger("rhythmc_maker").error("无法保存特效编辑器摄像头位置", exception);
+                ClientChartAccess.status("摄像头位置保存失败，请检查日志");
+            }
+        }
         boolean active = effectEditorPreviewPrepared || effectEditorPlaybackRequested || playbackAudioRequested || audioProcess != null;
         effectEditorPreviewPrepared = false;
         effectEditorPlaybackRequested = false;
         effectEditorCameraLocked = false;
-        effectEditorCameraX = 0.0;
-        effectEditorCameraHeight = 74.0;
-        effectEditorCameraZOffset = 0.0;
         effectEditorFov = -1.0f;
         restoreEffectEditorPerspective();
         pendingPlaybackCommand = null;

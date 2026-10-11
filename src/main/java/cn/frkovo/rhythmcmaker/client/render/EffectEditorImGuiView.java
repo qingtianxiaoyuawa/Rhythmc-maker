@@ -936,7 +936,10 @@ public final class EffectEditorImGuiView {
         if (timelinePopupOpen()) return;
         if (hovered && Math.abs(io.getMouseWheel()) > 0.001f) {
             float wheel = io.getMouseWheel();
-            if (isControlPressed()) {
+            if (isAltPressed()) {
+                int chunks = Math.max(1, Math.round(Math.abs(wheel)));
+                moveTimelinePlayhead(wheel > 0.0f ? -chunks : chunks, true);
+            } else if (isControlPressed()) {
                 if (contentHovered) zoomTimelineAt(mouseX, timelineLeft, timelineWidth, wheel);
             } else {
                 int direction = wheel > 0.0f ? -1 : 1;
@@ -1127,20 +1130,20 @@ public final class EffectEditorImGuiView {
             if (selectedIndices.size() > 1) {
                 if (ImGui.menuItem("复制选中特效")) copySelectedEffects();
                 if (ImGui.menuItem("删除选中特效")) deleteSelectedEffects();
-                ImGui.separator();
+            } else {
+                if (ImGui.menuItem("复制特效") && selectedEvent() != null) {
+                    rememberForUndo();
+                    JsonObject copy = selectedEvent().deepCopy();
+                    EffectEditorLayout.Position source = layoutModel.position(selectedIndex);
+                    workingEffects.add(copy);
+                    layoutModel.addEvent(eventType(copy), eventBeat(copy), source.denominator, source.trackId);
+                    copyKeyframePositions(selectedIndex, workingEffects.size() - 1);
+                    cachedTimelineRows = null;
+                    dirty = true;
+                    select(workingEffects.size() - 1);
+                }
+                if (ImGui.menuItem("删除特效")) deleteSelected();
             }
-            if (ImGui.menuItem("复制特效") && selectedEvent() != null) {
-                rememberForUndo();
-                JsonObject copy = selectedEvent().deepCopy();
-                EffectEditorLayout.Position source = layoutModel.position(selectedIndex);
-                workingEffects.add(copy);
-                layoutModel.addEvent(eventType(copy), eventBeat(copy), source.denominator, source.trackId);
-                copyKeyframePositions(selectedIndex, workingEffects.size() - 1);
-                cachedTimelineRows = null;
-                dirty = true;
-                select(workingEffects.size() - 1);
-            }
-            if (ImGui.menuItem("删除特效")) deleteSelected();
             ImGui.endPopup();
         }
         if (ImGui.beginPopup("轨道操作##track-context")) {
@@ -1400,6 +1403,14 @@ public final class EffectEditorImGuiView {
         long handle = client.getWindow().getHandle();
         return GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_LEFT_CONTROL) == GLFW.GLFW_PRESS
                 || GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_RIGHT_CONTROL) == GLFW.GLFW_PRESS;
+    }
+
+    private boolean isAltPressed() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.getWindow() == null) return false;
+        long handle = client.getWindow().getHandle();
+        return GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_LEFT_ALT) == GLFW.GLFW_PRESS
+                || GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_RIGHT_ALT) == GLFW.GLFW_PRESS;
     }
 
     private int totalTimelineRows() {
