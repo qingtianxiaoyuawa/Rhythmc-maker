@@ -910,7 +910,7 @@ public final class EffectEditorImGuiView {
         drawTimelineMenus();
         if (timelinePopupOpen() || popupWasOpen && (timelineMenuHovered
                 || !ImGui.isMouseClicked(0) && !ImGui.isMouseClicked(1))) return;
-        if ((ImGui.isMouseClicked(0) || ImGui.isMouseClicked(1))
+        if (hovered && (ImGui.isMouseClicked(0) || ImGui.isMouseClicked(1))
                 && (!contentHovered || findTimelineHit(mouseX, mouseY, hits) == null)) clearEffectSelection();
         if (hovered && ImGui.isMouseClicked(1)) {
             List<TimelineRow> rows = buildTimelineRows();
@@ -1015,7 +1015,7 @@ public final class EffectEditorImGuiView {
         }
         if (ImGui.isMouseReleased(0)) {
             if (timelineDragSnapshot != null) finishTimelineDrag();
-            else if (timelineDraggedEvent >= 0) select(timelineDraggedEvent);
+            else if (timelineDraggedEvent >= 0 && hovered) select(timelineDraggedEvent);
             if (selectionDragging) {
                 selectionDragging = false;
                 selectMarkersInRectangle(hits);
