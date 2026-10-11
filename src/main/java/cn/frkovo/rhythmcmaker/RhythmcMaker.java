@@ -798,10 +798,9 @@ public final class RhythmcMaker implements ModInitializer {
             saveChart(source.getServer(), chart);
             if (editor != null) CHART_CACHE_BY_WORLD.put(editor.getRegistryKey(), chart);
             if (editor != null) {
-                EDITOR_TRACK_REBUILD_TASKS.put(editor.getRegistryKey(), new EditorTrackRebuildTask(
-                        editor.getRegistryKey(), 0, previousTrackLength, chart.trackLength,
-                        targetDivisions, targetLaneCount, previousLaneCount, player.getUuid(), previousChunk));
-                player.sendMessage(Text.literal("正在调整制谱器轨道中，请等待旧展示实体清理完成"), true);
+                EditorTrackRebuildTask rebuildTask = new EditorTrackRebuildTask(editor.getRegistryKey(), 0, previousTrackLength, chart.trackLength, targetDivisions, targetLaneCount, previousLaneCount, player.getUuid(), previousChunk);
+                EDITOR_TRACK_REBUILD_TASKS.put(editor.getRegistryKey(), rebuildTask);
+                player.sendMessage(Text.literal("正在调整制谱器轨道：0%（0/" + rebuildTask.totalWork + "）"), true);
             }
             if (editor == null) {
                 player.sendMessage(Text.literal("制谱器轨道已更新为 " + laneCount(chart) + " × " + divisionsPerChunk(chart)), true);
@@ -4069,16 +4068,32 @@ private static void showSceneBoundary(MinecraftServer server) {
                 task.displaysScheduled = true;
                 continue;
             }
-            if (hasPendingEditorTrackDisplayWork(world.getRegistryKey())) continue;
+            if (hasPendingEditorTrackDisplayWork(world.getRegistryKey())) {
+                sendEditorTrackAdjustmentProgress(server, task);
+                continue;
+            }
             ServerPlayerEntity completedPlayer = server.getPlayerManager().getPlayer(task.playerId);
             if (completedPlayer != null) {
                 EDITOR_TRACK_ADJUSTMENTS.remove(completedPlayer.getUuid());
                 EDITOR_TRACK_ADJUSTMENT_NOTICES.remove(completedPlayer.getUuid());
+                completedPlayer.sendMessage(Text.literal("正在调整制谱器轨道：100%（" + task.totalWork + "/" + task.totalWork + "）"), true);
                 completedPlayer.sendMessage(Text.literal("制谱器轨道调整完成：" + task.laneCount + " × " + task.divisions), true);
             }
             iterator.remove();
         }
     }
+    private static void sendEditorTrackAdjustmentProgress(MinecraftServer server, EditorTrackRebuildTask task) {
+        long tick = server.getTicks();
+        if (task.lastProgressTick >= 0L && tick - task.lastProgressTick < 20L) return;
+        task.lastProgressTick = tick;
+        ServerPlayerEntity player = server.getPlayerManager().getPlayer(task.playerId);
+        if (player == null) return;
+        int completedWork = Math.min(task.newLength, task.cursor)
+                + Math.max(0, Math.min(task.oldLength - task.newLength, task.clearCursor - task.newLength));
+        int percent = task.totalWork == 0 ? 99 : Math.min(99, completedWork * 100 / task.totalWork);
+        player.sendMessage(Text.literal("正在调整制谱器轨道：" + percent + "%（" + completedWork + "/" + task.totalWork + "）"), true);
+    }
+
     private static boolean hasPendingEditorTrackDisplayWork(RegistryKey<World> worldKey) {
         return EDITOR_NOTE_REFRESH_TASKS.containsKey(worldKey)
                 || EDITOR_NOTE_DISPLAY_SWEEP_TASKS.containsKey(worldKey)
@@ -4218,6 +4233,8 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final int previousChunk;
         private int cursor;
         private int clearCursor;
+        private final int totalWork;
+        private long lastProgressTick = -1L;
         private boolean foundationReady;
         private boolean displaysScheduled;
         private EditorTrackRebuildTask(RegistryKey<World> worldKey, int x, int oldLength, int newLength,
@@ -4231,6 +4248,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             this.previousLaneCount = EditorTrackLayout.isSupportedLaneCount(previousLaneCount) ? previousLaneCount : this.laneCount;
             this.playerId = playerId;
             this.previousChunk = Math.max(1, previousChunk);
+            this.totalWork = this.newLength + Math.max(0, this.oldLength - this.newLength);
         }
     }
     private static final class EditorAreaTask {
