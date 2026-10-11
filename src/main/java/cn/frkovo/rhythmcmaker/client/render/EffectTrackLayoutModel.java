@@ -50,6 +50,19 @@ public final class EffectTrackLayoutModel {
         positions.remove(index);
     }
 
+    public void previewMove(int index, String type, double beat, String trackId, int denominator) {
+        if (!Double.isFinite(beat) || denominator < 1 || denominator > 32) {
+            throw new IllegalArgumentException("Invalid effect position");
+        }
+        if (tracks.stream().noneMatch(track -> track.id.equals(trackId) && track.type.equals(type))) {
+            throw new IllegalArgumentException("Effect track type mismatch");
+        }
+        EffectEditorLayout.Position position = positions.get(index);
+        position.trackId = trackId;
+        position.beat = beat;
+        position.denominator = denominator;
+    }
+
     public void removeTrack(String id) {
         if (positions.stream().anyMatch(position -> id.equals(position.trackId))) {
             throw new IllegalStateException("Track still contains events");

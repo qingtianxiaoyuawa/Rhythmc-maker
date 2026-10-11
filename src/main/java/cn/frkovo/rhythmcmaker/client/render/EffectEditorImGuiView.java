@@ -142,8 +142,22 @@ public final class EffectEditorImGuiView {
     }
 
     private record EditorSnapshot(List<JsonObject> effects, EffectEditorLayout layout,
-                                  List<EffectEditorLayout.KeyframePosition> keyframes, int selectedIndex) {
+                                  List<EffectEditorLayout.KeyframePosition> keyframes, int selectedIndex,
+                                  List<Integer> selectedIndices) {
     }
+
+    private record DragOrigin(int eventIndex, double beat, String trackId) {
+    }
+
+    private final List<DragOrigin> timelineDragOrigins = new ArrayList<>();
+    private EditorSnapshot timelineDragSnapshot;
+    private boolean timelineDragWasDirty;
+    private float timelinePressX;
+    private float timelinePressY;
+    private float timelineTrackAnchorY;
+    private double timelineDragStartBeat;
+    private double timelineDragMaximumBeat;
+    private boolean timelineMenuHovered;
 
     public EffectEditorImGuiView(ChartManifest chart, Runnable saveAction, Runnable closeAction,
                                  Runnable togglePlaybackAction, Runnable replayAction,
@@ -347,7 +361,7 @@ public final class EffectEditorImGuiView {
             keyframes.add(new EffectEditorLayout.KeyframePosition(position.eventIndex, position.channelIndex,
                     position.keyframeIndex, position.beat, position.denominator));
         }
-        return new EditorSnapshot(effects, layout, keyframes, selectedIndex);
+        return new EditorSnapshot(effects, layout, keyframes, selectedIndex, List.copyOf(selectedIndices));
     }
 
     private void rememberForUndo() {
@@ -369,7 +383,7 @@ public final class EffectEditorImGuiView {
             }
             selectedIndex = snapshot.selectedIndex();
             selectedIndices.clear();
-            if (selectedIndex >= 0) selectedIndices.add(selectedIndex);
+            selectedIndices.addAll(snapshot.selectedIndices());
             cachedTimelineRows = null;
             bufferIndex = Integer.MIN_VALUE;
             syncBuffers();
@@ -532,9 +546,6 @@ public final class EffectEditorImGuiView {
         ImGui.textColored(0xFF66CCFF, "特效参数设置");
         if (selectedIndices.size() > 1) {
             ImGui.textDisabled("无法设置多个特效参数");
-            if (ImGui.button("复制选中特效##copy-selected")) copySelectedEffects();
-            ImGui.sameLine();
-            if (ImGui.button("删除选中特效##delete-selected")) deleteSelectedEffects();
             ImGui.end();
             return;
         }
@@ -896,7 +907,12 @@ public final class EffectEditorImGuiView {
         ImGuiIO io = ImGui.getIO();
         boolean popupWasOpen = timelinePopupOpen();
         float rowsTop = top + 34.0f;
-        if (!popupWasOpen && hovered && ImGui.isMouseClicked(1)) {
+        drawTimelineMenus();
+        if (timelinePopupOpen() || popupWasOpen && (timelineMenuHovered
+                || !ImGui.isMouseClicked(0) && !ImGui.isMouseClicked(1))) return;
+        if ((ImGui.isMouseClicked(0) || ImGui.isMouseClicked(1))
+                && (!contentHovered || findTimelineHit(mouseX, mouseY, hits) == null)) clearEffectSelection();
+        if (hovered && ImGui.isMouseClicked(1)) {
             List<TimelineRow> rows = buildTimelineRows();
             int rowIndex = timelineRowAt(rows, timelineRowOffset, rowsTop, mouseY);
             if (mouseY >= rowsTop && mouseY < footerTop && rowIndex >= 0 && rowIndex < rows.size()
@@ -909,7 +925,7 @@ public final class EffectEditorImGuiView {
                 } else {
                     TimelineHit hit = findTimelineHit(mouseX, mouseY, hits);
                     if (hit != null) {
-                        select(hit.marker().eventIndex());
+                        if (!selectedIndices.contains(hit.marker().eventIndex())) select(hit.marker().eventIndex());
                         ImGui.openPopup("特效操作##event-context");
                     } else {
                         ImGui.openPopup("新增特效##create-context");
@@ -917,8 +933,7 @@ public final class EffectEditorImGuiView {
                 }
             }
         }
-        drawTimelineMenus();
-        if (popupWasOpen || timelinePopupOpen()) return;
+        if (timelinePopupOpen()) return;
         if (hovered && Math.abs(io.getMouseWheel()) > 0.001f) {
             float wheel = io.getMouseWheel();
             if (isControlPressed()) {
@@ -944,12 +959,18 @@ public final class EffectEditorImGuiView {
                 TimelineHit hit = findTimelineHit(mouseX, mouseY, hits);
                 if (hit != null) {
                     TimelineMarker marker = hit.marker();
-                    select(marker.eventIndex());
-                    if (selectedIndices.size() <= 1 && registry.find(eventType(workingEffects.get(marker.eventIndex()))) != null) {
-                        rememberForUndo();
+                    if (marker.kind() == TimelineMarkerKind.KEYFRAME || !selectedIndices.contains(marker.eventIndex())) {
+                        select(marker.eventIndex());
+                    }
+                    if (registry.find(eventType(workingEffects.get(marker.eventIndex()))) != null) {
                         timelineDraggedEvent = marker.eventIndex();
                         timelineDraggedChannel = marker.channelIndex();
                         timelineDraggedKeyframe = marker.keyframeIndex();
+                        timelinePressX = mouseX;
+                        timelinePressY = mouseY;
+                        timelineTrackAnchorY = mouseY;
+                        timelineDragStartBeat = marker.beat();
+                        timelineDragMaximumBeat = maxBeat;
                         timelineDragBeatOffset = marker.beat() - timelineXToBeat(mouseX, timelineLeft, timelineWidth,
                                 minBeat, maxVisibleBeat);
                     }
@@ -973,17 +994,25 @@ public final class EffectEditorImGuiView {
             selectionEndX = mouseX;
             selectionEndY = mouseY;
         }
-        if (timelineDraggedEvent >= 0 && ImGui.isMouseDragging(0)) {
-            double target = timelineXToBeat(mouseX, timelineLeft, timelineWidth, minBeat, maxVisibleBeat) + timelineDragBeatOffset;
+        if (timelineDraggedEvent >= 0 && (ImGui.isMouseDown(0) || ImGui.isMouseReleased(0))
+                && (timelineDragSnapshot != null || Math.hypot(mouseX - timelinePressX, mouseY - timelinePressY) > 3.0)) {
+            if (timelineDragSnapshot == null) beginTimelineDrag();
+            double target = minBeat + (mouseX - timelineLeft) / Math.max(1.0f, timelineWidth)
+                    * (maxVisibleBeat - minBeat) + timelineDragBeatOffset;
             int denominator = Math.max(1, Math.min(32, chart.divisionsPerChunk));
-            target = Math.max(0.0, Math.round(target * denominator) / (double) denominator);
-            TimelineMarker marker = new TimelineMarker(timelineDraggedEvent, timelineDraggedChannel,
-                    timelineDraggedKeyframe, target,
-                    timelineDraggedChannel < 0 ? TimelineMarkerKind.EVENT : TimelineMarkerKind.KEYFRAME);
-            updateTimelineMarkerBeat(marker, target);
+            target = Math.round(target * denominator) / (double) denominator;
+            if (timelineDraggedChannel < 0) {
+                previewEventDrag(target, denominator, mouseY, rowsTop, footerTop);
+            } else {
+                target = Math.max(0.0, target);
+                updateTimelineMarkerBeat(new TimelineMarker(timelineDraggedEvent, timelineDraggedChannel,
+                        timelineDraggedKeyframe, target, TimelineMarkerKind.KEYFRAME), target);
+            }
             seekTimelineBeat(target, maxBeat);
         }
         if (ImGui.isMouseReleased(0)) {
+            if (timelineDragSnapshot != null) finishTimelineDrag();
+            else if (timelineDraggedEvent >= 0) select(timelineDraggedEvent);
             if (selectionDragging) {
                 selectionDragging = false;
                 selectMarkersInRectangle(hits);
@@ -998,8 +1027,88 @@ public final class EffectEditorImGuiView {
         }
     }
 
+    private void clearEffectSelection() {
+        if (selectedIndex < 0 && selectedIndices.isEmpty()) return;
+        selectedIndex = -1;
+        selectedIndices.clear();
+        bufferIndex = Integer.MIN_VALUE;
+        syncBuffers();
+    }
+
+    private void beginTimelineDrag() {
+        timelineDragSnapshot = snapshot();
+        timelineDragWasDirty = dirty;
+        timelineDragOrigins.clear();
+        if (timelineDraggedChannel >= 0) return;
+        for (int index : selectedIndices) {
+            EffectEditorLayout.Position position = layoutModel.position(index);
+            timelineDragOrigins.add(new DragOrigin(index, eventBeat(workingEffects.get(index)), position.trackId));
+        }
+    }
+
+    private void previewEventDrag(double target, int denominator, float mouseY, float rowsTop, float footerTop) {
+        String targetTrack = layoutModel.position(timelineDraggedEvent).trackId;
+        if (timelineDragOrigins.size() == 1 && Math.abs(mouseY - timelineTrackAnchorY) >= 24.0f
+                && mouseY >= rowsTop && mouseY < footerTop) {
+            List<TimelineRow> rows = buildTimelineRows();
+            int rowIndex = timelineRowAt(rows, timelineRowOffset, rowsTop, mouseY);
+            if (rowIndex >= 0 && rowIndex < rows.size() && !rows.get(rowIndex).groupHeader()) {
+                String candidate = rows.get(rowIndex).groupLabel();
+                String type = eventType(workingEffects.get(timelineDraggedEvent));
+                if (layoutModel.tracks().stream().anyMatch(track -> track.id.equals(candidate) && track.type.equals(type))) {
+                    targetTrack = candidate;
+                    timelineTrackAnchorY = mouseY;
+                }
+            }
+        }
+        double delta = target - timelineDragStartBeat;
+        for (DragOrigin origin : timelineDragOrigins) {
+            double beat = origin.beat() + delta;
+            JsonObject event = workingEffects.get(origin.eventIndex());
+            event.addProperty("beat", beat);
+            layoutModel.previewMove(origin.eventIndex(), eventType(event), beat,
+                    timelineDragOrigins.size() == 1 ? targetTrack : origin.trackId(), denominator);
+            if (origin.eventIndex() == selectedIndex) beatField.set(beat);
+        }
+        dirty = true;
+        cachedTimelineRows = null;
+    }
+
+    private void finishTimelineDrag() {
+        String failure = eventDragFailure();
+        if (failure != null) {
+            restoreSnapshot(timelineDragSnapshot);
+            dirty = timelineDragWasDirty;
+            status = failure;
+            seekAction.accept((double) playhead[0]);
+        } else {
+            undoHistory.push(timelineDragSnapshot);
+            redoHistory.clear();
+            status = "已移动特效";
+        }
+        timelineDragSnapshot = null;
+        timelineDragOrigins.clear();
+    }
+
+    private String eventDragFailure() {
+        for (DragOrigin origin : timelineDragOrigins) {
+            EffectEditorLayout.Position position = layoutModel.position(origin.eventIndex());
+            if (position.beat < 0.0 || position.beat > timelineDragMaximumBeat) return "特效不能移出时间轴范围";
+            String type = eventType(workingEffects.get(origin.eventIndex()));
+            for (int index = 0; index < workingEffects.size(); index++) {
+                if (index == origin.eventIndex()) continue;
+                EffectEditorLayout.Position other = layoutModel.position(index);
+                if (position.trackId.equals(other.trackId) && position.beat == eventBeat(workingEffects.get(index))
+                        && type.equals(eventType(workingEffects.get(index)))) return "特效不能重叠";
+            }
+        }
+        return null;
+    }
+
     private void drawTimelineMenus() {
+        timelineMenuHovered = false;
         if (ImGui.beginPopup("新增特效##create-context")) {
+            timelineMenuHovered = ImGui.isWindowHovered();
             if (ImGui.menuItem("新增特效")) {
                 for (EffectEditorLayout.Track track : layoutModel.tracks()) {
                     if (!track.id.equals(contextTrackId)) continue;
@@ -1014,6 +1123,12 @@ public final class EffectEditorImGuiView {
             ImGui.endPopup();
         }
         if (ImGui.beginPopup("特效操作##event-context")) {
+            timelineMenuHovered = ImGui.isWindowHovered();
+            if (selectedIndices.size() > 1) {
+                if (ImGui.menuItem("复制选中特效")) copySelectedEffects();
+                if (ImGui.menuItem("删除选中特效")) deleteSelectedEffects();
+                ImGui.separator();
+            }
             if (ImGui.menuItem("复制特效") && selectedEvent() != null) {
                 rememberForUndo();
                 JsonObject copy = selectedEvent().deepCopy();
@@ -1029,6 +1144,7 @@ public final class EffectEditorImGuiView {
             ImGui.endPopup();
         }
         if (ImGui.beginPopup("轨道操作##track-context")) {
+            timelineMenuHovered = ImGui.isWindowHovered();
             if (ImGui.menuItem("复制轨道")) copyTrack(contextTrackId);
             if (ImGui.menuItem("清空轨道")) clearTrack(contextTrackId);
             if (ImGui.menuItem("删除轨道")) pendingDeleteTrack = contextTrackId;
@@ -1036,6 +1152,7 @@ public final class EffectEditorImGuiView {
         }
         if (pendingDeleteTrack != null && !ImGui.isPopupOpen("删除轨道确认")) ImGui.openPopup("删除轨道确认");
         if (ImGui.beginPopupModal("删除轨道确认", ImGuiWindowFlags.AlwaysAutoResize)) {
+            timelineMenuHovered = ImGui.isWindowHovered();
             ImGui.text("是否删除轨道及其全部特效？");
             if (ImGui.button("删除")) {
                 clearTrack(pendingDeleteTrack);
@@ -1145,6 +1262,7 @@ public final class EffectEditorImGuiView {
             rows.add(new TimelineRow(track.id, label, firstEvent, markers, false));
             for (TimelineMarker marker : markers) cachedTimelineMaxBeat = Math.max(cachedTimelineMaxBeat, marker.beat());
         }
+        if (timelineDragSnapshot != null) cachedTimelineMaxBeat = timelineDragMaximumBeat;
         cachedTimelineRows = List.copyOf(rows);
         return cachedTimelineRows;
     }
@@ -1166,7 +1284,7 @@ public final class EffectEditorImGuiView {
     }
     private List<TimelineMarker> timelineMarkers(int eventIndex, JsonObject event) {
         List<TimelineMarker> markers = new ArrayList<>();
-        markers.add(new TimelineMarker(eventIndex, -1, -1, eventBeat(event), TimelineMarkerKind.EVENT));
+        markers.add(new TimelineMarker(eventIndex, -1, -1, readJsonDouble(event, "beat", 0.0), TimelineMarkerKind.EVENT));
         if (!event.has("animation") || !event.get("animation").isJsonObject()) return markers;
         JsonObject animation = event.getAsJsonObject("animation");
         if (!animation.has("channels") || !animation.get("channels").isJsonArray()) return markers;
@@ -1443,11 +1561,18 @@ public final class EffectEditorImGuiView {
         JsonObject event = selectedEvent();
         if (event == null || registry.find(eventType(event)) == null) return;
         rememberForUndo();
-        workingEffects.remove(selectedIndex);
-        layoutModel.removeEvent(selectedIndex);
-        removeKeyframePositions(selectedIndex);
+        int deletedIndex = selectedIndex;
+        workingEffects.remove(deletedIndex);
+        layoutModel.removeEvent(deletedIndex);
+        removeKeyframePositions(deletedIndex);
+        List<Integer> remainingSelection = new ArrayList<>();
+        for (int index : selectedIndices) {
+            if (index != deletedIndex) remainingSelection.add(index > deletedIndex ? index - 1 : index);
+        }
+        selectedIndices.clear();
+        selectedIndices.addAll(remainingSelection);
         bufferIndex = Integer.MIN_VALUE;
-        selectedIndex = Math.min(selectedIndex, workingEffects.size() - 1);
+        selectedIndex = selectedIndices.isEmpty() ? -1 : selectedIndices.iterator().next();
         dirty = true;
         cachedTimelineRows = null;
         syncBuffers();
@@ -1485,7 +1610,7 @@ public final class EffectEditorImGuiView {
             removeKeyframePositions(index);
         }
         selectedIndices.clear();
-        selectedIndex = workingEffects.isEmpty() ? -1 : Math.min(indices.get(indices.size() - 1), workingEffects.size() - 1);
+        selectedIndex = -1;
         dirty = true;
         cachedTimelineRows = null;
         syncBuffers();
