@@ -310,7 +310,7 @@ public final class RhythmcMaker implements ModInitializer {
             note.x = target.getX();
             note.y = target.getY();
             note.z = target.getZ();
-            note.beat = PlaybackCoordinates.editorBeatAtWorldZ(chart, target.getZ());
+            note.beat = PlaybackCoordinates.editorBeatAtBlockZ(chart, target.getZ());
             note.time = ChartTiming.beatToSeconds(chart, note.beat);
             chart.notes.add(note);
             try { saveChart(serverWorld.getServer(), chart); } catch (IOException ignored) { }
@@ -864,7 +864,7 @@ public final class RhythmcMaker implements ModInitializer {
                 if (fractional) {
                     task.changed.add(new TrackSnapChangedNote(retained.id, retained.z, retained.beat, retained.time));
                     retained.z = targetZ;
-                    retained.beat = PlaybackCoordinates.editorBeatAtWorldZ(task.chart, targetZ);
+                    retained.beat = PlaybackCoordinates.editorBeatAtBlockZ(task.chart, targetZ);
                     retained.time = ChartTiming.beatToSeconds(task.chart, retained.beat);
                 }
                 task.retained.add(retained);
@@ -1988,7 +1988,7 @@ public final class RhythmcMaker implements ModInitializer {
             note.x = x;
             note.y = y;
             note.z = z;
-            note.beat = PlaybackCoordinates.editorBeatAtWorldZ(chart, z);
+            note.beat = PlaybackCoordinates.editorBeatAtBlockZ(chart, z);
             note.time = ChartTiming.beatToSeconds(chart, note.beat);
             chart.notes.add(note);
         }

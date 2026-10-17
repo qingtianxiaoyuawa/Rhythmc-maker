@@ -63,9 +63,10 @@ public final class PlaybackCoordinates {
         return editorWorldZAtBeat(chart, beatAtSongTime(chart, timing, songTime));
     }
 
-    public static double editorBeatAtWorldZ(ChartManifest chart, double worldZ) {
+    public static double editorBeatAtBlockZ(ChartManifest chart, double blockZ) {
         double divisions = divisionsPerChunk(chart);
-        return Math.max(0.0, (CHART_ORIGIN_Z - worldZ) / divisions);
+        double blockCenterZ = blockZ + 0.5;
+        return Math.max(0.0, (CHART_ORIGIN_Z - blockCenterZ) / divisions);
     }
 
     private static double divisionsPerChunk(ChartManifest chart) {
