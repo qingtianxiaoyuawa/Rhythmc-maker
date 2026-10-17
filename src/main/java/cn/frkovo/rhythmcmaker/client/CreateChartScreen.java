@@ -21,7 +21,6 @@ final class CreateChartScreen extends RhythmcScreen {
     private final ChartManifest draft;
     private final Path stagedAudio;
     private final String errorMessage;
-    private final boolean bpmMeasuring;
     private TextBoxComponent titleBox;
     private TextBoxComponent artistBox;
     private TextBoxComponent charterBox;
@@ -33,18 +32,13 @@ final class CreateChartScreen extends RhythmcScreen {
     }
 
     CreateChartScreen(ChartManifest draft, Path stagedAudio) {
-        this(draft, stagedAudio, "", false);
+        this(draft, stagedAudio, "");
     }
 
     private CreateChartScreen(ChartManifest draft, Path stagedAudio, String errorMessage) {
-        this(draft, stagedAudio, errorMessage, false);
-    }
-
-    private CreateChartScreen(ChartManifest draft, Path stagedAudio, String errorMessage, boolean bpmMeasuring) {
         this.draft = draft;
         this.stagedAudio = stagedAudio;
         this.errorMessage = errorMessage;
-        this.bpmMeasuring = bpmMeasuring;
     }
 
     private static ChartManifest newDraft() {
@@ -100,7 +94,7 @@ final class CreateChartScreen extends RhythmcScreen {
         addFormSection(form, innerWidth);
         page.child(UIContainers.verticalScroll(Sizing.fill(), Sizing.expand(), form));
         page.child(UIComponents.button(Text.literal("返回谱面列表"), button -> {
-                    if (!bpmMeasuring) MinecraftClient.getInstance().setScreen(new ChartListScreen());
+                    MinecraftClient.getInstance().setScreen(new ChartListScreen());
                 })
                 .horizontalSizing(Sizing.fixed(120)));
         root.child(centered(UIContainers.horizontalFlow(Sizing.fill(), Sizing.fill())).child(page));
@@ -129,9 +123,6 @@ final class CreateChartScreen extends RhythmcScreen {
         section.child(UIComponents.label(Text.literal("谱师")));
         charterBox = UIComponents.textBox(Sizing.fill(), draft.charter);
         section.child(charterBox);
-        if (bpmMeasuring) {
-            section.child(UIComponents.label(Text.literal("正在测量BPM").styled(style -> style.withColor(0xF05B64))));
-        }
         section.child(UIComponents.label(Text.literal("BPM（可输入小数）")));
         bpmBox = UIComponents.textBox(Sizing.fill(), trimNumber(draft.bpm));
         numericOnly(bpmBox);
@@ -164,7 +155,7 @@ final class CreateChartScreen extends RhythmcScreen {
     }
 
     private void chooseCover() {
-        if (bpmMeasuring || !syncDraft()) return;
+        if (!syncDraft()) return;
         MinecraftClient.getInstance().setScreen(new ItemPickerScreen(this, stack -> {
             draft.coverItemId = Registries.ITEM.getId(stack.getItem()).toString();
             MinecraftClient.getInstance().setScreen(new CreateChartScreen(draft, stagedAudio));
@@ -172,43 +163,21 @@ final class CreateChartScreen extends RhythmcScreen {
     }
 
     private void chooseAudio() {
-        if (bpmMeasuring || !syncDraft()) return;
+        if (!syncDraft()) return;
         ChartManifest preservedDraft = copyDraft(draft);
         AudioFileChooser.choose(source -> {
             try {
                 Path staged = ClientChartAccess.stageAudio(source);
                 ClientChartAccess.status("歌曲已复制到世界目录：" + staged.getFileName());
-                CreateChartScreen measuring = new CreateChartScreen(preservedDraft, staged, "", true);
-                MinecraftClient.getInstance().setScreen(measuring);
-                measuring.measureBpm(staged);
+                MinecraftClient.getInstance().setScreen(new CreateChartScreen(preservedDraft, staged));
             } catch (IOException exception) {
                 ClientChartAccess.status("导入歌曲失败：" + exception.getMessage());
             }
         });
     }
 
-    private void measureBpm(Path audio) {
-        Thread.ofVirtual().start(() -> {
-            try {
-                var analysis = ClientChartAccess.analyzeTiming(audio);
-                MinecraftClient.getInstance().execute(() -> {
-                    draft.bpm = Math.max(1L, Math.round(analysis.selectedBpm()));
-                    MinecraftClient.getInstance().setScreen(new CreateChartScreen(draft, stagedAudio));
-                    String confidence = analysis.confidence() >= 0.60 ? "高" : analysis.confidence() >= 0.25 ? "中" : "低";
-                    String candidates = analysis.candidates().stream().limit(3).map(candidate -> trimNumber(candidate.bpm())).collect(java.util.stream.Collectors.joining("/"));
-                    ClientChartAccess.status("BPM 测量完成：" + draft.bpm + "，置信度 " + confidence + "（候选 " + candidates + "）");
-                });
-            } catch (IOException exception) {
-                MinecraftClient.getInstance().execute(() -> {
-                    MinecraftClient.getInstance().setScreen(new CreateChartScreen(draft, stagedAudio, "BPM 测量失败：" + exception.getMessage()));
-                    ClientChartAccess.status("BPM 测量失败，将保留当前数值");
-                });
-            }
-        });
-    }
-
     @Override public boolean shouldCloseOnEsc() {
-        return !bpmMeasuring;
+        return true;
     }
 
     private void setDifficulty(String difficulty) {
@@ -218,7 +187,6 @@ final class CreateChartScreen extends RhythmcScreen {
     }
 
     private void createChart() {
-        if (bpmMeasuring) return;
         try {
             if (!syncDraft()) return;
             ClientChartAccess.create(draft, stagedAudio);

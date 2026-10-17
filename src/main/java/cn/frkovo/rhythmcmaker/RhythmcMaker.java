@@ -3312,7 +3312,8 @@ private static void showSceneBoundary(MinecraftServer server) {
                     (float) (note.sourceZ == null ? 0.0 : note.sourceZ));
             local.mul((float) pose.scaleX(), (float) pose.scaleY(), (float) pose.scaleZ());
             trackRotation(pose).transform(local);
-            return new double[]{PLAYBACK_PLATFORM_X + local.x() + pose.x(), PLAYBACK_PLATFORM_Y + 1.0 + local.y() + pose.y(), displayZ - local.z() - pose.z()};
+            double baseY = note.type == 2 ? PLAYBACK_PLATFORM_Y : PLAYBACK_PLATFORM_Y + 1.0;
+            return new double[]{PLAYBACK_PLATFORM_X + local.x() + pose.x(), baseY + local.y() + pose.y(), displayZ - local.z() - pose.z()};
         }
         private void applyNotePose(DisplayEntity.BlockDisplayEntity display, ChartManifest.Note note, double songTime, double displayZ) {
             double beat = timing.secondsToBeat(songTime - chart.offsetMillis / 1000.0);

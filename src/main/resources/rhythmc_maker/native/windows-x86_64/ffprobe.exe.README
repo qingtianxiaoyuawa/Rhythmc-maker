@@ -10,9 +10,9 @@ Why this binary exists
 The previous bundled ffprobe was gyan.dev's "essentials" static build (~82.7 MB).
 That build ships every video codec/accelerator (x264, x265, aom, vpx, nvenc, cuda,
 libvmaf ...) which this mod never uses. Rhythmc maker only probes audio: it reads
-audio duration and runs an onset/spectral-flux filter chain for BPM detection.
+audio duration for chart creation.
 A minimal build keeps exactly those features and shrinks ffprobe from ~82.7 MB to
-~2.3 MB while producing byte-identical output for every operation the mod performs.
+~2.3 MB while retaining the audio-duration probing required by the mod.
 
 Rebuild
 -------

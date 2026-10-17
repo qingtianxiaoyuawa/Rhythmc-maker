@@ -589,6 +589,7 @@ public final class ChartStorage {
 
         String extension = extensionOf(stagedAudio.getFileName().toString());
         chart.durationSeconds = readAudioDuration(stagedAudio);
+        calculateImportedTrackLength(chart);
         ensureDefaultTrackSpeed(chart);
         chart.audioFile = chart.id + "." + extension;
         chart.lastEdited = "";
@@ -633,9 +634,6 @@ public final class ChartStorage {
         }
     }
 
-    public static BpmDetector.TimingAnalysis analyzeTiming(Path audio) throws IOException {
-        return BpmDetector.detect(extractFfprobe(), audio);
-    }
 
     private static Path extractFfprobe() throws IOException {
         if (!System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win")) {

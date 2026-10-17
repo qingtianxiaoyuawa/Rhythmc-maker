@@ -240,7 +240,6 @@ final class ClientChartAccess {
     private record RefreshResult(long generation, ChartManifest chart, RegistryKey<World> worldKey,
                                  FileTime modified, long size, String request, String error) {}
 
-    static cn.frkovo.rhythmcmaker.chart.BpmDetector.TimingAnalysis analyzeTiming(Path audio) throws IOException { return ChartStorage.analyzeTiming(audio); }
 
     static cn.frkovo.rhythmcmaker.config.RhythmcMakerConfig config() { return cn.frkovo.rhythmcmaker.RhythmcMaker.currentConfig(); }
 
