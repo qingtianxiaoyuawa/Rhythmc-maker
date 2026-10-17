@@ -55,14 +55,14 @@ public final class EffectEditorLayout {
         }
 
         public String label() {
-            int chunk = (int) Math.floor(beat);
+            int beatIndex = (int) Math.floor(beat);
             int safeDenominator = Math.max(1, Math.min(32, denominator));
-            long numerator = Math.round((beat - chunk) * safeDenominator);
+            long numerator = Math.round((beat - beatIndex) * safeDenominator);
             if (numerator >= safeDenominator) {
-                chunk++;
+                beatIndex++;
                 numerator = 0;
             }
-            return "Chunk " + (chunk + 1) + " + " + numerator + "/" + safeDenominator;
+            return "Beat " + (beatIndex + 1) + " + " + numerator + "/" + safeDenominator;
         }
     }
 }

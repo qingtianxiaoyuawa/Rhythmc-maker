@@ -20,16 +20,19 @@ public final class EditorTrackLayoutFile {
 
     public static EditorTrackLayout read(Path file) throws IOException {
         JsonObject root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8)).getAsJsonObject();
-        if (!root.has("laneCount") || !root.has("divisionsPerChunk")) {
+        String divisionsField = root.has("divisionsPerBeat") ? "divisionsPerBeat" : "divisionsPerChunk";
+        if (!root.has("laneCount") || !root.has(divisionsField)) {
             throw new IOException("轨道布局文件缺少字段：" + file.getFileName());
         }
-        return EditorTrackLayout.of(root.get("laneCount").getAsInt(), root.get("divisionsPerChunk").getAsInt());
+        EditorTrackLayout layout = EditorTrackLayout.of(root.get("laneCount").getAsInt(), root.get(divisionsField).getAsInt());
+        if (root.has("divisionsPerChunk")) write(file, layout);
+        return layout;
     }
 
     public static void write(Path file, EditorTrackLayout layout) throws IOException {
         JsonObject root = new JsonObject();
         root.addProperty("laneCount", layout.laneCount());
-        root.addProperty("divisionsPerChunk", layout.divisionsPerChunk());
+        root.addProperty("divisionsPerBeat", layout.divisionsPerBeat());
         Files.writeString(file, GSON.toJson(root), StandardCharsets.UTF_8);
     }
 }

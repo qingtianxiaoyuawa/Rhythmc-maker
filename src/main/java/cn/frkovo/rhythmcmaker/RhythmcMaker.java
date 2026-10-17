@@ -115,7 +115,7 @@ public final class RhythmcMaker implements ModInitializer {
     private static final Map<UUID, Integer> PENDING_PLAYER_SETUP = new ConcurrentHashMap<>();
     private static final Map<UUID, String> PENDING_EDITOR_ENTRIES = new ConcurrentHashMap<>();
     private static final Set<UUID> DIMENSION_TRAVEL_READY = ConcurrentHashMap.newKeySet();
-    private static final Map<UUID, Integer> SELECTED_START_CHUNKS = new ConcurrentHashMap<>();
+    private static final Map<UUID, Integer> SELECTED_START_BEATS = new ConcurrentHashMap<>();
     private static final Map<UUID, TrackSnapUndo> TRACK_SNAP_UNDOS = new ConcurrentHashMap<>();
     private static final Set<UUID> TRACK_SNAP_UNDO_INVALIDATIONS = ConcurrentHashMap.newKeySet();
     private static final Map<UUID, TrackSnapTask> TRACK_SNAP_TASKS = new ConcurrentHashMap<>();
@@ -390,15 +390,24 @@ public final class RhythmcMaker implements ModInitializer {
                 .executes(context -> snapFractionalNotes(context.getSource())));
             dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_track_snap_undo")
                 .executes(context -> undoFractionalNoteSnap(context.getSource())));
+            dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_start_beat")
+                .then(net.minecraft.server.command.CommandManager.argument("delta", com.mojang.brigadier.arguments.IntegerArgumentType.integer(-16, 16))
+                .executes(context -> adjustStartBeat(context.getSource(), com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "delta")))));
+            dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_start_beat_set")
+                .then(net.minecraft.server.command.CommandManager.argument("beat", com.mojang.brigadier.arguments.IntegerArgumentType.integer(1, 4096))
+                    .executes(context -> setStartBeat(context.getSource(), com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "beat")))));
+            dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_teleport_beat")
+                .then(net.minecraft.server.command.CommandManager.argument("beat", com.mojang.brigadier.arguments.IntegerArgumentType.integer(1, 4096))
+                    .executes(context -> teleportToBeat(context.getSource(), com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "beat")))));
             dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_start_chunk")
                 .then(net.minecraft.server.command.CommandManager.argument("delta", com.mojang.brigadier.arguments.IntegerArgumentType.integer(-16, 16))
-                .executes(context -> adjustStartChunk(context.getSource(), com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "delta")))));
+                    .executes(context -> adjustStartBeat(context.getSource(), com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "delta")))));
             dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_start_chunk_set")
                 .then(net.minecraft.server.command.CommandManager.argument("chunk", com.mojang.brigadier.arguments.IntegerArgumentType.integer(1, 4096))
-                    .executes(context -> setStartChunk(context.getSource(), com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "chunk")))));
+                    .executes(context -> setStartBeat(context.getSource(), com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "chunk")))));
             dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_teleport_chunk")
                 .then(net.minecraft.server.command.CommandManager.argument("chunk", com.mojang.brigadier.arguments.IntegerArgumentType.integer(1, 4096))
-                    .executes(context -> teleportToChunk(context.getSource(), com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "chunk")))));
+                    .executes(context -> teleportToBeat(context.getSource(), com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "chunk")))));
              dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_teleport_time")
                  .then(net.minecraft.server.command.CommandManager.argument("seconds", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg(0.0))
                      .executes(context -> teleportToSongTime(context.getSource(), com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "seconds")))));
@@ -429,13 +438,21 @@ public final class RhythmcMaker implements ModInitializer {
              dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_sync_formal_playback")
                  .then(net.minecraft.server.command.CommandManager.argument("songSeconds", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg())
                      .executes(context -> syncFormalPlayback(context.getSource(), com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "songSeconds")))));
-            dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_play")
+             dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_play")
                 .executes(context -> togglePlayback(context.getSource()))
-                .then(net.minecraft.server.command.CommandManager.argument("startChunk", com.mojang.brigadier.arguments.IntegerArgumentType.integer(1, 4096))
-                    .executes(context -> togglePlayback(context.getSource(), com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "startChunk")))
+                .then(net.minecraft.server.command.CommandManager.argument("startBeat", com.mojang.brigadier.arguments.IntegerArgumentType.integer(1, 4096))
+                    .executes(context -> togglePlayback(context.getSource(), com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "startBeat")))
                     .then(net.minecraft.server.command.CommandManager.argument("mode", com.mojang.brigadier.arguments.StringArgumentType.word())
                         .executes(context -> togglePlayback(context.getSource(),
-                                com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "startChunk"),
+                                com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "startBeat"),
+                                com.mojang.brigadier.arguments.StringArgumentType.getString(context, "mode"))))));
+            dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_play_beat")
+                .executes(context -> togglePlayback(context.getSource()))
+                .then(net.minecraft.server.command.CommandManager.argument("startBeat", com.mojang.brigadier.arguments.IntegerArgumentType.integer(1, 4096))
+                    .executes(context -> togglePlayback(context.getSource(), com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "startBeat")))
+                    .then(net.minecraft.server.command.CommandManager.argument("mode", com.mojang.brigadier.arguments.StringArgumentType.word())
+                        .executes(context -> togglePlayback(context.getSource(),
+                                com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "startBeat"),
                                 com.mojang.brigadier.arguments.StringArgumentType.getString(context, "mode"))))));
             dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_effect_preview_prepare")
                 .executes(context -> prepareEffectPreview(context.getSource())));
@@ -602,7 +619,7 @@ public final class RhythmcMaker implements ModInitializer {
             ACTIVE_CHARTS.put(player.getUuid(), chartId);
             CHART_CACHE_BY_WORLD.put(editor.getRegistryKey(), chart);
             ACTIVE_CHART_LANES.put(player.getUuid(), laneCount(chart));
-            SELECTED_START_CHUNKS.put(player.getUuid(), Math.max(1, Math.min(Math.max(1, chart.chunkCount), chart.selectedStartChunk)));
+            SELECTED_START_BEATS.put(player.getUuid(), Math.max(1, Math.min(Math.max(1, chart.beatCount), chart.selectedStartBeat)));
             if (!hasEditorTrack(editor, chart)) {
                 restoreEditorTrackFoundation(editor, 0, chart.trackLength, laneCount(chart));
                 extendEditorArea(editor, 0, chart.trackLength, chartBeats(source.getServer(), chartId), laneCount(chart));
@@ -620,14 +637,14 @@ public final class RhythmcMaker implements ModInitializer {
                 saveChart(source.getServer(), chart);
                 queueChartSave(source.getServer(), CHART_CACHE_BY_ID.get(chart.id));
             }
-            markSelectedStartChunk(editor, chart, selectedStartChunk(player, chart));
+            markSelectedStartBeat(editor, chart, selectedStartBeat(player, chart));
             // Queue note updates so the dimension-change packet is not delayed by a full-chart refresh.
             refreshNoteDisplays(editor, chart);
             PENDING_EDITOR_ENTRIES.put(player.getUuid(), chartId);
         } catch (IOException | RuntimeException exception) {
             ACTIVE_CHARTS.remove(player.getUuid());
             ACTIVE_CHART_LANES.remove(player.getUuid());
-            SELECTED_START_CHUNKS.remove(player.getUuid());
+            SELECTED_START_BEATS.remove(player.getUuid());
             LOGGER.error("Failed to enter Rhythmc maker chart dimension {}", chartId, exception);
             player.sendMessage(Text.literal("进入谱面制谱维度失败，请查看 latest.log"), false);
             return 0;
@@ -667,7 +684,7 @@ public final class RhythmcMaker implements ModInitializer {
                 String validationError = validateEditorEntry(server, player, chart, editor);
                 if (validationError != null) {
                     ACTIVE_CHARTS.remove(player.getUuid());
-                    SELECTED_START_CHUNKS.remove(player.getUuid());
+                    SELECTED_START_BEATS.remove(player.getUuid());
                     player.sendMessage(Text.literal("进入谱面制谱维度已取消：" + validationError), false);
                     continue;
                 }
@@ -675,7 +692,7 @@ public final class RhythmcMaker implements ModInitializer {
                 player.sendMessage(Text.literal("已进入谱面制谱维度：" + entry.getValue()), true);
             } catch (IOException | RuntimeException exception) {
                 ACTIVE_CHARTS.remove(player.getUuid());
-                SELECTED_START_CHUNKS.remove(player.getUuid());
+                SELECTED_START_BEATS.remove(player.getUuid());
                 LOGGER.error("Failed to complete Rhythmc maker chart entry {}", entry.getValue(), exception);
                 player.sendMessage(Text.literal("进入谱面制谱维度失败，请查看 latest.log"), false);
             }
@@ -696,7 +713,7 @@ public final class RhythmcMaker implements ModInitializer {
             editor.getChunk(EDITOR_SPAWN.getX() >> 4, EDITOR_SPAWN.getZ() >> 4);
             return null;
         } catch (RuntimeException exception) {
-            LOGGER.error("Rhythmc maker chart dimension {} failed chunk preflight", chart.dimensionId, exception);
+            LOGGER.error("Rhythmc maker chart dimension {} failed beat preflight", chart.dimensionId, exception);
             return "目标槽位出生区块无法加载";
         }
     }
@@ -720,7 +737,7 @@ public final class RhythmcMaker implements ModInitializer {
         }
         ACTIVE_CHARTS.remove(player.getUuid());
         ACTIVE_CHART_LANES.remove(player.getUuid());
-        SELECTED_START_CHUNKS.remove(player.getUuid());
+        SELECTED_START_BEATS.remove(player.getUuid());
         prepareHubPlayer(source.getServer(), player, hub);
         return 1;
     }
@@ -742,15 +759,15 @@ public final class RhythmcMaker implements ModInitializer {
         ServerPlayerEntity player = source.getPlayerOrThrow();
         ChartManifest chart = loadActiveChart(player, source.getServer());
         if (chart == null) return 0;
-        return updateDivisionsPerChunk(source, chart, divisionsPerChunk(chart) + delta);
+        return updateDivisionsPerBeat(source, chart, divisionsPerBeat(chart) + delta);
     }
     private static int setBeats(net.minecraft.server.command.ServerCommandSource source, int target) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayerEntity player = source.getPlayerOrThrow();
         ChartManifest chart = loadActiveChart(player, source.getServer());
         if (chart == null) return 0;
-        return updateDivisionsPerChunk(source, chart, target);
+        return updateDivisionsPerBeat(source, chart, target);
     }
-    private static int updateDivisionsPerChunk(net.minecraft.server.command.ServerCommandSource source, ChartManifest chart, int target) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+    private static int updateDivisionsPerBeat(net.minecraft.server.command.ServerCommandSource source, ChartManifest chart, int target) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         return updateEditorLayout(source, chart, target, laneCount(chart));
     }
 
@@ -764,13 +781,13 @@ public final class RhythmcMaker implements ModInitializer {
     private static int updateEditorLayout(net.minecraft.server.command.ServerCommandSource source, ChartManifest chart, int targetDivisions, int targetLaneCount) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayerEntity player = source.getPlayerOrThrow();
         if (rejectEditorTrackAdjustment(player)) return 0;
-        targetDivisions = EditorTrackLayout.boundedDivisionsPerChunk(targetDivisions);
+        targetDivisions = EditorTrackLayout.boundedDivisionsPerBeat(targetDivisions);
         if (!EditorTrackLayout.isSupportedLaneCount(targetLaneCount)) {
             player.sendMessage(Text.literal("轨道宽度必须是 1 至 " + EditorTrackLayout.MAX_LANE_COUNT + " 的奇数"), true);
             return 0;
         }
 
-        int previousDivisions = divisionsPerChunk(chart);
+        int previousDivisions = divisionsPerBeat(chart);
         int previousLaneCount = laneCount(chart);
         int previousTrackLength = Math.max(chart.trackLength, calculateTrackLength(chart));
         if (targetDivisions == previousDivisions && targetLaneCount == previousLaneCount) {
@@ -782,7 +799,7 @@ public final class RhythmcMaker implements ModInitializer {
             return 0;
         }
 
-        int previousChunk = currentChunk(player, chart, previousDivisions);
+        int previousBeat = currentBeat(player, chart, previousDivisions);
         Map<String, BlockPos> oldNotePositions = captureNotePositions(chart);
         ServerWorld editor = null;
         try { editor = source.getServer().getWorld(ChartDimensionManager.key(chart)); } catch (IOException ignored) { }
@@ -803,12 +820,12 @@ public final class RhythmcMaker implements ModInitializer {
             invalidateTrackSnapUndo(player.getUuid());
             if (editor != null) CHART_CACHE_BY_WORLD.put(editor.getRegistryKey(), chart);
             if (editor != null) {
-                EditorTrackRebuildTask rebuildTask = new EditorTrackRebuildTask(editor.getRegistryKey(), 0, previousTrackLength, chart.trackLength, targetDivisions, targetLaneCount, previousLaneCount, player.getUuid(), previousChunk);
+                EditorTrackRebuildTask rebuildTask = new EditorTrackRebuildTask(editor.getRegistryKey(), 0, previousTrackLength, chart.trackLength, targetDivisions, targetLaneCount, previousLaneCount, player.getUuid(), previousBeat);
                 EDITOR_TRACK_REBUILD_TASKS.put(editor.getRegistryKey(), rebuildTask);
                 player.sendMessage(Text.literal("正在调整制谱器轨道：0%（0/" + rebuildTask.totalWork + "）"), true);
             }
             if (editor == null) {
-                player.sendMessage(Text.literal("制谱器轨道已更新为 " + laneCount(chart) + " × " + divisionsPerChunk(chart)), true);
+                player.sendMessage(Text.literal("制谱器轨道已更新为 " + laneCount(chart) + " × " + divisionsPerBeat(chart)), true);
             }
             return 1;
         } catch (IOException exception) {
@@ -1049,7 +1066,7 @@ public final class RhythmcMaker implements ModInitializer {
     private static int chartBeats(MinecraftServer server, String id) {
         ChartManifest chart = CHART_CACHE_BY_ID.containsKey(id) ? CHART_CACHE_BY_ID.get(id).chart : null;
         if (chart == null) try { chart = cachedChart(server, id); } catch (IOException ignored) { }
-        return chart == null ? 4 : divisionsPerChunk(chart);
+        return chart == null ? 4 : divisionsPerBeat(chart);
     }
 
     private static CachedChartState cacheChart(MinecraftServer server, ChartManifest chart) {
@@ -1106,8 +1123,8 @@ public final class RhythmcMaker implements ModInitializer {
     private static int calculateTrackLength(ChartManifest chart) {
         double beats = chart.durationSeconds > 0 && chart.bpm > 0 ? ChartTiming.secondsToBeat(chart, chart.durationSeconds) : 8.0;
         chart.totalBeats = beats;
-        chart.chunkCount = Math.max(1, (int) Math.ceil(beats));
-        return Math.max(8, chart.chunkCount * divisionsPerChunk(chart));
+        chart.beatCount = Math.max(1, (int) Math.ceil(beats));
+        return Math.max(8, chart.beatCount * divisionsPerBeat(chart));
     }
 
     private static void updateChartTotalBeats(ChartManifest chart) {
@@ -1115,9 +1132,9 @@ public final class RhythmcMaker implements ModInitializer {
         chart.totalBeats = chart.notes.stream().filter(java.util.Objects::nonNull).mapToDouble(note -> note.beat).max().orElse(0.0);
     }
 
-    private static int divisionsPerChunk(ChartManifest chart) {
-        int value = chart.divisionsPerChunk > 0 ? chart.divisionsPerChunk : chart.beatsPerMeasure;
-        return Math.max(1, Math.min(32, value > 0 ? value : config.defaultDivisionsPerChunk));
+    private static int divisionsPerBeat(ChartManifest chart) {
+        int value = chart.divisionsPerBeat > 0 ? chart.divisionsPerBeat : chart.beatsPerMeasure;
+        return Math.max(1, Math.min(32, value > 0 ? value : config.defaultDivisionsPerBeat));
     }
     private static int laneCount(ChartManifest chart) {
         return chart == null ? EditorTrackLayout.DEFAULT_LANE_COUNT : EditorTrackLayout.supportedLaneCount(chart.laneCount);
@@ -1131,80 +1148,80 @@ public final class RhythmcMaker implements ModInitializer {
         int maxX = targetLaneCount / 2;
         return chart.notes != null && chart.notes.stream().anyMatch(note -> note != null && (note.x < minX || note.x > maxX));
     }
-    private static int currentChunk(ServerPlayerEntity player, ChartManifest chart, int divisions) {
+    private static int currentBeat(ServerPlayerEntity player, ChartManifest chart, int divisions) {
         double progress = Math.max(0.0, -player.getZ() - 3.0);
-        return Math.max(1, Math.min(Math.max(1, chart.chunkCount), (int) Math.floor(progress / Math.max(1, divisions)) + 1));
+        return Math.max(1, Math.min(Math.max(1, chart.beatCount), (int) Math.floor(progress / Math.max(1, divisions)) + 1));
     }
     public static RhythmcMakerConfig currentConfig() { return config; }
     public static void updateConfig(MinecraftServer server, RhythmcMakerConfig updated) throws IOException { updated.save(server); config = updated; }
-    public static int defaultDivisionsPerChunk() {
-        return config.defaultDivisionsPerChunk;
+    public static int defaultDivisionsPerBeat() {
+        return config.defaultDivisionsPerBeat;
     }
     private static long ticksForSeconds(double seconds) {
         return Math.max(1L, Math.min(1728000L, Math.round(seconds * 20.0)));
     }
-    private static int selectedStartChunk(ServerPlayerEntity player, ChartManifest chart) {
-        int maximum = Math.max(1, chart.chunkCount);
-        int selected = SELECTED_START_CHUNKS.getOrDefault(player.getUuid(), chart.selectedStartChunk);
+    private static int selectedStartBeat(ServerPlayerEntity player, ChartManifest chart) {
+        int maximum = Math.max(1, chart.beatCount);
+        int selected = SELECTED_START_BEATS.getOrDefault(player.getUuid(), chart.selectedStartBeat);
         selected = Math.max(1, Math.min(maximum, selected));
-        SELECTED_START_CHUNKS.put(player.getUuid(), selected);
+        SELECTED_START_BEATS.put(player.getUuid(), selected);
         return selected;
     }
-    private static int adjustStartChunk(net.minecraft.server.command.ServerCommandSource source, int delta) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
-        return adjustStartChunk(source.getServer(), source.getPlayerOrThrow(), delta);
+    private static int adjustStartBeat(net.minecraft.server.command.ServerCommandSource source, int delta) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        return adjustStartBeat(source.getServer(), source.getPlayerOrThrow(), delta);
     }
-    public static int adjustStartChunkFromClient(MinecraftServer server, UUID playerId, int delta) {
+    public static int adjustStartBeatFromClient(MinecraftServer server, UUID playerId, int delta) {
         ServerPlayerEntity player = server.getPlayerManager().getPlayer(playerId);
         if (player == null) return 0;
-        return adjustStartChunk(server, player, delta);
+        return adjustStartBeat(server, player, delta);
     }
-    private static int adjustStartChunk(MinecraftServer server, ServerPlayerEntity player, int delta) {
+    private static int adjustStartBeat(MinecraftServer server, ServerPlayerEntity player, int delta) {
         if (hasPlaybackSession(player.getUuid())) return 0;
         ChartManifest chart = loadActiveChart(player, server);
         if (chart == null || !(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world)) return 0;
-        int previous = selectedStartChunk(player, chart);
-        int selected = Math.max(1, Math.min(Math.max(1, chart.chunkCount), previous + delta));
+        int previous = selectedStartBeat(player, chart);
+        int selected = Math.max(1, Math.min(Math.max(1, chart.beatCount), previous + delta));
         if (selected == previous) return 1;
-        SELECTED_START_CHUNKS.put(player.getUuid(), selected);
-        chart.selectedStartChunk = selected;
+        SELECTED_START_BEATS.put(player.getUuid(), selected);
+        chart.selectedStartBeat = selected;
         try { saveChart(server, chart); } catch (IOException ignored) { return 0; }
-        restoreSelectedStartChunk(world, chart, previous);
-        markSelectedStartChunk(world, chart, selected);
-        player.sendMessage(Text.literal("播放起始 Chunk：" + selected), true);
+        restoreSelectedStartBeat(world, chart, previous);
+        markSelectedStartBeat(world, chart, selected);
+        player.sendMessage(Text.literal("播放起始 Beat：" + selected), true);
         return 1;
     }
-    private static int setStartChunk(net.minecraft.server.command.ServerCommandSource source, int requestedChunk) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+    private static int setStartBeat(net.minecraft.server.command.ServerCommandSource source, int requestedBeat) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayerEntity player = source.getPlayerOrThrow();
         if (hasPlaybackSession(player.getUuid())) return 0;
         ChartManifest chart = loadActiveChart(player, source.getServer());
         if (chart == null || !(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world)) return 0;
-        int maximum = Math.max(1, chart.chunkCount);
-        if (requestedChunk > maximum) {
+        int maximum = Math.max(1, chart.beatCount);
+        if (requestedBeat > maximum) {
             player.sendMessage(Text.literal("谱面没有这么长awa~"), true);
             return 0;
         }
-        int previous = selectedStartChunk(player, chart);
-        if (requestedChunk == previous) return 1;
-        int selectedChunk = Math.max(1, Math.min(maximum, requestedChunk));
-        SELECTED_START_CHUNKS.put(player.getUuid(), selectedChunk);
-        chart.selectedStartChunk = selectedChunk;
+        int previous = selectedStartBeat(player, chart);
+        if (requestedBeat == previous) return 1;
+        int selectedBeat = Math.max(1, Math.min(maximum, requestedBeat));
+        SELECTED_START_BEATS.put(player.getUuid(), selectedBeat);
+        chart.selectedStartBeat = selectedBeat;
         try { saveChart(source.getServer(), chart); } catch (IOException ignored) { return 0; }
-        restoreSelectedStartChunk(world, chart, previous);
-        markSelectedStartChunk(world, chart, selectedChunk);
-        player.sendMessage(Text.literal("播放起始 Chunk：" + selectedChunk), true);
+        restoreSelectedStartBeat(world, chart, previous);
+        markSelectedStartBeat(world, chart, selectedBeat);
+        player.sendMessage(Text.literal("播放起始 Beat：" + selectedBeat), true);
         return 1;
     }
-    private static int teleportToChunk(net.minecraft.server.command.ServerCommandSource source, int requestedChunk) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+    private static int teleportToBeat(net.minecraft.server.command.ServerCommandSource source, int requestedBeat) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayerEntity player = source.getPlayerOrThrow();
         ChartManifest chart = loadActiveChart(player, source.getServer());
         if (chart == null || !(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world)) return 0;
-        if (requestedChunk > Math.max(1, chart.chunkCount)) {
+        if (requestedBeat > Math.max(1, chart.beatCount)) {
             player.sendMessage(Text.literal("谱面没有这么长awa~"), true);
             return 0;
         }
-        double targetZ = PlaybackCoordinates.editorWorldZAtBeat(chart, requestedChunk - 1.0);
+        double targetZ = PlaybackCoordinates.editorWorldZAtBeat(chart, requestedBeat - 1.0);
         player.teleport(world, player.getX(), player.getY(), targetZ, Set.of(), player.getYaw(), player.getPitch(), false);
-        player.sendMessage(Text.literal("已传送至 Chunk " + requestedChunk), true);
+        player.sendMessage(Text.literal("已传送至 Beat " + requestedBeat), true);
         return 1;
     }
     private static int teleportToSongTime(net.minecraft.server.command.ServerCommandSource source, double requestedSeconds) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
@@ -1706,14 +1723,14 @@ public final class RhythmcMaker implements ModInitializer {
     }    private static double totalChartSeconds(ChartManifest chart) {
         if (chart.durationSeconds > 0.0 && Double.isFinite(chart.durationSeconds)) return chart.durationSeconds;
         if (chart.totalBeats > 0.0 && chart.bpm > 0.0) return cn.frkovo.rhythmcmaker.chart.ChartTiming.beatToSeconds(chart, chart.totalBeats);
-        return Math.max(1, chart.chunkCount) * 60.0 / Math.max(1.0, chart.bpm);
+        return Math.max(1, chart.beatCount) * 60.0 / Math.max(1.0, chart.bpm);
     }
-    private static void restoreSelectedStartChunk(ServerWorld world, ChartManifest chart, int selectedChunk) {
-        clearSelectedStartChunkColumn(world, chart, selectedChunk);
+    private static void restoreSelectedStartBeat(ServerWorld world, ChartManifest chart, int selectedBeat) {
+        clearSelectedStartBeatColumn(world, chart, selectedBeat);
     }
-    private static void markSelectedStartChunk(ServerWorld world, ChartManifest chart, int selectedChunk) {
-        clearSelectedStartChunkColumn(world, chart, selectedChunk);
-        int z = (int) Math.floor(PlaybackCoordinates.editorWorldZAtBeat(chart, Math.max(0, selectedChunk - 1.0)));
+    private static void markSelectedStartBeat(ServerWorld world, ChartManifest chart, int selectedBeat) {
+        clearSelectedStartBeatColumn(world, chart, selectedBeat);
+        int z = (int) Math.floor(PlaybackCoordinates.editorWorldZAtBeat(chart, Math.max(0, selectedBeat - 1.0)));
         int left = laneWallLeftX(chart);
         int right = laneWallRightX(chart);
         for (int x = left; x <= right; x++) for (int y = 64; y <= 68; y++) {
@@ -1723,14 +1740,14 @@ public final class RhythmcMaker implements ModInitializer {
             if (!isNoteBlock(state.getBlock())) world.setBlockState(pos, Blocks.LIME_CONCRETE.getDefaultState(), 3);
         }
     }
-    private static void clearSelectedStartChunkColumn(ServerWorld world, ChartManifest chart, int selectedChunk) {
-        int z = (int) Math.floor(PlaybackCoordinates.editorWorldZAtBeat(chart, Math.max(0, selectedChunk - 1.0)));
+    private static void clearSelectedStartBeatColumn(ServerWorld world, ChartManifest chart, int selectedBeat) {
+        int z = (int) Math.floor(PlaybackCoordinates.editorWorldZAtBeat(chart, Math.max(0, selectedBeat - 1.0)));
         for (int x = laneWallLeftX(chart); x <= laneWallRightX(chart); x++) for (int y = 64; y <= 68; y++) {
             BlockPos pos = new BlockPos(x, y, z);
             if (world.getBlockState(pos).isOf(Blocks.LIME_CONCRETE)) world.setBlockState(pos, Blocks.RED_CONCRETE.getDefaultState(), 3);
         }
     }
-    private static void clearSelectedStartChunkMarkers(ServerWorld world, ChartManifest chart) {
+    private static void clearSelectedStartBeatMarkers(ServerWorld world, ChartManifest chart) {
         int length = Math.max(Math.max(1, chart.trackLength), calculateTrackLength(chart));
         for (int slot = 0; slot <= length; slot++) {
             int z = (int) Math.floor(PlaybackCoordinates.editorWorldZAtBeat(chart, slot));
@@ -2168,8 +2185,8 @@ private static void showSceneBoundary(MinecraftServer server) {
         return 1;
     }
     private static int togglePlayback(net.minecraft.server.command.ServerCommandSource source) throws com.mojang.brigadier.exceptions.CommandSyntaxException { return togglePlayback(source, -1, "formal"); }
-    private static int togglePlayback(net.minecraft.server.command.ServerCommandSource source, int requestedStartChunk) throws com.mojang.brigadier.exceptions.CommandSyntaxException { return togglePlayback(source, requestedStartChunk, "formal"); }
-    private static int togglePlayback(net.minecraft.server.command.ServerCommandSource source, int requestedStartChunk, String requestedMode) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+    private static int togglePlayback(net.minecraft.server.command.ServerCommandSource source, int requestedStartBeat) throws com.mojang.brigadier.exceptions.CommandSyntaxException { return togglePlayback(source, requestedStartBeat, "formal"); }
+    private static int togglePlayback(net.minecraft.server.command.ServerCommandSource source, int requestedStartBeat, String requestedMode) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayerEntity player = source.getPlayerOrThrow();
         if (ACTIVE_SCENE_EDITORS.containsKey(player.getUuid())) {
             player.sendMessage(Text.literal("场景搭建期间不能播放谱面"), true);
@@ -2183,8 +2200,8 @@ private static void showSceneBoundary(MinecraftServer server) {
         if (chart == null || !(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world) || chart.bpm <= 0) return 0;
         cleanupPlaybackDisplayEntities(world, player.getUuid(), chart.id);
         ensurePlaybackChunksLoaded(world);
-        int startChunk = requestedStartChunk > 0 ? Math.max(1, Math.min(Math.max(1, chart.chunkCount), requestedStartChunk)) : selectedStartChunk(player, chart);
-        double startBeat = PlaybackCoordinates.beatAtChunkStart(startChunk);
+        int startBeatIndex = requestedStartBeat > 0 ? Math.max(1, Math.min(Math.max(1, chart.beatCount), requestedStartBeat)) : selectedStartBeat(player, chart);
+        double startBeat = PlaybackCoordinates.beatAtIndex(startBeatIndex);
         String mode = "scroll".equalsIgnoreCase(requestedMode) ? "scroll" : "formal";
         double rate = playbackPitchRate();
         double startSeconds = PlaybackCoordinates.songTimeAtBeat(chart, ChartTiming.prepare(chart), startBeat);
@@ -2200,7 +2217,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             PLAYBACK_SESSIONS.put(player.getUuid(), session);
             player.teleport(world, PLAYBACK_PLATFORM_X + 0.5, PLAYBACK_PLATFORM_Y + 1.0, PLAYBACK_PLATFORM_Z + 0.5, Set.of(), 180.0f, 0.0f, false);
         }
-        player.sendMessage(Text.literal("开始" + ("scroll".equals(mode) ? "滚动" : "正式") + "播放：Chunk " + startChunk + "，" + rate + "x"), true);
+        player.sendMessage(Text.literal("开始" + ("scroll".equals(mode) ? "滚动" : "正式") + "播放：Beat " + startBeatIndex + "，" + rate + "x"), true);
         return 1;
     }
     private static int prepareEffectPreview(net.minecraft.server.command.ServerCommandSource source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
@@ -4018,7 +4035,7 @@ private static void showSceneBoundary(MinecraftServer server) {
 
     private static void extendEditorArea(ServerWorld world, int x, int length, int divisions, int laneCount) {
         int totalBeats = Math.max(8, length);
-        divisions = EditorTrackLayout.boundedDivisionsPerChunk(divisions);
+        divisions = EditorTrackLayout.boundedDivisionsPerBeat(divisions);
         laneCount = EditorTrackLayout.supportedLaneCount(laneCount);
         final int targetDivisions = divisions;
         final int targetLaneCount = laneCount;
@@ -4051,7 +4068,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             }
             if (task.cursor >= task.totalBeats) {
                 buildEditorTrackEndBarrier(world, task.x, task.totalBeats, task.laneCount);
-                markPendingStartChunk(server, world);
+                markPendingStartBeat(server, world);
                 EDITOR_AREA_TASKS.remove(entry.getKey(), task);
             }
         }
@@ -4098,7 +4115,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 try { chart = cachedChart(server, ACTIVE_CHARTS.get(task.playerId)); } catch (IOException ignored) { }
                 if (chart != null) {
                     CHART_CACHE_BY_WORLD.put(world.getRegistryKey(), chart);
-                    markSelectedStartChunk(world, chart, chart.selectedStartChunk);
+                    markSelectedStartBeat(world, chart, chart.selectedStartBeat);
                     refreshNoteDisplays(world, chart, task.oldLength, task.previousLaneCount);
                 }
                 task.displaysScheduled = true;
@@ -4160,11 +4177,11 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
     }
 
-    private static void markPendingStartChunk(MinecraftServer server, ServerWorld world) {
+    private static void markPendingStartBeat(MinecraftServer server, ServerWorld world) {
         for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
             if (player.getEntityWorld() != world) continue;
             ChartManifest chart = loadActiveChart(player, server);
-            if (chart != null) markSelectedStartChunk(world, chart, selectedStartChunk(player, chart));
+            if (chart != null) markSelectedStartBeat(world, chart, selectedStartBeat(player, chart));
         }
     }
 
@@ -4266,7 +4283,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final int laneCount;
         private final int previousLaneCount;
         private final UUID playerId;
-        private final int previousChunk;
+        private final int previousBeat;
         private int cursor;
         private int clearCursor;
         private final int totalWork;
@@ -4274,16 +4291,16 @@ private static void showSceneBoundary(MinecraftServer server) {
         private boolean foundationReady;
         private boolean displaysScheduled;
         private EditorTrackRebuildTask(RegistryKey<World> worldKey, int x, int oldLength, int newLength,
-                                       int divisions, int laneCount, int previousLaneCount, UUID playerId, int previousChunk) {
+                                       int divisions, int laneCount, int previousLaneCount, UUID playerId, int previousBeat) {
             this.worldKey = worldKey;
             this.x = x;
             this.oldLength = Math.max(0, oldLength);
             this.newLength = Math.max(8, newLength);
-            this.divisions = EditorTrackLayout.boundedDivisionsPerChunk(divisions);
+            this.divisions = EditorTrackLayout.boundedDivisionsPerBeat(divisions);
             this.laneCount = EditorTrackLayout.supportedLaneCount(laneCount);
             this.previousLaneCount = EditorTrackLayout.isSupportedLaneCount(previousLaneCount) ? previousLaneCount : this.laneCount;
             this.playerId = playerId;
-            this.previousChunk = Math.max(1, previousChunk);
+            this.previousBeat = Math.max(1, previousBeat);
             this.totalWork = this.newLength + Math.max(0, this.oldLength - this.newLength);
         }
     }

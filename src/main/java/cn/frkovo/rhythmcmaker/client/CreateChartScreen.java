@@ -49,7 +49,7 @@ final class CreateChartScreen extends RhythmcScreen {
 
     private static ChartManifest newDraft() {
         ChartManifest draft = new ChartManifest();
-        draft.divisionsPerChunk = ClientChartAccess.defaultDivisionsPerChunk();
+        draft.divisionsPerBeat = ClientChartAccess.defaultDivisionsPerBeat();
         draft.id = UUID.randomUUID().toString();
         draft.title = "";
         draft.artist = "";
@@ -71,17 +71,17 @@ final class CreateChartScreen extends RhythmcScreen {
         copy.sceneInitialized = source.sceneInitialized;
         copy.difficulty = source.difficulty;
         copy.level = source.level;
-        copy.divisionsPerChunk = source.divisionsPerChunk;
+        copy.divisionsPerBeat = source.divisionsPerBeat;
         copy.beatsPerMeasure = source.beatsPerMeasure;
         copy.coverItemId = source.coverItemId;
         copy.audioFile = source.audioFile;
         copy.lastEdited = source.lastEdited;
         copy.durationSeconds = source.durationSeconds;
         copy.totalBeats = source.totalBeats;
-        copy.chunkCount = source.chunkCount;
+        copy.beatCount = source.beatCount;
         copy.trackLength = source.trackLength;
         copy.dimensionId = null;
-        copy.selectedStartChunk = source.selectedStartChunk;
+        copy.selectedStartBeat = source.selectedStartBeat;
         copy.notes = new java.util.ArrayList<>(source.notes);
         return copy;
     }

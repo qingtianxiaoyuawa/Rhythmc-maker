@@ -73,14 +73,14 @@ public final class ChartStorage {
         chart.coverItemId = coverItemId("minecraft:note_block");
         chart.difficulty = difficulty;
         chart.bpm = 1200.0;
-        chart.divisionsPerChunk = RhythmcMaker.defaultDivisionsPerChunk();
+        chart.divisionsPerBeat = RhythmcMaker.defaultDivisionsPerBeat();
         chart.bpms.add(new ChartManifest.BpmEvent(0, chart.bpm));
         chart.offsetMillis = Math.round(jsonNumber(meta, "offset", 0).doubleValue() * 50.0);
         chart.level = level;
         if (meta.has("initial-arena") && meta.get("initial-arena").isJsonPrimitive()) chart.initialArena = meta.get("initial-arena").getAsString();
         List<String> arenaNames = new ArrayList<>();
         if (chart.initialArena != null && !chart.initialArena.isBlank()) arenaNames.add(chart.initialArena);
-        JsonObject root = convertRhythmc2ToRhythmc3(legacyRoot, chart.charter, chart.level, chart.offsetMillis, chart.initialArena, chart.divisionsPerChunk);
+        JsonObject root = convertRhythmc2ToRhythmc3(legacyRoot, chart.charter, chart.level, chart.offsetMillis, chart.initialArena, chart.divisionsPerBeat);
         importRhythmc3Document(server, chart, root, stagedAudio);
         if (chart.effects != null) for (JsonObject effect : chart.effects) {
             if (effect == null) continue;
@@ -202,8 +202,8 @@ public final class ChartStorage {
         }
         Path siblingLayoutFile = difficultyFile.resolveSibling(EditorTrackLayoutFile.FILE_NAME);
         if (Files.isRegularFile(siblingLayoutFile)) return EditorTrackLayoutFile.read(siblingLayoutFile);
-        int divisionsPerChunk = jsonNumber(meta, "divisionsPerChunk", jsonNumber(meta, "beatsPerChunk", jsonNumber(meta, "divisions", RhythmcMaker.defaultDivisionsPerChunk()))).intValue();
-        return EditorTrackLayout.of(EditorTrackLayout.DEFAULT_LANE_COUNT, divisionsPerChunk);
+        int divisionsPerBeat = jsonNumber(meta, "divisionsPerBeat", jsonNumber(meta, "divisionsPerChunk", jsonNumber(meta, "beatsPerChunk", jsonNumber(meta, "divisions", RhythmcMaker.defaultDivisionsPerBeat())))).intValue();
+        return EditorTrackLayout.of(EditorTrackLayout.DEFAULT_LANE_COUNT, divisionsPerBeat);
     }
     private static void importRhythmc3Track(ChartManifest chart, ChartTiming.Prepared timing, JsonObject source) {
         ChartManifest.Track track = new ChartManifest.Track(jsonNumber(source, "id", 0).intValue());
@@ -238,12 +238,12 @@ public final class ChartStorage {
         for (JsonElement element : source.getAsJsonArray(key)) if (element.isJsonObject()) { JsonObject event = element.getAsJsonObject(); double start = jsonNumber(event, "startBeat", 0).doubleValue(), end = jsonNumber(event, "endBeat", start).doubleValue(), startValue = jsonNumber(event, "startValue", 0).doubleValue(), endValue = jsonNumber(event, "endValue", startValue).doubleValue(); if (Double.isFinite(start) && Double.isFinite(end) && Double.isFinite(startValue) && Double.isFinite(endValue)) result.add(new ChartManifest.NumEvent(start, end, startValue, endValue, jsonNumber(event, "easingType", jsonNumber(event, "easing", 0)).intValue())); }
         return result;
     }
-    private static JsonObject convertRhythmc2ToRhythmc3(JsonObject legacyRoot, String charter, double level, long offsetMillis, String initialArena, int divisionsPerChunk) {
+    private static JsonObject convertRhythmc2ToRhythmc3(JsonObject legacyRoot, String charter, double level, long offsetMillis, String initialArena, int divisionsPerBeat) {
         JsonObject root = new JsonObject();
         JsonObject meta = new JsonObject();
         JsonArray charters = new JsonArray(); charters.add(charter == null || charter.isBlank() ? "Unknown" : charter); meta.add("charters", charters);
         meta.addProperty("level", level); meta.addProperty("offset", offsetMillis); meta.addProperty("flow-speed", 1.0);
-        meta.addProperty("initialArena", initialArena == null ? "" : initialArena); meta.addProperty("divisionsPerChunk", divisionsPerChunk);
+        meta.addProperty("initialArena", initialArena == null ? "" : initialArena); meta.addProperty("divisionsPerBeat", divisionsPerBeat);
         JsonArray bpms = new JsonArray(); JsonObject bpm = new JsonObject(); bpm.addProperty("beat", 0.0); bpm.addProperty("bpm", 1200.0); bpms.add(bpm); meta.add("bpms", bpms); root.add("meta", meta);
         JsonObject track = new JsonObject(); track.addProperty("id", 0);
         for (TrackEventChannel channel : TrackEventChannel.values()) track.add(channel.jsonKey(), new JsonArray());
@@ -272,7 +272,7 @@ public final class ChartStorage {
         track.add("notes", notes); JsonArray tracks = new JsonArray(); tracks.add(track); root.add("tracks", tracks);
         JsonArray effects = new JsonArray();
         if (legacyRoot.has("effects") && legacyRoot.get("effects").isJsonArray()) for (JsonElement effect : legacyRoot.getAsJsonArray("effects")) if (effect.isJsonObject()) {
-            JsonObject converted = convertRhythmc2Effect(effect.getAsJsonObject(), 1200.0, divisionsPerChunk); if (converted != null) effects.add(converted);
+            JsonObject converted = convertRhythmc2Effect(effect.getAsJsonObject(), 1200.0, divisionsPerBeat); if (converted != null) effects.add(converted);
         }
         root.add("effects", effects); return root;
     }
@@ -533,8 +533,8 @@ public final class ChartStorage {
     private static int calculateImportedTrackLength(ChartManifest chart) {
         double beats = chart.durationSeconds > 0 && chart.bpm > 0 ? ChartTiming.secondsToBeat(chart, chart.durationSeconds) : 8.0;
         chart.totalBeats = beats;
-        chart.chunkCount = Math.max(1, (int) Math.ceil(beats));
-        return Math.max(8, chart.chunkCount * Math.max(1, Math.min(32, chart.divisionsPerChunk)));
+        chart.beatCount = Math.max(1, (int) Math.ceil(beats));
+        return Math.max(8, chart.beatCount * Math.max(1, Math.min(32, chart.divisionsPerBeat)));
     }
 
     private static void ensureDefaultTrackSpeed(ChartManifest chart) {
@@ -583,7 +583,7 @@ public final class ChartStorage {
         if (chart.difficulty == null || chart.difficulty.isBlank()) throw new IOException("必须选择难度");
         if (chart.bpm <= 0) throw new IOException("BPM 必须大于 0");
         if (chart.level < 0) throw new IOException("定数不能小于 0");
-        if (chart.divisionsPerChunk <= 0) chart.divisionsPerChunk = RhythmcMaker.defaultDivisionsPerChunk();
+        if (chart.divisionsPerBeat <= 0) chart.divisionsPerBeat = RhythmcMaker.defaultDivisionsPerBeat();
         EditorTrackLayout.of(chart).applyTo(chart);
         if (stagedAudio == null || !Files.exists(stagedAudio)) throw new IOException("必须上传歌曲文件");
 
@@ -790,7 +790,26 @@ public final class ChartStorage {
     }
 
     private static ChartManifest parseManifest(Path path) throws IOException {
-        return GSON.fromJson(Files.readString(path, StandardCharsets.UTF_8), CHART_TYPE);
+        JsonObject root = JsonParser.parseString(Files.readString(path, StandardCharsets.UTF_8)).getAsJsonObject();
+        migrateBeatFields(root);
+        return GSON.fromJson(root, CHART_TYPE);
+    }
+
+    private static void migrateBeatFields(JsonObject root) {
+        migrateIntegerField(root, "divisionsPerBeat", "divisionsPerChunk");
+        migrateIntegerField(root, "beatCount", "chunkCount");
+        migrateIntegerField(root, "selectedStartBeat", "selectedStartChunk");
+        if (root.has("meta") && root.get("meta").isJsonObject()) migrateBeatFields(root.getAsJsonObject("meta"));
+        if (root.has("charts") && root.get("charts").isJsonArray()) {
+            for (com.google.gson.JsonElement chart : root.getAsJsonArray("charts")) {
+                if (chart.isJsonObject()) migrateBeatFields(chart.getAsJsonObject());
+            }
+        }
+    }
+
+    private static void migrateIntegerField(JsonObject root, String currentField, String legacyField) {
+        if (!root.has(currentField) && root.has(legacyField)) root.add(currentField, root.get(legacyField).deepCopy());
+        root.remove(legacyField);
     }
 
     private static Path backupPath(Path path) {

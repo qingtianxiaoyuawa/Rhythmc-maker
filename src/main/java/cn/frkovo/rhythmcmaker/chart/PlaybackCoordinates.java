@@ -24,8 +24,8 @@ public final class PlaybackCoordinates {
         return timing.beatToSeconds(beat) + chart.offsetMillis / 1000.0;
     }
 
-    public static double beatAtChunkStart(int chunk) {
-        return Math.max(0.0, chunk - 1.0);
+    public static double beatAtIndex(int beatIndex) {
+        return Math.max(0.0, beatIndex - 1.0);
     }
 
     public static double distanceAtBeat(ChartManifest chart, TrackPlayback.Prepared track, double beat, double playerSpeed) {
@@ -40,7 +40,7 @@ public final class PlaybackCoordinates {
     public static double beatAtWorldZ(ChartManifest chart, TrackPlayback.Prepared track, double worldZ, double playerSpeed) {
         double targetDistance = Math.max(0.0, CHART_ORIGIN_Z - worldZ);
         double factor = normalizedPlayerSpeed(playerSpeed) * PLAYBACK_FLOW_MULTIPLIER;
-        double high = Math.max(1.0, chart == null ? 1.0 : Math.max(chart.totalBeats, chart.chunkCount * 32.0) + 1.0);
+        double high = Math.max(1.0, chart == null ? 1.0 : Math.max(chart.totalBeats, chart.beatCount * 32.0) + 1.0);
         while (track.distanceAt(high) * factor < targetDistance && high < 1_000_000.0) high *= 2.0;
         double low = 0.0;
         for (int iteration = 0; iteration < 64; iteration++) {
@@ -54,7 +54,7 @@ public final class PlaybackCoordinates {
     }
 
     public static double editorWorldZAtBeat(ChartManifest chart, double beat) {
-        double divisions = chart == null ? 1.0 : Math.max(1, Math.min(32, chart.divisionsPerChunk));
+        double divisions = chart == null ? 1.0 : Math.max(1, Math.min(32, chart.divisionsPerBeat));
         return CHART_ORIGIN_Z - Math.max(0.0, beat) * divisions;
     }
 
@@ -64,13 +64,13 @@ public final class PlaybackCoordinates {
     }
 
     public static double editorBeatAtBlockZ(ChartManifest chart, double blockZ) {
-        double divisions = divisionsPerChunk(chart);
+        double divisions = divisionsPerBeat(chart);
         double blockCenterZ = blockZ + 0.5;
         return Math.max(0.0, (CHART_ORIGIN_Z - blockCenterZ) / divisions);
     }
 
-    private static double divisionsPerChunk(ChartManifest chart) {
-        return chart == null ? 1.0 : Math.max(1, Math.min(32, chart.divisionsPerChunk));
+    private static double divisionsPerBeat(ChartManifest chart) {
+        return chart == null ? 1.0 : Math.max(1, Math.min(32, chart.divisionsPerBeat));
     }
 
     private static double normalizedPlayerSpeed(double playerSpeed) {

@@ -173,7 +173,7 @@ public final class EffectEditorImGuiView {
         this.divisionsAction = divisionsAction;
         this.pitchAction = pitchAction;
         pitchPercentField.set(RhythmcMakerClient.getPlaybackPitchPercent());
-        divisionsField.set(chart == null ? 1 : chart.divisionsPerChunk);
+        divisionsField.set(chart == null ? 1 : chart.divisionsPerBeat);
         this.layoutModel = new EffectTrackLayoutModel(chart == null ? null : chart.effectEditorLayout);
         if (chart != null && chart.effects != null) {
             for (JsonObject effect : chart.effects) {
@@ -486,13 +486,13 @@ public final class EffectEditorImGuiView {
             return;
         }
         ImGui.textColored(0xFF66CCFF, "特效库");
-        if (ImGui.inputInt("每 Chunk 分数", divisionsField, 1, 1, imgui.flag.ImGuiInputTextFlags.EnterReturnsTrue)) {
+        if (ImGui.inputInt("每 Beat 分数", divisionsField, 1, 1, imgui.flag.ImGuiInputTextFlags.EnterReturnsTrue)) {
             int divisions = divisionsField.get();
-            if (divisions >= 1 && divisions <= 32 && divisions != chart.divisionsPerChunk) {
+            if (divisions >= 1 && divisions <= 32 && divisions != chart.divisionsPerBeat) {
                 rememberForUndo();
                 divisionsAction.accept(divisions);
             }
-            else divisionsField.set(chart.divisionsPerChunk);
+            else divisionsField.set(chart.divisionsPerBeat);
         }
         ImGui.textWrapped(status);
         ImGui.separator();
@@ -525,7 +525,7 @@ public final class EffectEditorImGuiView {
     public void setInputLocked(boolean locked, String message) {
         inputLocked = locked;
         status = message;
-        if (!locked) divisionsField.set(chart.divisionsPerChunk);
+        if (!locked) divisionsField.set(chart.divisionsPerBeat);
         timelineDraggedEvent = -1;
         timelineDraggingRange = false;
         timelineDraggingScrollBar = false;
@@ -575,7 +575,7 @@ public final class EffectEditorImGuiView {
         EffectAnimationEvaluator.evaluate(event, RhythmcMakerClient.effectEditorCurrentBeat()).ifPresent(sample -> {
             if (!sample.values().isEmpty()) {
                 ImGui.separator();
-                ImGui.text("动画采样 " + formatChunkPosition(sample.beat()));
+                ImGui.text("动画采样 " + formatBeatPosition(sample.beat()));
                 for (var value : sample.values()) ImGui.textDisabled(displayText(value.channelName()) + "：" + displayText(value.value().toJson()));
             }
         });
@@ -600,7 +600,7 @@ public final class EffectEditorImGuiView {
         if (RhythmcMakerClient.isEffectEditorPreviewPrepared()) {
             playhead[0] = (float) Math.max(0.0, Math.min(maxBeat, RhythmcMakerClient.effectEditorCurrentBeat()));
         }
-        String positionText = formatChunkPosition(playhead[0]);
+        String positionText = formatBeatPosition(playhead[0]);
         ImGui.text(positionText);
 
         float canvasWidth = Math.max(1.0f, ImGui.getContentRegionAvailX());
@@ -758,10 +758,10 @@ public final class EffectEditorImGuiView {
     private void moveTimelinePlayhead(int direction, boolean fast) {
         double currentBeat = RhythmcMakerClient.isEffectEditorPlaybackRequested()
                 ? RhythmcMakerClient.effectEditorCurrentBeat() : playhead[0];
-        double normalStep = 1.0 / Math.max(1, chart == null ? 1 : chart.divisionsPerChunk);
-        double divisionsPerChunk = chart == null ? normalStep : Math.max(1.0, Math.min(32.0, chart.divisionsPerChunk));
-        double chunkStep = 1.0;
-        seekTimelineBeat(currentBeat + direction * (fast ? chunkStep : normalStep), timelineMaxBeat());
+        double normalStep = 1.0 / Math.max(1, chart == null ? 1 : chart.divisionsPerBeat);
+        double divisionsPerBeat = chart == null ? normalStep : Math.max(1.0, Math.min(32.0, chart.divisionsPerBeat));
+        double beatStep = 1.0;
+        seekTimelineBeat(currentBeat + direction * (fast ? beatStep : normalStep), timelineMaxBeat());
     }
 
     /** Returns the current ImGui preview window rectangle used for mouse camera controls. */
@@ -810,7 +810,7 @@ public final class EffectEditorImGuiView {
         drawList.addLine(timelineLeft, top, timelineLeft, rowsBottom, 0xFF4D5968, 1.0f);
         drawList.addLine(left, rowsTop, timelineRight, rowsTop, 0xFF4D5968, 1.0f);
 
-        double gridStep = 1.0 / chart.divisionsPerChunk;
+        double gridStep = 1.0 / chart.divisionsPerBeat;
         double majorStep = Math.max(gridStep, Math.ceil(timelineMajorStep(visibleBeatSpan, timelineWidth) / gridStep) * gridStep);
         double minorStep = Math.max(gridStep, Math.ceil(majorStep / 4.0 / gridStep) * gridStep);
         double firstMinor = Math.floor(minBeat / minorStep) * minorStep;
@@ -821,7 +821,7 @@ public final class EffectEditorImGuiView {
             int colour = major ? 0xFF536071 : 0xFF2B333F;
             drawList.addLine(markerX, top, markerX, rowsBottom, colour, major ? 1.0f : 0.5f);
             if (major && markerX >= timelineLeft - 40.0f && markerX <= timelineRight + 4.0f) {
-                String label = formatChunkPosition(beat);
+                String label = formatBeatPosition(beat);
                 drawList.addText(markerX + 4.0f, top + 7.0f, 0xFFD5DCE5, label);
             }
         }
@@ -919,7 +919,7 @@ public final class EffectEditorImGuiView {
                     && !rows.get(rowIndex).groupHeader()) {
                 contextTrackId = rows.get(rowIndex).groupLabel();
                 contextBeat = Math.max(0.0, Math.round(timelineXToBeat(mouseX, timelineLeft, timelineWidth, minBeat, maxVisibleBeat)
-                        * chart.divisionsPerChunk) / (double) chart.divisionsPerChunk);
+                        * chart.divisionsPerBeat) / (double) chart.divisionsPerBeat);
                 if (mouseX < timelineLeft) {
                     ImGui.openPopup("轨道操作##track-context");
                 } else {
@@ -937,8 +937,8 @@ public final class EffectEditorImGuiView {
         if (hovered && Math.abs(io.getMouseWheel()) > 0.001f) {
             float wheel = io.getMouseWheel();
             if (isAltPressed()) {
-                int chunks = Math.max(1, Math.round(Math.abs(wheel)));
-                moveTimelinePlayhead(wheel > 0.0f ? -chunks : chunks, true);
+                int beatSteps = Math.max(1, Math.round(Math.abs(wheel)));
+                moveTimelinePlayhead(wheel > 0.0f ? -beatSteps : beatSteps, true);
             } else if (isControlPressed()) {
                 if (contentHovered) zoomTimelineAt(mouseX, timelineLeft, timelineWidth, wheel);
             } else {
@@ -1002,7 +1002,7 @@ public final class EffectEditorImGuiView {
             if (timelineDragSnapshot == null) beginTimelineDrag();
             double target = minBeat + (mouseX - timelineLeft) / Math.max(1.0f, timelineWidth)
                     * (maxVisibleBeat - minBeat) + timelineDragBeatOffset;
-            int denominator = Math.max(1, Math.min(32, chart.divisionsPerChunk));
+            int denominator = Math.max(1, Math.min(32, chart.divisionsPerBeat));
             target = Math.round(target * denominator) / (double) denominator;
             if (timelineDraggedChannel < 0) {
                 previewEventDrag(target, denominator, mouseY, rowsTop, footerTop);
@@ -1235,7 +1235,7 @@ public final class EffectEditorImGuiView {
     }
 
     private double minimumZoomSpan() {
-        return Math.min(1.0, 1.0 / (Math.max(1, chart.divisionsPerChunk) * timelineMaxBeat()));
+        return Math.min(1.0, 1.0 / (Math.max(1, chart.divisionsPerBeat) * timelineMaxBeat()));
     }
 
     private List<TimelineRow> buildTimelineRows() {
@@ -1322,7 +1322,7 @@ public final class EffectEditorImGuiView {
         if (marker.kind() == TimelineMarkerKind.EVENT) {
             event.addProperty("beat", beat);
             layoutModel.move(marker.eventIndex(), eventType(event), beat);
-            layoutModel.position(marker.eventIndex()).denominator = Math.max(1, Math.min(32, chart.divisionsPerChunk));
+            layoutModel.position(marker.eventIndex()).denominator = Math.max(1, Math.min(32, chart.divisionsPerBeat));
             if (marker.eventIndex() == selectedIndex) beatField.set(beat);
         } else if (event.has("animation") && event.get("animation").isJsonObject()) {
             JsonObject animation = event.getAsJsonObject("animation");
@@ -1339,14 +1339,14 @@ public final class EffectEditorImGuiView {
             if (!keyframeElement.isJsonObject()) return;
             keyframeElement.getAsJsonObject().addProperty("beat", beat);
             keyframePosition(marker).beat = beat;
-            keyframePosition(marker).denominator = Math.max(1, Math.min(32, chart.divisionsPerChunk));
+            keyframePosition(marker).denominator = Math.max(1, Math.min(32, chart.divisionsPerBeat));
         }
         dirty = true;
         cachedTimelineRows = null;
     }
 
     private double snapPosition(double beat) {
-        int denominator = Math.max(1, Math.min(32, chart.divisionsPerChunk));
+        int denominator = Math.max(1, Math.min(32, chart.divisionsPerBeat));
         return Math.max(0.0, Math.round(beat * denominator) / (double) denominator);
     }
 
@@ -1358,7 +1358,7 @@ public final class EffectEditorImGuiView {
             seekAction.accept(target);
             timelineLastSeekBeat = target;
         }
-        status = "播放头已跳转到 " + formatChunkPosition(target);
+        status = "播放头已跳转到 " + formatBeatPosition(target);
     }
 
     private void selectMarkersInRectangle(List<TimelineHit> hits) {
@@ -1537,7 +1537,7 @@ public final class EffectEditorImGuiView {
                 .createDefaults(definition.eventType(), workingEffects);
         event.add("properties", properties);
         workingEffects.add(event);
-        layoutModel.addEvent(definition.eventType(), eventBeat(event), chart.divisionsPerChunk, contextTrackId);
+        layoutModel.addEvent(definition.eventType(), eventBeat(event), chart.divisionsPerBeat, contextTrackId);
         dirty = true;
         cachedTimelineRows = null;
         select(workingEffects.size() - 1);
@@ -1553,7 +1553,7 @@ public final class EffectEditorImGuiView {
         channel.addProperty("interpolation", "CONTINUOUS");
         JsonArray keyframes = new JsonArray();
         JsonObject keyframe = new JsonObject();
-        keyframe.addProperty("beat", Math.max(0.0, Math.round(playhead[0] * chart.divisionsPerChunk) / (double) chart.divisionsPerChunk));
+        keyframe.addProperty("beat", Math.max(0.0, Math.round(playhead[0] * chart.divisionsPerBeat) / (double) chart.divisionsPerBeat));
         keyframe.addProperty("value", 1.0);
         keyframe.addProperty("easing", 0);
         keyframes.add(keyframe);
@@ -1562,7 +1562,7 @@ public final class EffectEditorImGuiView {
         animation.add("channels", channels);
         event.add("animation", animation);
         keyframePositions.add(new EffectEditorLayout.KeyframePosition(selectedIndex, channels.size() - 1, 0,
-                keyframe.get("beat").getAsDouble(), chart.divisionsPerChunk));
+                keyframe.get("beat").getAsDouble(), chart.divisionsPerBeat));
         dirty = true;
         cachedTimelineRows = null;
         status = "已新增关键帧";
@@ -1794,12 +1794,12 @@ public final class EffectEditorImGuiView {
     private String chartTitle() { return chart.title == null || chart.title.isBlank() ? "未命名谱面" : chart.title; }
     private static String format(double value) { return String.format(Locale.ROOT, "%.2f", value); }
 
-    private String formatChunkPosition(double beat) {
-        return new EffectEditorLayout.Position("", Math.max(0.0, beat), chart == null ? 1 : chart.divisionsPerChunk).label();
+    private String formatBeatPosition(double beat) {
+        return new EffectEditorLayout.Position("", Math.max(0.0, beat), chart == null ? 1 : chart.divisionsPerBeat).label();
     }
 
     private int inferDenominator(double beat) {
-        int preferred = Math.max(1, Math.min(32, chart.divisionsPerChunk));
+        int preferred = Math.max(1, Math.min(32, chart.divisionsPerBeat));
         if (Math.abs(beat * preferred - Math.rint(beat * preferred)) < 1.0e-8) return preferred;
         for (int denominator = 1; denominator <= 32; denominator++) {
             if (Math.abs(beat * denominator - Math.rint(beat * denominator)) < 1.0e-8) return denominator;
@@ -1850,18 +1850,18 @@ public final class EffectEditorImGuiView {
         return bestNumerator + "/" + bestDenominator;
     }
 
-    private Double parseChunkPosition(String raw) {
+    private Double parseBeatPosition(String raw) {
         if (raw == null || raw.isBlank()) return null;
-        String value = raw.trim().toLowerCase(Locale.ROOT).replace("chunk", "").replace(" ", "");
+        String value = raw.trim().toLowerCase(Locale.ROOT).replace("beat", "").replace(" ", "");
         int suffix = value.indexOf('(');
         if (suffix >= 0) value = value.substring(0, suffix);
-        double divisions = Math.max(1.0, Math.min(32.0, chart == null ? 1.0 : chart.divisionsPerChunk));
+        double divisions = Math.max(1.0, Math.min(32.0, chart == null ? 1.0 : chart.divisionsPerBeat));
         try {
             int plus = value.indexOf('+');
             if (plus >= 0) {
-                int chunk = Integer.parseInt(value.substring(0, plus));
-                double position = chunk - 1 + parseFraction(value.substring(plus + 1));
-                return chunk >= 1 && Double.isFinite(position) && position >= 0.0 ? position : null;
+                int beatIndex = Integer.parseInt(value.substring(0, plus));
+                double position = beatIndex - 1 + parseFraction(value.substring(plus + 1));
+                return beatIndex >= 1 && Double.isFinite(position) && position >= 0.0 ? position : null;
             }
             return null;
         } catch (NumberFormatException exception) {

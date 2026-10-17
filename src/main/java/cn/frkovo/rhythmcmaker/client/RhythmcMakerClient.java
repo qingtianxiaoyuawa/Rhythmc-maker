@@ -43,7 +43,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     private static KeyBinding settingsKey;
     private static KeyBinding selectPlaybackStartKey;
     private static boolean controlSpeedHandled;
-    private static int selectedPlaybackChunk = 1;
+    private static int selectedPlaybackBeat = 1;
     private static String selectedPlaybackChartId;
     private static volatile Process audioProcess;
     private static long audioStartedAtNanos;
@@ -65,7 +65,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     private static boolean audioRetryNoticeShown;
     private static int playbackAudioDelayTicks;
     private static int playbackToggleCooldownTicks;
-    private static int playbackStartChunk = 1;
+    private static int playbackStartBeatIndex = 1;
     private static double playbackStartBeat;
     private static boolean playbackAudioRequested;
     private static String pendingPlaybackCommand;
@@ -138,7 +138,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
                 syncPlaybackPreference();
                 beginPlayback(client);
             }
-            else if (item == RhythmcMaker.CHUNK_SCORE_ITEM) client.setScreen(new PlaceholderScreen("修改制谱器轨道", "chunk-score"));
+            else if (item == RhythmcMaker.CHUNK_SCORE_ITEM) client.setScreen(new PlaceholderScreen("修改制谱器轨道", "beat-score"));
             else if (item == RhythmcMaker.INCREASE_BEATS_ITEM) sendCommand(client, "rhythmc_beats 1");
             else if (item == RhythmcMaker.DECREASE_BEATS_ITEM) sendCommand(client, "rhythmc_beats -1");
             else return ActionResult.PASS;
@@ -151,11 +151,11 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             if (client.player != player || client.currentScreen != null || !isEditorDimension(client) || !isAltPressed(client)) return ActionResult.PASS;
             ChartManifest chart = ClientChartAccess.resolveActiveChart();
             if (chart == null) return ActionResult.PASS;
-            int divisions = Math.max(1, chart.divisionsPerChunk > 0 ? chart.divisionsPerChunk : chart.beatsPerMeasure);
-            int currentChunk = Math.max(1, Math.min(Math.max(1, chart.chunkCount), (int) Math.floor(Math.max(0.0, -player.getZ() - 3.0) / divisions) + 1));
+            int divisions = Math.max(1, chart.divisionsPerBeat > 0 ? chart.divisionsPerBeat : chart.beatsPerMeasure);
+            int currentBeat = Math.max(1, Math.min(Math.max(1, chart.beatCount), (int) Math.floor(Math.max(0.0, -player.getZ() - 3.0) / divisions) + 1));
             selectedPlaybackChartId = chart.id;
-            selectedPlaybackChunk = currentChunk;
-            sendCommand(client, "rhythmc_start_chunk_set " + currentChunk);
+            selectedPlaybackBeat = currentBeat;
+            sendCommand(client, "rhythmc_start_beat_set " + currentBeat);
             return ActionResult.FAIL;
         });
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
@@ -163,7 +163,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             if (client.player != null && client.world != null && client.world.getTime() % 5L == 0L
                     && ClientChartAccess.refreshActiveChartIfChanged()) {
                 sidebarRefreshRequested = true;
-                syncSelectedPlaybackChunk(ClientChartAccess.activeChart());
+                syncSelectedPlaybackBeat(ClientChartAccess.activeChart());
                 if (playbackAudioRequested || audioProcess != null) finishPlayback(client, true);
             }
             if (client.player != null && RhythmcMaker.consumeTrackSnapUndoInvalidation(client.player.getUuid())) PlaceholderScreen.invalidateTrackSnapState();
@@ -187,7 +187,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             if (inChartDimension && playbackAudioDelayTicks > 0) playbackAudioDelayTicks--;
             if (playbackAudioRequested && playbackAudioDelayTicks <= 0 && audioProcess == null && !audioAttempted) {
                 if (effectEditorPreviewPrepared) startAudioAtBeat(playbackStartBeat);
-                else startAudio(playbackStartChunk);
+                else startAudio(playbackStartBeatIndex);
             }
             if (playbackAudioRequested && pendingPlaybackCommand != null && audioProcess != null && audioProcess.isAlive() && audioStartedAtNanos > 0) {
                 sendCommand(client, pendingPlaybackCommand);
@@ -275,18 +275,18 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         audioRetryNoticeShown = false;
         playbackAudioDelayTicks = 2;
         var activeChart = ClientChartAccess.resolveActiveChart();
-        syncSelectedPlaybackChunk(activeChart);
-        int startChunk = activeChart == null ? selectedPlaybackChunk : Math.max(1, Math.min(Math.max(1, activeChart.chunkCount), selectedPlaybackChunk));
-        selectedPlaybackChunk = startChunk;
-        playbackStartChunk = startChunk;
-        playbackStartBeat = activeChart == null ? 0.0 : PlaybackCoordinates.beatAtChunkStart(startChunk);
+        syncSelectedPlaybackBeat(activeChart);
+        int startBeat = activeChart == null ? selectedPlaybackBeat : Math.max(1, Math.min(Math.max(1, activeChart.beatCount), selectedPlaybackBeat));
+        selectedPlaybackBeat = startBeat;
+        playbackStartBeatIndex = startBeat;
+        playbackStartBeat = activeChart == null ? 0.0 : PlaybackCoordinates.beatAtIndex(startBeat);
         playbackStartSeconds = activeChart == null ? 0.0 : PlaybackCoordinates.songTimeAtBeat(activeChart, ChartTiming.prepare(activeChart), playbackStartBeat);
         audioStartedAtNanos = 0;
         audioSessionCreatedAtNanos = 0L;
         playbackTimingProfile = null;
         playbackTrackProfile = null;
-        pendingPlaybackCommand = "rhythmc_play " + startChunk + " " + playbackMode;
-        startAudio(startChunk);
+        pendingPlaybackCommand = "rhythmc_play_beat " + startBeat + " " + playbackMode;
+        startAudio(startBeat);
         if (audioProcess != null && audioProcess.isAlive()) {
             sendCommand(client, pendingPlaybackCommand);
             pendingPlaybackCommand = null;
@@ -581,22 +581,22 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         int delta = vertical > 0.0 ? 1 : -1;
         if (client.getServer() != null) {
             var playerId = client.player.getUuid();
-            client.getServer().execute(() -> RhythmcMaker.adjustStartChunkFromClient(client.getServer(), playerId, delta));
+            client.getServer().execute(() -> RhythmcMaker.adjustStartBeatFromClient(client.getServer(), playerId, delta));
         } else {
-            sendCommand(client, "rhythmc_start_chunk " + delta);
+            sendCommand(client, "rhythmc_start_beat " + delta);
         }
         var chart = ClientChartAccess.activeChart();
         if (chart != null) {
-            syncSelectedPlaybackChunk(chart);
-            selectedPlaybackChunk = Math.max(1, Math.min(Math.max(1, chart.chunkCount), selectedPlaybackChunk + (vertical > 0.0 ? 1 : -1)));
+            syncSelectedPlaybackBeat(chart);
+            selectedPlaybackBeat = Math.max(1, Math.min(Math.max(1, chart.beatCount), selectedPlaybackBeat + (vertical > 0.0 ? 1 : -1)));
         }
         return true;
     }
 
-    private static void syncSelectedPlaybackChunk(ChartManifest chart) {
+    private static void syncSelectedPlaybackBeat(ChartManifest chart) {
         if (chart == null || chart.id == null || chart.id.equals(selectedPlaybackChartId)) return;
         selectedPlaybackChartId = chart.id;
-        selectedPlaybackChunk = Math.max(1, Math.min(Math.max(1, chart.chunkCount), chart.selectedStartChunk));
+        selectedPlaybackBeat = Math.max(1, Math.min(Math.max(1, chart.beatCount), chart.selectedStartBeat));
     }
     private static void renderEditorSidebar(DrawContext drawContext) {
         MinecraftClient client = MinecraftClient.getInstance();
@@ -643,34 +643,34 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         long clockStart = audioStartedAtNanos;
         double elapsed = clockStart <= 0 ? 0.0 : Math.max(0.0, (System.nanoTime() - clockStart) / 1_000_000_000.0) * playbackPitchRate();
         double totalSeconds = chart.durationSeconds > 0.0 ? chart.durationSeconds : ChartTiming.beatToSeconds(chart, chart.totalBeats);
-        if (!Double.isFinite(totalSeconds) || totalSeconds <= 0.0) totalSeconds = Math.max(1.0, chart.chunkCount * 60.0 / chart.bpm);
+        if (!Double.isFinite(totalSeconds) || totalSeconds <= 0.0) totalSeconds = Math.max(1.0, chart.beatCount * 60.0 / chart.bpm);
         double currentSeconds = Math.max(0.0, Math.min(totalSeconds, startSeconds + elapsed));
-        int divisions = Math.max(1, Math.min(32, chart.divisionsPerChunk > 0 ? chart.divisionsPerChunk : chart.beatsPerMeasure));
+        int divisions = Math.max(1, Math.min(32, chart.divisionsPerBeat > 0 ? chart.divisionsPerBeat : chart.beatsPerMeasure));
         ChartTiming.Prepared timing = playbackTimingProfile;
         if (timing == null) timing = ChartTiming.prepare(chart);
         double songBeats = PlaybackCoordinates.beatAtSongTime(chart, timing, currentSeconds);
-        int totalChunks = Math.max(1, chart.chunkCount);
-        int currentChunk = Math.max(1, Math.min(totalChunks, (int) Math.floor(songBeats) + 1));
+        int totalBeatCount = Math.max(1, chart.beatCount);
+        int currentBeat = Math.max(1, Math.min(totalBeatCount, (int) Math.floor(songBeats) + 1));
         int currentDivision = Math.max(1, Math.min(divisions, (int) Math.floor((songBeats - Math.floor(songBeats)) * divisions) + 1));
         return new SidebarSnapshot("播放", new String[] {
             "歌曲时间 " + formatHudTime(currentSeconds) + "/" + formatHudTime(totalSeconds),
-            "chunk数 " + currentChunk + "/" + totalChunks,
+            "beat数 " + currentBeat + "/" + totalBeatCount,
             "节拍数 " + currentDivision + "/" + divisions
         });
     }
 
     private static SidebarSnapshot editorSidebar(MinecraftClient client, ChartManifest chart) {
-        int divisions = Math.max(1, Math.min(32, chart.divisionsPerChunk > 0 ? chart.divisionsPerChunk : chart.beatsPerMeasure));
+        int divisions = Math.max(1, Math.min(32, chart.divisionsPerBeat > 0 ? chart.divisionsPerBeat : chart.beatsPerMeasure));
         double progress = Math.max(0.0, (-client.player.getZ() - 2.0) / divisions);
-        int totalChunks = Math.max(1, chart.chunkCount);
-        int currentChunk = Math.max(1, Math.min(totalChunks, (int) Math.floor(progress) + 1));
+        int totalBeatCount = Math.max(1, chart.beatCount);
+        int currentBeat = Math.max(1, Math.min(totalBeatCount, (int) Math.floor(progress) + 1));
         double totalSeconds = chart.durationSeconds > 0.0 ? chart.durationSeconds : ChartTiming.beatToSeconds(chart, chart.totalBeats);
-        if (!Double.isFinite(totalSeconds) || totalSeconds <= 0.0) totalSeconds = totalChunks * 60.0 / chart.bpm;
+        if (!Double.isFinite(totalSeconds) || totalSeconds <= 0.0) totalSeconds = totalBeatCount * 60.0 / chart.bpm;
         double currentSeconds = Math.max(0.0, Math.min(totalSeconds, ChartTiming.beatToSeconds(chart, progress)));
         return new SidebarSnapshot("制谱器", new String[] {
             "歌曲时间 " + formatHudTime(currentSeconds) + "/" + formatHudTime(totalSeconds),
-            "chunk数 " + currentChunk + "/" + totalChunks,
-            "当前每chunk分数 " + divisions,
+            "beat数 " + currentBeat + "/" + totalBeatCount,
+            "当前每beat分数 " + divisions,
             "当前轨道宽度 " + Math.max(1, Math.min(9, chart.laneCount))
         });
     }
@@ -691,9 +691,9 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     private static String sidebarContext(MinecraftClient client, ChartManifest chart, String mode) {
         String dimension = client.player == null ? "" : client.player.getEntityWorld().getRegistryKey().getValue().toString();
         if (chart == null) return mode + "|" + dimension + "|" + ClientChartAccess.config().lobbySidebarContent;
-        return mode + "|" + dimension + "|" + String.valueOf(chart.id) + "|" + chart.divisionsPerChunk + "|"
-                + chart.beatsPerMeasure + "|" + chart.laneCount + "|" + chart.chunkCount + "|" + chart.totalBeats + "|"
-                + chart.durationSeconds + "|" + playbackStartChunk + "|" + playbackStartSeconds;
+        return mode + "|" + dimension + "|" + String.valueOf(chart.id) + "|" + chart.divisionsPerBeat + "|"
+                + chart.beatsPerMeasure + "|" + chart.laneCount + "|" + chart.beatCount + "|" + chart.totalBeats + "|"
+                + chart.durationSeconds + "|" + playbackStartBeat + "|" + playbackStartSeconds;
     }
 
     private static void clearSidebarSnapshot() {
@@ -745,8 +745,8 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             || dimension.equals(RhythmcMaker.CHARTER_DIMENSION.getValue());
     }
 
-    private static void startAudio(int startChunk) {
-        startAudioAtBeat(PlaybackCoordinates.beatAtChunkStart(startChunk));
+    private static void startAudio(int startBeat) {
+        startAudioAtBeat(PlaybackCoordinates.beatAtIndex(startBeat));
     }
 
     private static void startAudioAtBeat(double startBeat) {

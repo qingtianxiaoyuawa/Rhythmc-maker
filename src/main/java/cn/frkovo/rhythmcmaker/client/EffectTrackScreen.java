@@ -163,7 +163,7 @@ public final class EffectTrackScreen extends Screen {
         MinecraftClient client = MinecraftClient.getInstance();
         if (chart == null || client.player == null || client.getServer() == null || editor.isInputLocked()) return;
         requestedDivisions = divisions;
-        editor.setInputLocked(true, "正在同步每 Chunk 分数，请等待……");
+        editor.setInputLocked(true, "正在同步每 Beat 分数，请等待……");
         RhythmcMakerClient.stopEffectEditorPreview();
         java.util.UUID playerId = client.player.getUuid();
         net.minecraft.server.MinecraftServer server = client.getServer();
@@ -220,7 +220,7 @@ public final class EffectTrackScreen extends Screen {
                     note.z = cn.frkovo.rhythmcmaker.chart.PlaybackCoordinates.editorWorldZAtBeat(chart, note.beat);
                 }
             }
-            chart.trackLength = Math.max(8, Math.max(1, chart.chunkCount) * chart.divisionsPerChunk);
+            chart.trackLength = Math.max(8, Math.max(1, chart.beatCount) * chart.divisionsPerBeat);
             ClientChartAccess.applyLocalLayout(layout);
         }
         editor.setInputLocked(false, successful ? "同步完成" : "同步失败，已恢复旧值");

@@ -18,7 +18,7 @@ public final class RhythmcMakerConfig {
 
     public double autosaveIntervalSeconds = DEFAULT_AUTOSAVE_INTERVAL_SECONDS;
     public double sidebarRefreshIntervalSeconds = 1.0;
-    public int defaultDivisionsPerChunk = 4;
+    public int defaultDivisionsPerBeat = 4;
     public double playerSpeed = 1.0;
     public double musicVolumeMultiplier = 1.0;
     public double noteJudgementVolumeMultiplier = 1.0;
@@ -35,6 +35,7 @@ public final class RhythmcMakerConfig {
             Path path = path(server);
             if (Files.exists(path)) {
                 JsonObject settings = JsonParser.parseString(Files.readString(path, StandardCharsets.UTF_8)).getAsJsonObject();
+                migrateIntegerField(settings, "defaultDivisionsPerBeat", "defaultDivisionsPerChunk");
                 if (!settings.has("playbackPitchPercent") && settings.has("playbackSpeed")) {
                     settings.addProperty("playbackPitchPercent", settings.get("playbackSpeed").getAsDouble() * 100.0);
                 }
@@ -60,10 +61,15 @@ public final class RhythmcMakerConfig {
     private static Path path(MinecraftServer server) {
         return server.getSavePath(WorldSavePath.ROOT).resolve("rhythmc maker").resolve("settings.json");
     }
+
+    private static void migrateIntegerField(JsonObject root, String currentField, String legacyField) {
+        if (!root.has(currentField) && root.has(legacyField)) root.add(currentField, root.get(legacyField).deepCopy());
+        root.remove(legacyField);
+    }
     private void normalize() {
         autosaveIntervalSeconds = Math.max(0.05, Math.min(86400.0, autosaveIntervalSeconds));
         sidebarRefreshIntervalSeconds = Math.max(0.05, Math.min(3600.0, sidebarRefreshIntervalSeconds));
-        defaultDivisionsPerChunk = Math.max(1, Math.min(32, defaultDivisionsPerChunk));
+        defaultDivisionsPerBeat = Math.max(1, Math.min(32, defaultDivisionsPerBeat));
         playerSpeed = Double.isFinite(playerSpeed) ? Math.max(0.1, Math.min(5.0, playerSpeed)) : 1.0;
         musicVolumeMultiplier = Double.isFinite(musicVolumeMultiplier) ? Math.max(0.1, Math.min(2.0, musicVolumeMultiplier)) : 1.0;
         noteJudgementVolumeMultiplier = Double.isFinite(noteJudgementVolumeMultiplier) ? Math.max(0.1, Math.min(5.0, noteJudgementVolumeMultiplier)) : 1.0;

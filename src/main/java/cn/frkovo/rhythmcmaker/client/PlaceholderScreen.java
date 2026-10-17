@@ -93,7 +93,7 @@ final class PlaceholderScreen extends RhythmcScreen {
             }).horizontalSizing(Sizing.fill()));
         } else if (section.equals("keys")) {
             page.child(UIComponents.label(Text.literal("飞行速度快捷键：Ctrl+1（1倍）、Ctrl+2（1.5倍）、Ctrl+3（2倍）、Ctrl+4（4倍）")));
-            page.child(UIComponents.label(Text.literal("播放起始 Chunk：按住 Alt + 鼠标滚轮，或按住 Alt 后右键当前 Chunk 任意位置")));
+            page.child(UIComponents.label(Text.literal("播放起始 Beat：按住 Alt + 鼠标滚轮，或按住 Alt 后右键当前 Beat 任意位置")));
             page.child(UIComponents.label(Text.literal("播放方式：按住 Shift + 右键播放，打开菜单选择正式播放或滚动播放；全局音高和速度在特效编辑器控制（此处仅作说明）")));
             page.child(UIComponents.button(Text.literal("按键选项"), button -> MinecraftClient.getInstance().setScreen(new ControlsOptionsScreen(this, MinecraftClient.getInstance().options))).horizontalSizing(Sizing.fill()));
         } else if (section.equals("chart-settings")) {
@@ -123,7 +123,7 @@ final class PlaceholderScreen extends RhythmcScreen {
                 summary = lastTrackSnapSummary;
             }
             page.child(UIComponents.label(Text.literal("谱面基础 BPM：" + (chart == null ? "-" : String.format(java.util.Locale.ROOT, "%.2f", chart.bpm)))));
-            page.child(UIComponents.label(Text.literal("当前每 Chunk 分数：" + (chart == null ? "-" : Math.max(1, chart.divisionsPerChunk)))));
+            page.child(UIComponents.label(Text.literal("当前每 Beat 分数：" + (chart == null ? "-" : Math.max(1, chart.divisionsPerBeat)))));
             page.child(UIComponents.label(Text.literal("待吸附音符数量：" + summary.fractionalCount)));
             page.child(UIComponents.label(Text.literal("预计重复删除数量：" + summary.duplicateCount)));
             page.child(UIComponents.label(Text.literal("吸附后剩余音符数量：" + summary.remainingCount)));
@@ -145,7 +145,7 @@ final class PlaceholderScreen extends RhythmcScreen {
             TrackSnapSummary summary = trackSnapSummary(chart);
             if (chart != null && chart.id.equals(trackSnapChartId) && lastTrackSnapSummary != null) summary = lastTrackSnapSummary;
             page.child(UIComponents.label(Text.literal("谱面基础 BPM：" + (chart == null ? "-" : String.format(java.util.Locale.ROOT, "%.2f", chart.bpm)))));
-            page.child(UIComponents.label(Text.literal("当前每 Chunk 分数：" + (chart == null ? "-" : Math.max(1, chart.divisionsPerChunk)))));
+            page.child(UIComponents.label(Text.literal("当前每 Beat 分数：" + (chart == null ? "-" : Math.max(1, chart.divisionsPerBeat)))));
             page.child(UIComponents.label(Text.literal("待吸附音符数量：" + summary.fractionalCount)));
             page.child(UIComponents.label(Text.literal("预计重复删除数量：" + summary.duplicateCount)));
             page.child(UIComponents.label(Text.literal("吸附后剩余音符数量：" + summary.remainingCount)));
@@ -159,22 +159,22 @@ final class PlaceholderScreen extends RhythmcScreen {
             page.child(UIComponents.button(Text.literal("取消"), button -> MinecraftClient.getInstance().setScreen(new PlaceholderScreen("轨道吸附", "track-snap"))).horizontalSizing(Sizing.fill()));
         } else if (section.equals("quick-teleport-select")) {
             page.child(UIComponents.label(Text.literal("选择传送目标")));
-            page.child(UIComponents.button(Text.literal("按 Chunk 传送"), button -> MinecraftClient.getInstance().setScreen(new PlaceholderScreen("快捷传送", "quick-teleport-chunk"))).horizontalSizing(Sizing.fill()));
+            page.child(UIComponents.button(Text.literal("按 Beat 传送"), button -> MinecraftClient.getInstance().setScreen(new PlaceholderScreen("快捷传送", "quick-teleport-beat"))).horizontalSizing(Sizing.fill()));
             page.child(UIComponents.button(Text.literal("按歌曲时间传送"), button -> MinecraftClient.getInstance().setScreen(new PlaceholderScreen("快捷传送", "quick-teleport-time"))).horizontalSizing(Sizing.fill()));
             page.child(UIComponents.button(Text.literal("传送到制谱器平台"), button -> {
                 RhythmcMakerClient.sendChartCommand("rhythmc_teleport_editor_platform");
                 close();
             }).horizontalSizing(Sizing.fill()));
-        } else if (section.equals("quick-teleport-chunk")) {
+        } else if (section.equals("quick-teleport-beat")) {
             var chart = ClientChartAccess.resolveActiveChart();
-            page.child(UIComponents.label(Text.literal("Chunk 数（1 - " + Math.max(1, chart == null ? 1 : chart.chunkCount) + "）")));
-            TextBoxComponent chunk = UIComponents.textBox(Sizing.fill(), "1");
-            numericIntegerOnly(chunk); page.child(chunk);
+            page.child(UIComponents.label(Text.literal("Beat 数（1 - " + Math.max(1, chart == null ? 1 : chart.beatCount) + "）")));
+            TextBoxComponent beat = UIComponents.textBox(Sizing.fill(), "1");
+            numericIntegerOnly(beat); page.child(beat);
             page.child(UIComponents.button(Text.literal("传送"), button -> {
                 try {
-                    int value = Integer.parseInt(chunk.getText());
-                    if (chart == null || value < 1 || value > Math.max(1, chart.chunkCount)) throw new NumberFormatException();
-                    RhythmcMakerClient.sendChartCommand("rhythmc_teleport_chunk " + value);
+                    int value = Integer.parseInt(beat.getText());
+                    if (chart == null || value < 1 || value > Math.max(1, chart.beatCount)) throw new NumberFormatException();
+                    RhythmcMakerClient.sendChartCommand("rhythmc_teleport_beat " + value);
                     close();
                 } catch (Exception exception) {
                     ClientChartAccess.status("谱面没有这么长awa~");
@@ -182,7 +182,7 @@ final class PlaceholderScreen extends RhythmcScreen {
             }).horizontalSizing(Sizing.fill()));
         } else if (section.equals("quick-teleport-time")) {
             var chart = ClientChartAccess.resolveActiveChart();
-            double totalSeconds = chart == null ? 0.0 : chart.durationSeconds > 0.0 ? chart.durationSeconds : chart.totalBeats > 0.0 && chart.bpm > 0.0 ? ChartTiming.beatToSeconds(chart, chart.totalBeats) : Math.max(1, chart.chunkCount) * 60.0 / Math.max(1.0, chart.bpm);
+            double totalSeconds = chart == null ? 0.0 : chart.durationSeconds > 0.0 ? chart.durationSeconds : chart.totalBeats > 0.0 && chart.bpm > 0.0 ? ChartTiming.beatToSeconds(chart, chart.totalBeats) : Math.max(1, chart.beatCount) * 60.0 / Math.max(1.0, chart.bpm);
             page.child(UIComponents.label(Text.literal("歌曲时间（秒，0 - " + String.format(java.util.Locale.ROOT, "%.2f", totalSeconds) + "）")));
             TextBoxComponent time = UIComponents.textBox(Sizing.fill(), "0");
             numericOnly(time); page.child(time);
@@ -196,11 +196,11 @@ final class PlaceholderScreen extends RhythmcScreen {
                     ClientChartAccess.status("谱面没有这么长awa~");
                 }
             }).horizontalSizing(Sizing.fill()));
-        } else if (section.equals("chunk-score")) {
+        } else if (section.equals("beat-score")) {
             var chart = ClientChartAccess.resolveActiveChart();
-            int currentDivisions = chart == null ? ClientChartAccess.defaultDivisionsPerChunk() : EditorTrackLayout.boundedDivisionsPerChunk(chart.divisionsPerChunk);
+            int currentDivisions = chart == null ? ClientChartAccess.defaultDivisionsPerBeat() : EditorTrackLayout.boundedDivisionsPerBeat(chart.divisionsPerBeat);
             int currentLanes = EditorTrackLayout.supportedLaneCount(chart == null ? EditorTrackLayout.DEFAULT_LANE_COUNT : chart.laneCount);
-            page.child(UIComponents.label(Text.literal("每Chunk分数（1 - 32）")));
+            page.child(UIComponents.label(Text.literal("每Beat分数（1 - 32）")));
             TextBoxComponent divisions = UIComponents.textBox(Sizing.fill(), Integer.toString(currentDivisions));
             numericIntegerOnly(divisions); page.child(divisions);
             page.child(UIComponents.label(Text.literal("编辑器轨道宽度（1 / 3 / 5 / 7 / 9）")));
@@ -211,15 +211,15 @@ final class PlaceholderScreen extends RhythmcScreen {
                 try {
                     int divisionsValue = Integer.parseInt(divisions.getText());
                     int lanesValue = Integer.parseInt(lanes.getText());
-                    if (!EditorTrackLayout.isSupportedDivisionsPerChunk(divisionsValue) || !EditorTrackLayout.isSupportedLaneCount(lanesValue)) throw new NumberFormatException();
+                    if (!EditorTrackLayout.isSupportedDivisionsPerBeat(divisionsValue) || !EditorTrackLayout.isSupportedLaneCount(lanesValue)) throw new NumberFormatException();
                     EditorTrackLayout layout = EditorTrackLayout.of(lanesValue, divisionsValue);
                     ClientChartAccess.applyLocalLayout(layout);
                     invalidateTrackSnapState();
-                    RhythmcMakerClient.sendChartCommand("rhythmc_layout_set " + layout.divisionsPerChunk() + " " + layout.laneCount());
-                    ClientChartAccess.status("正在应用制谱器轨道：" + layout.laneCount() + " × " + layout.divisionsPerChunk());
+                    RhythmcMakerClient.sendChartCommand("rhythmc_layout_set " + layout.divisionsPerBeat() + " " + layout.laneCount());
+                    ClientChartAccess.status("正在应用制谱器轨道：" + layout.laneCount() + " × " + layout.divisionsPerBeat());
                     close();
                 } catch (Exception exception) {
-                    ClientChartAccess.status("设置失败：每Chunk分数为 1-32，轨道宽度为 1/3/5/7/9");
+                    ClientChartAccess.status("设置失败：每Beat分数为 1-32，轨道宽度为 1/3/5/7/9");
                 }
             }).horizontalSizing(Sizing.fill()));
         } else if (section.equals("editor")) {
@@ -233,14 +233,14 @@ final class PlaceholderScreen extends RhythmcScreen {
             page.child(UIComponents.label(Text.literal("制谱器预览流速倍率（0.1 - 5.0）")));
             TextBoxComponent playerSpeed = UIComponents.textBox(Sizing.fill(), Double.toString(config.playerSpeed));
             numericOnly(playerSpeed); page.child(playerSpeed);
-            page.child(UIComponents.label(Text.literal("默认每Chunk分数")));
-            TextBoxComponent divisions = UIComponents.textBox(Sizing.fill(), Integer.toString(config.defaultDivisionsPerChunk));
+            page.child(UIComponents.label(Text.literal("默认每Beat分数")));
+            TextBoxComponent divisions = UIComponents.textBox(Sizing.fill(), Integer.toString(config.defaultDivisionsPerBeat));
             numericOnly(divisions); page.child(divisions);
             page.child(UIComponents.button(Text.literal("保存设置"), button -> {
                 try {
                     config.autosaveIntervalSeconds = Double.parseDouble(autosave.getText());
                     config.sidebarRefreshIntervalSeconds = Double.parseDouble(sidebar.getText());
-                    config.defaultDivisionsPerChunk = Integer.parseInt(divisions.getText());
+                    config.defaultDivisionsPerBeat = Integer.parseInt(divisions.getText());
                     config.playerSpeed = Double.parseDouble(playerSpeed.getText());
                     ClientChartAccess.saveConfig(config);
                     ClientChartAccess.status("设置已保存");

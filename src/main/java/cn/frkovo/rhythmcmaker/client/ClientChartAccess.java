@@ -92,8 +92,8 @@ final class ClientChartAccess {
     static void applyLocalLayout(EditorTrackLayout layout) {
         if (activeChart == null) return;
         layout.applyTo(activeChart);
-        activeChart.trackLength = Math.max(8, Math.max(1, activeChart.chunkCount) * activeChart.divisionsPerChunk);
-        pendingLayoutDivisions = layout.divisionsPerChunk();
+        activeChart.trackLength = Math.max(8, Math.max(1, activeChart.beatCount) * activeChart.divisionsPerBeat);
+        pendingLayoutDivisions = layout.divisionsPerBeat();
         pendingLayoutLanes = layout.laneCount();
         pendingLayoutExpiresAtNanos = System.nanoTime() + 8_000_000_000L;
         lastRefreshRequest = null;
@@ -189,12 +189,12 @@ final class ClientChartAccess {
         lastRefreshError = null;
         if (result.chart == null) return false;
         if (pendingLayoutDivisions > 0 && System.nanoTime() < pendingLayoutExpiresAtNanos
-                && (result.chart.divisionsPerChunk != pendingLayoutDivisions || result.chart.laneCount != pendingLayoutLanes)) {
+                && (result.chart.divisionsPerBeat != pendingLayoutDivisions || result.chart.laneCount != pendingLayoutLanes)) {
             activeChartModifiedTime = null;
             activeChartFileSize = -1L;
             return true;
         }
-        if (pendingLayoutDivisions > 0 && result.chart.divisionsPerChunk == pendingLayoutDivisions
+        if (pendingLayoutDivisions > 0 && result.chart.divisionsPerBeat == pendingLayoutDivisions
                 && result.chart.laneCount == pendingLayoutLanes) {
             pendingLayoutDivisions = -1;
             pendingLayoutLanes = -1;
@@ -206,10 +206,10 @@ final class ClientChartAccess {
         }
         boolean changed = activeChart == null
                 || !result.chart.id.equals(activeChart.id)
-                || result.chart.divisionsPerChunk != activeChart.divisionsPerChunk
+                || result.chart.divisionsPerBeat != activeChart.divisionsPerBeat
                 || result.chart.laneCount != activeChart.laneCount
                 || result.chart.trackLength != activeChart.trackLength
-                || result.chart.chunkCount != activeChart.chunkCount;
+                || result.chart.beatCount != activeChart.beatCount;
         activeChart = result.chart;
         activeChartWorld = result.worldKey;
         activeChartModifiedTime = result.modified;
@@ -263,8 +263,8 @@ final class ClientChartAccess {
         ChartStorage.delete(server(), chart);
     }
 
-    static int defaultDivisionsPerChunk() {
-        return cn.frkovo.rhythmcmaker.RhythmcMaker.defaultDivisionsPerChunk();
+    static int defaultDivisionsPerBeat() {
+        return cn.frkovo.rhythmcmaker.RhythmcMaker.defaultDivisionsPerBeat();
     }
 
     static ItemStack coverStack(String itemId) {

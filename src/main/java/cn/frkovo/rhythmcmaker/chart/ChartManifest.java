@@ -17,7 +17,7 @@ public final class ChartManifest {
     public boolean sceneImportIncomplete = false;
     public String difficulty;
     public double level;
-    public int divisionsPerChunk = 4;
+    public int divisionsPerBeat = 4;
     /** Odd number of editable horizontal lanes in the Maker grid. */
     public int laneCount = 3;
     public int beatsPerMeasure = 0;
@@ -26,12 +26,12 @@ public final class ChartManifest {
     public String lastEdited;
     public double durationSeconds;
     public double totalBeats;
-    public int chunkCount;
+    public int beatCount;
     public int trackLength;
     /** Persisted stable dynamic editor-dimension path. */
     public String dimensionId;
-    /** Persisted playback start chunk for this chart. */
-    public int selectedStartChunk = 1;
+    /** Persisted playback start beat for this chart. */
+    public int selectedStartBeat = 1;
     /** Persisted revision for editor note display entities. */
     public long noteDisplayRevision;
     /** Furthest editor-track column that still needs stale display cleanup. */

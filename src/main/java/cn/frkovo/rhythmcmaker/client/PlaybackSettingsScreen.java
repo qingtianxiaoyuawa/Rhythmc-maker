@@ -44,7 +44,7 @@ final class PlaybackSettingsScreen extends RhythmcScreen {
         }
         page.child(presets);
         page.child(UIComponents.button(Text.literal("\u5e94\u7528\u97f3\u9ad8 / \u901f\u5ea6"), button -> applyPitch(pitchBox)).horizontalSizing(Sizing.fill()));
-        page.child(wrappedLabel("\u53f3\u952e\u64ad\u653e\u4f1a\u8bb0\u4f4f\u4e0a\u6b21\u9009\u62e9\uff1b\u8d77\u59cb Chunk \u5bf9\u6b63\u5f0f\u64ad\u653e\u548c\u6eda\u52a8\u64ad\u653e\u5747\u6709\u6548\u3002", viewportWidth - 24));
+        page.child(wrappedLabel("\u53f3\u952e\u64ad\u653e\u4f1a\u8bb0\u4f4f\u4e0a\u6b21\u9009\u62e9\uff1b\u8d77\u59cb Beat \u5bf9\u6b63\u5f0f\u64ad\u653e\u548c\u6eda\u52a8\u64ad\u653e\u5747\u6709\u6548\u3002", viewportWidth - 24));
         page.child(UIComponents.button(Text.literal("\u7acb\u5373\u64ad\u653e"), button -> start()).horizontalSizing(Sizing.fill()));
         page.child(UIComponents.button(Text.literal("\u5173\u95ed"), button -> close()).horizontalSizing(Sizing.fixed(100)));
         var scroll = UIContainers.verticalScroll(Sizing.fixed(viewportWidth), Sizing.fixed(viewportHeight), page);
