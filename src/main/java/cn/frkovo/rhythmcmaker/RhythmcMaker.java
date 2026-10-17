@@ -3282,8 +3282,8 @@ private static void showSceneBoundary(MinecraftServer server) {
         private double[] displayPosition(ChartManifest.Note note, double songTime, double displayZ) {
             double beat = timing.secondsToBeat(songTime - chart.offsetMillis / 1000.0);
             TrackPlayback.Pose pose = trackProfiles.getOrDefault(note.trackId, trackProfiles.get(0)).poseAt(beat);
-            Vector3f local = new Vector3f((float) (note.sourceX == null ? note.x : note.sourceX),
-                    (float) (note.sourceY == null ? note.y - 66.0 : note.sourceY),
+            Vector3f local = new Vector3f((float) note.x,
+                    (float) (note.y - 66.0),
                     (float) (note.sourceZ == null ? 0.0 : note.sourceZ));
             local.mul((float) pose.scaleX(), (float) pose.scaleY(), (float) pose.scaleZ());
             trackRotation(pose).transform(local);

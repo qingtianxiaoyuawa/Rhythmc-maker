@@ -63,8 +63,8 @@ public final class ChartStorage {
     public record ImportedScene(Path schem, Path info) {}
 
     public static ChartManifest importRhythmc2(MinecraftServer server, Path difficultyFile, Path stagedAudio, double bpm, String difficulty, double level) throws IOException {
-        JsonObject root = JsonParser.parseString(readChartText(difficultyFile)).getAsJsonObject();
-        JsonObject meta = root.has("meta") && root.get("meta").isJsonObject() ? root.getAsJsonObject("meta") : new JsonObject();
+        JsonObject legacyRoot = JsonParser.parseString(readChartText(difficultyFile)).getAsJsonObject();
+        JsonObject meta = legacyRoot.has("meta") && legacyRoot.get("meta").isJsonObject() ? legacyRoot.getAsJsonObject("meta") : new JsonObject();
         ChartManifest chart = new ChartManifest();
         chart.id = UUID.randomUUID().toString();
         chart.title = stripExtension(difficultyFile.getFileName().toString());
@@ -72,7 +72,7 @@ public final class ChartStorage {
         chart.charter = firstJsonString(meta, "charter", "charter-alias", "Unknown");
         chart.coverItemId = coverItemId("minecraft:note_block");
         chart.difficulty = difficulty;
-        chart.bpm = bpm;
+        chart.bpm = 1200.0;
         chart.divisionsPerChunk = RhythmcMaker.defaultDivisionsPerChunk();
         chart.bpms.add(new ChartManifest.BpmEvent(0, chart.bpm));
         chart.offsetMillis = Math.round(jsonNumber(meta, "offset", 0).doubleValue() * 50.0);
@@ -80,65 +80,16 @@ public final class ChartStorage {
         if (meta.has("initial-arena") && meta.get("initial-arena").isJsonPrimitive()) chart.initialArena = meta.get("initial-arena").getAsString();
         List<String> arenaNames = new ArrayList<>();
         if (chart.initialArena != null && !chart.initialArena.isBlank()) arenaNames.add(chart.initialArena);
-        ChartTiming.Prepared timing = ChartTiming.prepare(chart);
-        if (root.has("frames") && root.get("frames").isJsonArray()) {
-            for (JsonElement frameElement : root.getAsJsonArray("frames")) {
-                if (!frameElement.isJsonObject()) continue;
-                JsonObject frame = frameElement.getAsJsonObject();
-                double judgeTick = jsonNumber(frame, "judge-tick", 0).doubleValue();
-                if (!Double.isFinite(judgeTick)) continue;
-                double frameSeconds = Math.max(0.0, judgeTick / 20.0);
-                double frameBeat = snapImportedBeat(frameSeconds * bpm / 60.0);
-                if (!frame.has("notes") || !frame.get("notes").isJsonArray()) continue;
-                for (JsonElement noteElement : frame.getAsJsonArray("notes")) {
-                    if (!noteElement.isJsonObject()) continue;
-                    JsonObject source = noteElement.getAsJsonObject();
-                    int type = oldNoteType(source.has("type") ? source.get("type").getAsString() : "NOTE_CLICK");
-                    int length = Math.max(1, jsonNumber(source, "length", 1).intValue());
-                    int count = type == 2 ? length : 1;
-                    for (int hold = 0; hold < count; hold++) {
-                        ChartManifest.Note note = new ChartManifest.Note();
-                        note.id = UUID.randomUUID().toString();
-                        note.type = type;
-                        double noteSeconds = Math.max(0.0, frameSeconds + hold / 20.0);
-                        note.beat = snapImportedBeat(noteSeconds * bpm / 60.0);
-                        note.time = timing.beatToSeconds(note.beat);
-                        if (source.has("pos") && source.get("pos").isJsonArray()) {
-                            JsonArray pos = source.getAsJsonArray("pos");
-                            note.sourceX = pos.size() > 0 ? pos.get(0).getAsDouble() : 0;
-                            note.sourceY = pos.size() > 1 ? pos.get(1).getAsDouble() : 0;
-                        } else if (source.has("pos") && source.get("pos").isJsonPrimitive()) {
-                            note.sourceX = source.get("pos").getAsDouble();
-                            note.sourceY = 0.0;
-                        }
-                        note.x = note.sourceX == null ? 0.0 : note.sourceX;
-                        if (type == 2) {
-                            note.sourceY = -1.0;
-                            note.y = 65.0;
-                        } else {
-                            note.y = (note.sourceY == null ? 0.0 : note.sourceY) + 66.0;
-                        }
-                        note.z = PlaybackCoordinates.editorWorldZAtBeat(chart, note.beat);
-                        chart.notes.add(note);
-                        chart.totalBeats = Math.max(chart.totalBeats, note.beat);
-                    }
-                }
+        JsonObject root = convertRhythmc2ToRhythmc3(legacyRoot, chart.charter, chart.level, chart.offsetMillis, chart.initialArena, chart.divisionsPerChunk);
+        importRhythmc3Document(server, chart, root, stagedAudio);
+        if (chart.effects != null) for (JsonObject effect : chart.effects) {
+            if (effect == null) continue;
+            JsonObject properties = effect.has("properties") && effect.get("properties").isJsonObject() ? effect.getAsJsonObject("properties") : effect;
+            if ("ARENA".equals(effect.get("eventType").getAsString()) && properties.has("arena")) {
+                String arena = properties.get("arena").getAsString();
+                if (!arena.isBlank() && !arenaNames.contains(arena)) arenaNames.add(arena);
             }
         }
-        if (root.has("effects") && root.get("effects").isJsonArray()) {
-            for (JsonElement effectElement : root.getAsJsonArray("effects")) {
-                if (!effectElement.isJsonObject()) continue;
-                JsonObject effect = convertRhythmc2Effect(effectElement.getAsJsonObject(), bpm, chart.divisionsPerChunk);
-                if (effect == null) continue;
-                JsonObject properties = effect.getAsJsonObject("properties");
-                if ("ARENA".equals(effect.get("eventType").getAsString()) && properties.has("arena")) {
-                    String arena = properties.get("arena").getAsString();
-                    if (!arena.isBlank() && !arenaNames.contains(arena)) arenaNames.add(arena);
-                }
-                chart.effects.add(effect);
-            }
-        }
-        create(server, chart, stagedAudio);
         chart.trackLength = calculateImportedTrackLength(chart);
         writeManifest(manifestPath(server, chart.id), chart);
         writeChartDocument(chartDocumentPath(server, chart.id), chart);
@@ -219,6 +170,31 @@ public final class ChartStorage {
         if (root.has("effects") && root.get("effects").isJsonArray()) for (JsonElement effect : root.getAsJsonArray("effects")) if (effect.isJsonObject()) chart.effects.add(Rhythmc3EffectCodec.importEffect(effect.getAsJsonObject()));
         create(server, chart, stagedAudio); return chart;
     }
+    private static void importRhythmc3Document(MinecraftServer server, ChartManifest chart, JsonObject root, Path stagedAudio) throws IOException {
+        JsonObject meta = root.getAsJsonObject("meta");
+        if (meta == null) throw new IOException("3.0 难度文件缺少 meta");
+        if (meta.has("offset") || meta.has("offsetMillis")) chart.offsetMillis = jsonNumber(meta, "offset", jsonNumber(meta, "offsetMillis", chart.offsetMillis)).longValue();
+        if (meta.has("level")) chart.level = jsonNumber(meta, "level", chart.level).doubleValue();
+        if (meta.has("initialArena") && meta.get("initialArena").isJsonPrimitive()) chart.initialArena = meta.get("initialArena").getAsString();
+        if (meta.has("bpms") && meta.get("bpms").isJsonArray()) for (JsonElement valueElement : meta.getAsJsonArray("bpms")) {
+            if (!valueElement.isJsonObject()) continue;
+            JsonObject value = valueElement.getAsJsonObject();
+            double beat = jsonNumber(value, "beat", 0).doubleValue();
+            double bpm = jsonNumber(value, "bpm", 120).doubleValue();
+            if (bpm > 0) chart.bpms.add(new ChartManifest.BpmEvent(beat, bpm));
+        }
+        chart.bpms = ChartTiming.sorted(chart.bpms, chart.bpm);
+        chart.bpm = chart.bpms.get(0).bpm;
+        ChartTiming.Prepared timing = ChartTiming.prepare(chart);
+        if (root.has("tracks") && root.get("tracks").isJsonArray()) for (JsonElement trackElement : root.getAsJsonArray("tracks")) {
+            if (trackElement.isJsonObject()) importRhythmc3Track(chart, timing, trackElement.getAsJsonObject());
+        }
+        if (chart.tracks.isEmpty()) chart.tracks.add(new ChartManifest.Track(0));
+        ChartManifest.Track primary = chart.tracks.stream().filter(track -> track.id == 0).findFirst().orElse(chart.tracks.get(0));
+        chart.speedEvents = primary.speedEvents.stream().map(event -> new ChartManifest.SpeedEvent(event.startBeat, event.endBeat, event.startValue, event.endValue, event.easingType)).collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        if (root.has("effects") && root.get("effects").isJsonArray()) for (JsonElement effect : root.getAsJsonArray("effects")) if (effect.isJsonObject()) chart.effects.add(Rhythmc3EffectCodec.importEffect(effect.getAsJsonObject()));
+        create(server, chart, stagedAudio);
+    }
     private static EditorTrackLayout readEditorTrackLayout(JsonObject meta, Path difficultyFile, Path selectedLayoutFile) throws IOException {
         if (selectedLayoutFile != null) {
             if (!Files.isRegularFile(selectedLayoutFile)) throw new IOException("制谱器布局文件不存在：" + selectedLayoutFile.getFileName());
@@ -241,14 +217,14 @@ public final class ChartStorage {
             JsonObject noteSource = sourceElement.getAsJsonObject();
             double beat = jsonNumber(noteSource, "beat", 0).doubleValue();
             if (!Double.isFinite(beat)) continue;
-            beat = snapImportedBeat(beat);
+            beat = Math.max(0.0, beat);
             ChartManifest.Note note = new ChartManifest.Note();
             note.id = UUID.randomUUID().toString(); note.trackId = track.id; note.type = jsonNumber(noteSource, "noteType", 0).intValue();
             note.beat = beat; note.time = timing.beatToSeconds(beat); note.holdGroup = jsonNumber(noteSource, "holdGroup", -1).intValue();
             readVector(noteSource, "pos", values -> { note.sourceX = values[0]; note.sourceY = values[1]; note.sourceZ = values[2]; note.x = values[0]; note.y = values[1] + 66; });
             readVector(noteSource, "scale", values -> { note.scaleX = values[0]; note.scaleY = values[1]; note.scaleZ = values[2]; });
             readVector(noteSource, "rotation", values -> { note.rotationX = values[0]; note.rotationY = values[1]; note.rotationZ = values[2]; });
-            note.z = PlaybackCoordinates.editorWorldZAtBeat(chart, note.beat); chart.notes.add(note); chart.totalBeats = Math.max(chart.totalBeats, note.beat);
+            note.z = PlaybackCoordinates.editorWorldZAtBeat(chart, note.beat) - 0.5; chart.notes.add(note); chart.totalBeats = Math.max(chart.totalBeats, note.beat);
         }
     }
     private interface VectorConsumer { void accept(double[] values); }
@@ -262,13 +238,52 @@ public final class ChartStorage {
         for (JsonElement element : source.getAsJsonArray(key)) if (element.isJsonObject()) { JsonObject event = element.getAsJsonObject(); double start = jsonNumber(event, "startBeat", 0).doubleValue(), end = jsonNumber(event, "endBeat", start).doubleValue(), startValue = jsonNumber(event, "startValue", 0).doubleValue(), endValue = jsonNumber(event, "endValue", startValue).doubleValue(); if (Double.isFinite(start) && Double.isFinite(end) && Double.isFinite(startValue) && Double.isFinite(endValue)) result.add(new ChartManifest.NumEvent(start, end, startValue, endValue, jsonNumber(event, "easingType", jsonNumber(event, "easing", 0)).intValue())); }
         return result;
     }
+    private static JsonObject convertRhythmc2ToRhythmc3(JsonObject legacyRoot, String charter, double level, long offsetMillis, String initialArena, int divisionsPerChunk) {
+        JsonObject root = new JsonObject();
+        JsonObject meta = new JsonObject();
+        JsonArray charters = new JsonArray(); charters.add(charter == null || charter.isBlank() ? "Unknown" : charter); meta.add("charters", charters);
+        meta.addProperty("level", level); meta.addProperty("offset", offsetMillis); meta.addProperty("flow-speed", 1.0);
+        meta.addProperty("initialArena", initialArena == null ? "" : initialArena); meta.addProperty("divisionsPerChunk", divisionsPerChunk);
+        JsonArray bpms = new JsonArray(); JsonObject bpm = new JsonObject(); bpm.addProperty("beat", 0.0); bpm.addProperty("bpm", 1200.0); bpms.add(bpm); meta.add("bpms", bpms); root.add("meta", meta);
+        JsonObject track = new JsonObject(); track.addProperty("id", 0);
+        for (TrackEventChannel channel : TrackEventChannel.values()) track.add(channel.jsonKey(), new JsonArray());
+        JsonArray notes = new JsonArray(); int holdGroup = 0;
+        if (legacyRoot.has("frames") && legacyRoot.get("frames").isJsonArray()) for (JsonElement frameElement : legacyRoot.getAsJsonArray("frames")) {
+            if (!frameElement.isJsonObject()) continue;
+            JsonObject frame = frameElement.getAsJsonObject(); double judgeTick = jsonNumber(frame, "judge-tick", 0).doubleValue();
+            if (!Double.isFinite(judgeTick) || !frame.has("notes") || !frame.get("notes").isJsonArray()) continue;
+            for (JsonElement noteElement : frame.getAsJsonArray("notes")) {
+                if (!noteElement.isJsonObject()) continue;
+                JsonObject source = noteElement.getAsJsonObject(); int type = oldNoteType(source.has("type") ? source.get("type").getAsString() : "NOTE_CLICK");
+                int length = Math.max(1, jsonNumber(source, "length", 1).intValue()); int group = type == 2 ? holdGroup++ : -1;
+                for (int index = 0; index < (type == 2 ? length : 1); index++) {
+                    JsonObject note = new JsonObject(); note.addProperty("noteType", type); note.addProperty("beat", Math.max(0.0, judgeTick + index));
+                    JsonArray position = new JsonArray();
+                    if (source.has("pos") && source.get("pos").isJsonArray()) {
+                        JsonArray pos = source.getAsJsonArray("pos");
+                        position.add(pos.size() > 0 ? pos.get(0).deepCopy() : new com.google.gson.JsonPrimitive(0.0));
+                        position.add(pos.size() > 1 ? pos.get(1).deepCopy() : new com.google.gson.JsonPrimitive(0.0));
+                    } else if (source.has("pos") && source.get("pos").isJsonPrimitive()) { position.add(source.get("pos")); position.add(0.0); }
+                    else { position.add(0.0); position.add(0.0); }
+                    position.add(0.0); note.add("pos", position); if (group >= 0) note.addProperty("holdGroup", group); notes.add(note);
+                }
+            }
+        }
+        track.add("notes", notes); JsonArray tracks = new JsonArray(); tracks.add(track); root.add("tracks", tracks);
+        JsonArray effects = new JsonArray();
+        if (legacyRoot.has("effects") && legacyRoot.get("effects").isJsonArray()) for (JsonElement effect : legacyRoot.getAsJsonArray("effects")) if (effect.isJsonObject()) {
+            JsonObject converted = convertRhythmc2Effect(effect.getAsJsonObject(), 1200.0, divisionsPerChunk); if (converted != null) effects.add(converted);
+        }
+        root.add("effects", effects); return root;
+    }
     private static JsonObject convertRhythmc2Effect(JsonObject old, double bpm, int divisions) {
         String legacy = firstJsonString(old, "effect-type", "eventType", firstJsonString(old, "effectType", "type", "")).toUpperCase(java.util.Locale.ROOT).replace(" ", "").replace("_", "").replace("-", "");
         if (legacy.equals("SPEED") || legacy.equals("JUDGEDOT")) return null;
         String type = switch (legacy) { case "REMOVEHOLOGRAM" -> "REMOVE_HOLOGRAM"; case "INVERT", "POTION", "POTIONEFFECT", "STATUSEFFECT" -> "EFFECT"; case "CLREFFECT" -> "CLEAR_EFFECT"; case "COLOR" -> "GLOW_COLOR"; case "VISIBLE" -> "HIDE_NOTES"; case "TEXT" -> "TEXT_DISPLAY"; case "TRANSFORMATIONS" -> "TEXT_DISPLAY_EFFECT"; case "CLIENTTIME", "SETCLIENTTIME", "TIMECLIENT", "WORLDTIME", "SETWORLDTIME", "SETTIME" -> "TIME"; default -> legacy; };
         if (type.isBlank()) return null;
-        JsonObject converted = new JsonObject(); converted.addProperty("eventType", type);
-        double tick = jsonNumber(old, "start-tick", jsonNumber(old, "beat", 0)).doubleValue(); converted.addProperty("beat", snapImportedBeat(Math.max(0.0, tick / 20.0) * bpm / 60.0));
+        if (legacy.equals("VISIBLE") && old.has("visible") && old.get("visible").isJsonPrimitive() && old.get("visible").getAsBoolean()) return null;
+        JsonObject converted = new JsonObject(); converted.addProperty("effectType", type);
+        double tick = jsonNumber(old, "start-tick", jsonNumber(old, "beat", 0)).doubleValue(); converted.addProperty("beat", Math.max(0.0, tick));
         JsonObject properties = old.has("properties") && old.get("properties").isJsonObject()
                 ? old.getAsJsonObject("properties").deepCopy() : new JsonObject();
         for (var entry : old.entrySet()) if (!entry.getKey().equals("properties")) properties.add(entry.getKey(), entry.getValue().deepCopy());
@@ -279,7 +294,7 @@ public final class ChartStorage {
         if (type.equals("TEXT_DISPLAY_EFFECT")) {
             String transformation = firstJsonString(old, "type", "transformation", firstJsonString(properties, "type", "transformation", "LINEAR_TRANSFORMATION"));
             if (transformation.equalsIgnoreCase("REMOVE")) {
-                converted.addProperty("eventType", "TEXT_DISPLAY_REMOVE");
+                converted.addProperty("effectType", "TEXT_DISPLAY_REMOVE");
             } else {
                 convertRhythmc2TextDisplayTransformation(properties, old, transformation);
             }
@@ -292,21 +307,25 @@ public final class ChartStorage {
         if (type.equals("EFFECT") && !properties.has("type") && !properties.has("effectId")) {
             String potion = firstJsonString(old, "effect", "potion", firstJsonString(old, "effect-id", "potion-effect", ""));
             if (potion.isBlank()) potion = firstJsonString(properties, "effect", "potion", firstJsonString(properties, "effect-id", "potion-effect", "UNKNOWN"));
-            properties.addProperty("type", normalizePotionEffectId(potion));
+            properties.addProperty("effectId", potionEffectId(potion));
         }
-        if (type.equals("EFFECT") && properties.has("type")) properties.addProperty("type", normalizePotionEffectId(properties.get("type").getAsString()));
+        if (type.equals("EFFECT") && properties.has("type")) {
+            properties.addProperty("effectId", potionEffectId(properties.get("type").getAsString()));
+            properties.remove("type");
+        }
+        if (type.equals("EFFECT") && properties.has("effectId") && properties.get("effectId").isJsonPrimitive() && properties.get("effectId").getAsJsonPrimitive().isString()) {
+            properties.addProperty("effectId", potionEffectId(properties.get("effectId").getAsString()));
+        }
         if (type.equals("EFFECT")) {
             JsonElement duration = properties.has("durationTicks") ? properties.get("durationTicks") : properties.get("duration");
-            if (duration != null && !duration.isJsonNull()) {
-                properties.addProperty("durationTicks", jsonNumber(properties, properties.has("durationTicks") ? "durationTicks" : "duration", 630720000L).longValue());
-                properties.remove("duration");
-            } else properties.addProperty("durationTicks", 630720000L);
+            if (duration != null && !duration.isJsonNull()) properties.addProperty("duration", Math.max(0L, Math.round(jsonNumber(properties, properties.has("durationTicks") ? "durationTicks" : "duration", 0).doubleValue() * 50.0)));
+            properties.remove("durationTicks");
+            properties.remove("effect-id"); properties.remove("potion-effect"); properties.remove("potion"); properties.remove("effect");
         }
         if (type.equals("CLEAR_EFFECT")) {
             String effectId = firstJsonString(old, "effect-id", "effect", firstJsonString(properties, "effect-id", "effect", ""));
-            JsonArray effects = new JsonArray();
-            if (!effectId.isBlank()) effects.add(normalizePotionEffectId(effectId));
-            properties.add("effects", effects);
+            properties.remove("effect-id"); properties.remove("effect");
+            if (!effectId.isBlank()) { JsonArray effects = new JsonArray(); effects.add(potionEffectId(effectId)); properties.add("effects", effects); }
             properties.remove("type");
         }
         if (type.equals("TIME") && (legacy.contains("CLIENTTIME") || legacy.contains("TIMECLIENT"))) properties.addProperty("client", true);
@@ -438,42 +457,22 @@ public final class ChartStorage {
             default -> "CLEAR";
         };
     }
-    private static String normalizePotionEffectId(String value) {
-        if (value == null || value.isBlank()) return "UNKNOWN";
+    private static int potionEffectId(String value) {
+        if (value == null || value.isBlank()) return 1;
         String normalized = value.trim().toLowerCase(java.util.Locale.ROOT).replace(' ', '_').replace('-', '_');
+        try { int numeric = Integer.parseInt(normalized); if (numeric >= 1 && numeric <= 33) return numeric; } catch (NumberFormatException ignored) { }
         if (normalized.contains(":")) normalized = normalized.substring(normalized.indexOf(':') + 1);
         return switch (normalized) {
-            case "jump", "jump_boost", "jumpboost" -> "minecraft:jump_boost";
-            case "slow", "slowness" -> "minecraft:slowness";
-            case "nightvision", "night_vision" -> "minecraft:night_vision";
-            case "invis", "invisible", "invisibility" -> "minecraft:invisibility";
-            case "blind" -> "minecraft:blindness";
-            case "dark" -> "minecraft:darkness";
-            case "levitate" -> "minecraft:levitation";
-            case "haste" -> "minecraft:haste";
-            case "mining_fatigue", "miningfatigue" -> "minecraft:mining_fatigue";
-            case "speed" -> "minecraft:speed";
-            case "strength" -> "minecraft:strength";
-            case "instant_health", "instanthealth" -> "minecraft:instant_health";
-            case "instant_damage", "instantdamage" -> "minecraft:instant_damage";
-            case "regeneration", "regen" -> "minecraft:regeneration";
-            case "resistance" -> "minecraft:resistance";
-            case "fire_resistance", "fireresistance" -> "minecraft:fire_resistance";
-            case "water_breathing", "waterbreathing" -> "minecraft:water_breathing";
-            case "absorption" -> "minecraft:absorption";
-            case "saturation" -> "minecraft:saturation";
-            case "health_boost", "healthboost" -> "minecraft:health_boost";
-            case "glowing" -> "minecraft:glowing";
-            case "hunger" -> "minecraft:hunger";
-            case "weakness" -> "minecraft:weakness";
-            case "poison" -> "minecraft:poison";
-            case "wither" -> "minecraft:wither";
-            case "conduit_power", "conduitpower" -> "minecraft:conduit_power";
-            case "dolphins_grace", "dolphinsgrace" -> "minecraft:dolphins_grace";
-            case "bad_omen", "badomen" -> "minecraft:bad_omen";
-            case "hero_of_the_village", "hero_of_village", "heroofthevillage" -> "minecraft:hero_of_the_village";
-            case "darkness" -> "minecraft:darkness";
-            default -> value.contains(":") ? value.toLowerCase(java.util.Locale.ROOT) : "minecraft:" + normalized;
+            case "speed" -> 1; case "slow", "slowness" -> 2; case "haste" -> 3; case "mining_fatigue", "miningfatigue" -> 4;
+            case "strength" -> 5; case "instant_health", "instanthealth" -> 6; case "instant_damage", "instantdamage" -> 7;
+            case "jump", "jump_boost", "jumpboost" -> 8; case "nausea", "confusion" -> 9; case "regeneration", "regen" -> 10;
+            case "resistance" -> 11; case "fire_resistance", "fireresistance" -> 12; case "water_breathing", "waterbreathing" -> 13;
+            case "invis", "invisible", "invisibility" -> 14; case "blind", "blindness" -> 15; case "nightvision", "night_vision" -> 16;
+            case "hunger" -> 17; case "weakness" -> 18; case "poison" -> 19; case "wither" -> 20; case "health_boost", "healthboost" -> 21;
+            case "absorption" -> 22; case "saturation" -> 23; case "glowing" -> 24; case "levitate", "levitation" -> 25;
+            case "luck" -> 26; case "unluck", "bad_luck" -> 27; case "slow_falling", "slowfalling" -> 28;
+            case "conduit_power", "conduitpower" -> 29; case "dolphins_grace", "dolphinsgrace" -> 30; case "bad_omen", "badomen" -> 31;
+            case "hero_of_the_village", "hero_of_village", "heroofthevillage" -> 32; case "dark", "darkness" -> 33; default -> 1;
         };
     }
     private static int oldNoteType(String type) {
