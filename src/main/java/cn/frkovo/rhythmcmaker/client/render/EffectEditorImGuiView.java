@@ -123,6 +123,7 @@ public final class EffectEditorImGuiView {
     private final Deque<EditorSnapshot> redoHistory = new ArrayDeque<>();
     private boolean restoringSnapshot;
     private boolean selectionDragging;
+    private boolean timelineControlSelection;
     private float selectionStartX;
     private float selectionStartY;
     private float selectionEndX;
@@ -740,6 +741,12 @@ public final class EffectEditorImGuiView {
             return true;
         }
         if (io.getWantCaptureKeyboard() || ImGui.isAnyItemActive()) return false;
+        if (isTimelineKeyboardTarget()
+                && (input.key() == GLFW.GLFW_KEY_BACKSPACE || input.key() == GLFW.GLFW_KEY_DELETE)
+                && !selectedIndices.isEmpty()) {
+            deleteSelectedEffects();
+            return true;
+        }
         if (input.key() == GLFW.GLFW_KEY_SPACE) {
             if (!spaceKeyDown) {
                 spaceKeyDown = true;
@@ -763,9 +770,14 @@ public final class EffectEditorImGuiView {
         double currentBeat = RhythmcMakerClient.isEffectEditorPlaybackRequested()
                 ? RhythmcMakerClient.effectEditorCurrentBeat() : playhead[0];
         double normalStep = 1.0 / Math.max(1, chart == null ? 1 : chart.divisionsPerBeat);
-        double divisionsPerBeat = chart == null ? normalStep : Math.max(1.0, Math.min(32.0, chart.divisionsPerBeat));
         double beatStep = 1.0;
         seekTimelineBeat(currentBeat + direction * (fast ? beatStep : normalStep), timelineMaxBeat());
+    }
+
+    private void moveTimelinePlayhead(int direction, double beatStep) {
+        double currentBeat = RhythmcMakerClient.isEffectEditorPlaybackRequested()
+                ? RhythmcMakerClient.effectEditorCurrentBeat() : playhead[0];
+        seekTimelineBeat(currentBeat + direction * beatStep, timelineMaxBeat());
     }
 
     /** Returns the current ImGui preview window rectangle used for mouse camera controls. */
@@ -941,8 +953,10 @@ public final class EffectEditorImGuiView {
         if (hovered && Math.abs(io.getMouseWheel()) > 0.001f) {
             float wheel = io.getMouseWheel();
             if (isAltPressed()) {
-                int beatSteps = Math.max(1, Math.round(Math.abs(wheel)));
-                moveTimelinePlayhead(wheel > 0.0f ? -beatSteps : beatSteps, true);
+                moveTimelinePlayhead(wheel > 0.0f ? -1 : 1, 10.0);
+                keepPlayheadVisible(timelineMaxBeat());
+            } else if (isShiftPressed()) {
+                moveTimelinePlayhead(wheel > 0.0f ? -1 : 1, 1.0);
                 keepPlayheadVisible(timelineMaxBeat());
             } else if (isControlPressed()) {
                 if (contentHovered) zoomTimelineAt(mouseX, timelineLeft, timelineWidth, wheel);
@@ -967,10 +981,15 @@ public final class EffectEditorImGuiView {
                 TimelineHit hit = findTimelineHit(mouseX, mouseY, hits);
                 if (hit != null) {
                     TimelineMarker marker = hit.marker();
-                    if (marker.kind() == TimelineMarkerKind.KEYFRAME || !selectedIndices.contains(marker.eventIndex())) {
+                    timelineControlSelection = isControlPressed();
+                    if (timelineControlSelection) {
+                        toggleSelection(marker.eventIndex());
+                    } else if (marker.kind() == TimelineMarkerKind.KEYFRAME
+                            || !selectedIndices.contains(marker.eventIndex())) {
                         select(marker.eventIndex());
                     }
-                    if (registry.find(eventType(workingEffects.get(marker.eventIndex()))) != null) {
+                    if (!timelineControlSelection
+                            && registry.find(eventType(workingEffects.get(marker.eventIndex()))) != null) {
                         timelineDraggedEvent = marker.eventIndex();
                         timelineDraggedChannel = marker.channelIndex();
                         timelineDraggedKeyframe = marker.keyframeIndex();
@@ -1020,7 +1039,7 @@ public final class EffectEditorImGuiView {
         }
         if (ImGui.isMouseReleased(0)) {
             if (timelineDragSnapshot != null) finishTimelineDrag();
-            else if (timelineDraggedEvent >= 0 && hovered) select(timelineDraggedEvent);
+            else if (!timelineControlSelection && timelineDraggedEvent >= 0 && hovered) select(timelineDraggedEvent);
             if (selectionDragging) {
                 selectionDragging = false;
                 selectMarkersInRectangle(hits);
@@ -1028,6 +1047,7 @@ public final class EffectEditorImGuiView {
             timelineDraggingRange = false;
             timelineDraggingScrollBar = false;
             timelineDraggingPlayhead = false;
+            timelineControlSelection = false;
             timelineDraggedEvent = -1;
             timelineDraggedChannel = -1;
             timelineDraggedKeyframe = -1;
@@ -1445,6 +1465,14 @@ public final class EffectEditorImGuiView {
                 || GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_RIGHT_ALT) == GLFW.GLFW_PRESS;
     }
 
+    private boolean isShiftPressed() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.getWindow() == null) return false;
+        long handle = client.getWindow().getHandle();
+        return GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_LEFT_SHIFT) == GLFW.GLFW_PRESS
+                || GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_RIGHT_SHIFT) == GLFW.GLFW_PRESS;
+    }
+
     private int totalTimelineRows() {
         return cachedTimelineRows == null ? buildTimelineRows().size() : cachedTimelineRows.size();
     }
@@ -1666,6 +1694,25 @@ public final class EffectEditorImGuiView {
         selectedIndices.add(index);
         playhead[0] = (float) eventBeat(workingEffects.get(index));
         seekAction.accept((double) playhead[0]);
+        syncBuffers();
+    }
+
+    private void toggleSelection(int index) {
+        if (chart == null || index < 0 || index >= workingEffects.size()) return;
+        if (selectedIndices.contains(index)) {
+            selectedIndices.remove(index);
+            if (selectedIndex == index) {
+                selectedIndex = selectedIndices.isEmpty() ? -1 : selectedIndices.iterator().next();
+            }
+        } else {
+            selectedIndices.add(index);
+            selectedIndex = index;
+        }
+        if (selectedIndex >= 0) {
+            playhead[0] = (float) eventBeat(workingEffects.get(selectedIndex));
+            seekAction.accept((double) playhead[0]);
+        }
+        bufferIndex = Integer.MIN_VALUE;
         syncBuffers();
     }
 

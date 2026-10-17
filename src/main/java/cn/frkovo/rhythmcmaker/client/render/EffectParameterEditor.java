@@ -142,17 +142,17 @@ public final class EffectParameterEditor {
             state.durationPartsInitialized = true;
             state.durationPreferredOnly = false;
         }
-        ImGui.setNextItemWidth(72.0f);
+        ImGui.setNextItemWidth(112.0f);
         boolean updated = ImGui.inputInt("n##duration-beat", state.durationWhole, 1, 1);
         ImGui.sameLine();
         ImGui.text("+");
         ImGui.sameLine();
-        ImGui.setNextItemWidth(72.0f);
+        ImGui.setNextItemWidth(112.0f);
         updated |= ImGui.inputInt("a##duration-beat", state.durationNumerator, 1, 1);
         ImGui.sameLine();
         ImGui.text("/");
         ImGui.sameLine();
-        ImGui.setNextItemWidth(72.0f);
+        ImGui.setNextItemWidth(112.0f);
         updated |= ImGui.inputInt("b##duration-beat", state.durationDenominator, 1, 1);
         ImGui.sameLine();
         ImGui.text("beat");
