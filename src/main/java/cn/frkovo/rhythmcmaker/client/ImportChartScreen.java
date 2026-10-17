@@ -95,7 +95,7 @@ private void importLegacyMenu(FlowLayout page) {
             ClientChartAccess.status("BPM 和定数必须是有效数字");
             return;
         }
-        if (!(bpm > 0) || level < 0 || !java.util.Set.of("WD", "NR", "ED", "VO").contains(draft.importDifficulty)) {
+        if (!Double.isFinite(bpm) || !Double.isFinite(level) || !(bpm > 0) || level < 0 || !java.util.Set.of("WD", "NR", "ED", "VO").contains(draft.importDifficulty)) {
             ClientChartAccess.status("请输入有效的 BPM、定数和难度（WD/NR/ED/VO）");
             return;
         }

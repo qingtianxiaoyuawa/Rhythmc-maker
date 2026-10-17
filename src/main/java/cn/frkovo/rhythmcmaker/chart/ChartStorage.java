@@ -74,15 +74,15 @@ public final class ChartStorage {
         chart.charter = firstJsonString(meta, "charter", "charter-alias", "Unknown");
         chart.coverItemId = coverItemId("minecraft:note_block");
         chart.difficulty = difficulty;
-        chart.bpm = 1200.0;
+        chart.bpm = bpm;
         chart.divisionsPerBeat = RhythmcMaker.defaultDivisionsPerBeat();
-        chart.bpms.add(new ChartManifest.BpmEvent(0, chart.bpm));
+        chart.bpms.add(new ChartManifest.BpmEvent(0, bpm));
         chart.offsetMillis = Math.round(jsonNumber(meta, "offset", 0).doubleValue() * 50.0);
         chart.level = level;
         if (meta.has("initial-arena") && meta.get("initial-arena").isJsonPrimitive()) chart.initialArena = meta.get("initial-arena").getAsString();
         List<String> arenaNames = new ArrayList<>();
         if (chart.initialArena != null && !chart.initialArena.isBlank()) arenaNames.add(chart.initialArena);
-        JsonObject root = convertRhythmc2ToRhythmc3(legacyRoot, chart.charter, chart.level, chart.offsetMillis, chart.initialArena, chart.divisionsPerBeat);
+        JsonObject root = convertRhythmc2ToRhythmc3(legacyRoot, chart.charter, chart.level, chart.offsetMillis, chart.initialArena, chart.divisionsPerBeat, bpm);
         importRhythmc3Document(server, chart, root, stagedAudio);
         if (chart.effects != null) for (JsonObject effect : chart.effects) {
             if (effect == null) continue;
@@ -240,13 +240,13 @@ public final class ChartStorage {
         for (JsonElement element : source.getAsJsonArray(key)) if (element.isJsonObject()) { JsonObject event = element.getAsJsonObject(); double start = jsonNumber(event, "startBeat", 0).doubleValue(), end = jsonNumber(event, "endBeat", start).doubleValue(), startValue = jsonNumber(event, "startValue", 0).doubleValue(), endValue = jsonNumber(event, "endValue", startValue).doubleValue(); if (Double.isFinite(start) && Double.isFinite(end) && Double.isFinite(startValue) && Double.isFinite(endValue)) result.add(new ChartManifest.NumEvent(start, end, startValue, endValue, jsonNumber(event, "easingType", jsonNumber(event, "easing", 0)).intValue())); }
         return result;
     }
-    private static JsonObject convertRhythmc2ToRhythmc3(JsonObject legacyRoot, String charter, double level, long offsetMillis, String initialArena, int divisionsPerBeat) {
+    private static JsonObject convertRhythmc2ToRhythmc3(JsonObject legacyRoot, String charter, double level, long offsetMillis, String initialArena, int divisionsPerBeat, double bpm) {
         JsonObject root = new JsonObject();
         JsonObject meta = new JsonObject();
         JsonArray charters = new JsonArray(); charters.add(charter == null || charter.isBlank() ? "Unknown" : charter); meta.add("charters", charters);
-        meta.addProperty("level", level); meta.addProperty("offset", offsetMillis); meta.addProperty("flow-speed", 1.0);
+        meta.addProperty("level", level); meta.addProperty("offset", offsetMillis); meta.addProperty("flow-speed", 1.0); meta.addProperty("bpm", bpm);
         meta.addProperty("initialArena", initialArena == null ? "" : initialArena); meta.addProperty("divisionsPerBeat", divisionsPerBeat);
-        JsonArray bpms = new JsonArray(); JsonObject bpm = new JsonObject(); bpm.addProperty("beat", 0.0); bpm.addProperty("bpm", 1200.0); bpms.add(bpm); meta.add("bpms", bpms); root.add("meta", meta);
+        JsonArray bpms = new JsonArray(); JsonObject bpmEvent = new JsonObject(); bpmEvent.addProperty("beat", 0.0); bpmEvent.addProperty("bpm", bpm); bpms.add(bpmEvent); meta.add("bpms", bpms); root.add("meta", meta);
         JsonObject track = new JsonObject(); track.addProperty("id", 0);
         for (TrackEventChannel channel : TrackEventChannel.values()) track.add(channel.jsonKey(), new JsonArray());
         JsonArray notes = new JsonArray(); int holdGroup = 0;
@@ -259,7 +259,7 @@ public final class ChartStorage {
                 JsonObject source = noteElement.getAsJsonObject(); int type = oldNoteType(source.has("type") ? source.get("type").getAsString() : "NOTE_CLICK");
                 int length = Math.max(1, jsonNumber(source, "length", 1).intValue()); int group = type == 2 ? holdGroup++ : -1;
                 for (int index = 0; index < (type == 2 ? length : 1); index++) {
-                    JsonObject note = new JsonObject(); note.addProperty("noteType", type); note.addProperty("beat", Math.max(0.0, judgeTick + index));
+                    JsonObject note = new JsonObject(); note.addProperty("noteType", type); note.addProperty("beat", snapImportedBeat(Math.max(0.0, (judgeTick + index) * bpm / 1200.0)));
                     JsonArray position = new JsonArray();
                     if (source.has("pos") && source.get("pos").isJsonArray()) {
                         JsonArray pos = source.getAsJsonArray("pos");
@@ -274,7 +274,7 @@ public final class ChartStorage {
         track.add("notes", notes); JsonArray tracks = new JsonArray(); tracks.add(track); root.add("tracks", tracks);
         JsonArray effects = new JsonArray();
         if (legacyRoot.has("effects") && legacyRoot.get("effects").isJsonArray()) for (JsonElement effect : legacyRoot.getAsJsonArray("effects")) if (effect.isJsonObject()) {
-            JsonObject converted = convertRhythmc2Effect(effect.getAsJsonObject(), 1200.0, divisionsPerBeat); if (converted != null) effects.add(converted);
+            JsonObject converted = convertRhythmc2Effect(effect.getAsJsonObject(), bpm, divisionsPerBeat); if (converted != null) effects.add(converted);
         }
         root.add("effects", effects); return root;
     }
@@ -285,7 +285,7 @@ public final class ChartStorage {
         if (type.isBlank()) return null;
         if (legacy.equals("VISIBLE") && old.has("visible") && old.get("visible").isJsonPrimitive() && old.get("visible").getAsBoolean()) return null;
         JsonObject converted = new JsonObject(); converted.addProperty("effectType", type);
-        double tick = jsonNumber(old, "start-tick", jsonNumber(old, "beat", 0)).doubleValue(); converted.addProperty("beat", Math.max(0.0, tick));
+        double tick = jsonNumber(old, "start-tick", jsonNumber(old, "beat", 0)).doubleValue(); converted.addProperty("beat", snapImportedBeat(Math.max(0.0, tick * bpm / 1200.0)));
         JsonObject properties = old.has("properties") && old.get("properties").isJsonObject()
                 ? old.getAsJsonObject("properties").deepCopy() : new JsonObject();
         for (var entry : old.entrySet()) if (!entry.getKey().equals("properties")) properties.add(entry.getKey(), entry.getValue().deepCopy());
@@ -515,12 +515,27 @@ public final class ChartStorage {
     }
 
     private static int calculateImportedTrackLength(ChartManifest chart) {
-        double beats = chart.durationSeconds > 0 && chart.bpm > 0 ? ChartTiming.secondsToBeat(chart, chart.durationSeconds) : 8.0;
+        double contentBeats = chart.notes == null ? 0.0 : chart.notes.stream()
+                .filter(java.util.Objects::nonNull)
+                .mapToDouble(note -> note.beat)
+                .filter(Double::isFinite)
+                .max()
+                .orElse(0.0);
+        if (chart.effects != null) {
+            contentBeats = Math.max(contentBeats, chart.effects.stream()
+                    .filter(java.util.Objects::nonNull)
+                    .mapToDouble(effect -> effect.has("beat") ? effect.get("beat").getAsDouble() : 0.0)
+                    .filter(Double::isFinite)
+                    .max()
+                    .orElse(0.0));
+        }
+        double durationBeats = chart.durationSeconds > 0 && chart.bpm > 0
+                ? ChartTiming.secondsToBeat(chart, chart.durationSeconds) : 0.0;
+        double beats = Math.max(1.0, Math.max(contentBeats, durationBeats));
         chart.totalBeats = beats;
         chart.beatCount = Math.max(1, (int) Math.ceil(beats));
         return Math.max(8, chart.beatCount * Math.max(1, Math.min(32, chart.divisionsPerBeat)));
     }
-
     private static void ensureDefaultTrackSpeed(ChartManifest chart) {
         if (chart.tracks == null) chart.tracks = new ArrayList<>();
         ChartManifest.Track defaultTrack = chart.tracks.stream()

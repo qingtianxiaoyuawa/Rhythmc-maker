@@ -17,7 +17,7 @@ final class GenericFileChooser {
         if (client.getWindow().isFullscreen()) GLFW.glfwIconifyWindow(client.getWindow().getHandle());
         Thread.ofVirtual().start(() -> {
             try {
-                String command = "Add-Type -AssemblyName System.Windows.Forms; $dialog = New-Object System.Windows.Forms.OpenFileDialog; $dialog.Filter = '" + filter.replace("'", "''") + "|所有文件|*.*'; $dialog.Multiselect = $false; if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write([Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($dialog.FileName))) }";
+                String command = "Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $owner = New-Object System.Windows.Forms.Form; $owner.TopMost = $true; $owner.ShowInTaskbar = $false; $owner.FormBorderStyle = 'None'; $owner.Opacity = 0; $owner.Size = New-Object System.Drawing.Size(1,1); $owner.Show(); $dialog = New-Object System.Windows.Forms.OpenFileDialog; $dialog.Filter = '" + filter.replace("'", "''") + "|所有文件|*.*'; $dialog.Multiselect = $false; if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write([Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($dialog.FileName))) }; $owner.Close(); $owner.Dispose()";
                 Process process = new ProcessBuilder("powershell.exe", "-NoProfile", "-STA", "-Command", command).redirectErrorStream(true).start();
                 StringBuilder output = new StringBuilder();
                 try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) { String line; while ((line = reader.readLine()) != null) output.append(line); }
