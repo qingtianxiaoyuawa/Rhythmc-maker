@@ -214,6 +214,7 @@ final class PlaceholderScreen extends RhythmcScreen {
                     if (!EditorTrackLayout.isSupportedDivisionsPerChunk(divisionsValue) || !EditorTrackLayout.isSupportedLaneCount(lanesValue)) throw new NumberFormatException();
                     EditorTrackLayout layout = EditorTrackLayout.of(lanesValue, divisionsValue);
                     ClientChartAccess.applyLocalLayout(layout);
+                    invalidateTrackSnapState();
                     RhythmcMakerClient.sendChartCommand("rhythmc_layout_set " + layout.divisionsPerChunk() + " " + layout.laneCount());
                     ClientChartAccess.status("正在应用制谱器轨道：" + layout.laneCount() + " × " + layout.divisionsPerChunk());
                     close();

@@ -96,6 +96,8 @@ final class ClientChartAccess {
         pendingLayoutDivisions = layout.divisionsPerChunk();
         pendingLayoutLanes = layout.laneCount();
         pendingLayoutExpiresAtNanos = System.nanoTime() + 8_000_000_000L;
+        lastRefreshRequest = null;
+        lastRefreshError = null;
         activeChartModifiedTime = null;
         activeChartFileSize = -1L;
         RhythmcMakerClient.requestSidebarRefresh();

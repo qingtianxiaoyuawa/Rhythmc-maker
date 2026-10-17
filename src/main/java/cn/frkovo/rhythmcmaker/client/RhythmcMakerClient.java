@@ -166,6 +166,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
                 syncSelectedPlaybackChunk(ClientChartAccess.activeChart());
                 if (playbackAudioRequested || audioProcess != null) finishPlayback(client, true);
             }
+            if (client.player != null && RhythmcMaker.consumeTrackSnapUndoInvalidation(client.player.getUuid())) PlaceholderScreen.invalidateTrackSnapState();
             String operationNotice = ClientSceneAccess.consumeOperationNotice();
             if (operationNotice != null) {
                 ClientSceneAccess.status(operationNotice);

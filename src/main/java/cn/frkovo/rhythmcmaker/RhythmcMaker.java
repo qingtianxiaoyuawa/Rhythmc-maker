@@ -117,7 +117,9 @@ public final class RhythmcMaker implements ModInitializer {
     private static final Set<UUID> DIMENSION_TRAVEL_READY = ConcurrentHashMap.newKeySet();
     private static final Map<UUID, Integer> SELECTED_START_CHUNKS = new ConcurrentHashMap<>();
     private static final Map<UUID, TrackSnapUndo> TRACK_SNAP_UNDOS = new ConcurrentHashMap<>();
+    private static final Set<UUID> TRACK_SNAP_UNDO_INVALIDATIONS = ConcurrentHashMap.newKeySet();
     private static final Map<UUID, TrackSnapTask> TRACK_SNAP_TASKS = new ConcurrentHashMap<>();
+    private static final Map<UUID, TrackSnapUndoTask> TRACK_SNAP_UNDO_TASKS = new ConcurrentHashMap<>();
     private static final Map<UUID, PlaybackSession> PLAYBACK_SESSIONS = new ConcurrentHashMap<>();
     private static final Map<UUID, ScrollJudgementSession> SCROLL_JUDGEMENT_SESSIONS = new ConcurrentHashMap<>();
     /** Original player transform for the effect-editor preview. The player entity follows the
@@ -271,6 +273,7 @@ public final class RhythmcMaker implements ModInitializer {
             processNoteDisplayChunkCleanupTasks(server);
             processEditorNoteDisplaySweepTasks(server);
             processTrackSnapTasks(server);
+            processTrackSnapUndoTasks(server);
             processScrollJudgementSessions(server);
             processPlaybackSessions(server);
             for (ServerWorld world : server.getWorlds()) if (isEditorWorld(world)) ensurePlaybackChunksLoaded(world);
@@ -352,6 +355,7 @@ public final class RhythmcMaker implements ModInitializer {
             ACTIVE_SCENE_EDITORS.remove(handler.getPlayer().getUuid());
             ACTIVE_SCENE_CHARTS.remove(handler.getPlayer().getUuid());
             TRACK_SNAP_TASKS.remove(handler.getPlayer().getUuid());
+            TRACK_SNAP_UNDO_TASKS.remove(handler.getPlayer().getUuid());
             SCENE_OPERATION_STATUS.remove(handler.getPlayer().getUuid());
             DIMENSION_TRAVEL_READY.remove(handler.getPlayer().getUuid());
             stopPlayback(server, handler.getPlayer(), false);
@@ -796,7 +800,7 @@ public final class RhythmcMaker implements ModInitializer {
             repositionNotes(chart);
             chart.trackLength = calculateTrackLength(chart);
             saveChart(source.getServer(), chart);
-            TRACK_SNAP_UNDOS.remove(player.getUuid());
+            invalidateTrackSnapUndo(player.getUuid());
             if (editor != null) CHART_CACHE_BY_WORLD.put(editor.getRegistryKey(), chart);
             if (editor != null) {
                 EditorTrackRebuildTask rebuildTask = new EditorTrackRebuildTask(editor.getRegistryKey(), 0, previousTrackLength, chart.trackLength, targetDivisions, targetLaneCount, previousLaneCount, player.getUuid(), previousChunk);
@@ -864,6 +868,8 @@ public final class RhythmcMaker implements ModInitializer {
                 ChartManifest.Note retained = copyNote(note);
                 if (fractional) {
                     task.changed.add(new TrackSnapChangedNote(retained.id, retained.z, retained.beat, retained.time));
+                    retained.id = UUID.randomUUID().toString();
+                    task.generatedNoteIds.add(retained.id);
                     retained.z = targetZ;
                     retained.beat = PlaybackCoordinates.editorBeatAtBlockZ(task.chart, targetZ);
                     retained.time = ChartTiming.beatToSeconds(task.chart, retained.beat);
@@ -888,8 +894,9 @@ public final class RhythmcMaker implements ModInitializer {
                 return;
             }
             task.chart.notes = task.retained;
+            updateChartTotalBeats(task.chart);
             saveChartSynchronously(server, task.chart);
-            TRACK_SNAP_UNDOS.put(playerId, new TrackSnapUndo(task.chart.id, task.changed, task.removed));
+            TRACK_SNAP_UNDOS.put(playerId, new TrackSnapUndo(task.chart.id, task.original, task.generatedNoteIds));
             refreshNoteDisplays(task.world, task.chart);
             completeSceneOperation(playerId, "轨道吸附完成：修改 " + task.changed.size() + " 个，删除重复 " + task.removed.size() + " 个，剩余 " + task.retained.size() + " 个");
         } catch (IOException | RuntimeException exception) {
@@ -907,33 +914,48 @@ public final class RhythmcMaker implements ModInitializer {
             player.sendMessage(Text.literal("没有可撤销的轨道吸附"), true);
             return 0;
         }
-        java.util.List<ChartManifest.Note> current = copyNotes(chart.notes);
-        try {
-            for (TrackSnapChangedNote changed : undo.changed) {
-                ChartManifest.Note note = chart.notes.stream().filter(value -> value != null && changed.id.equals(value.id)).findFirst().orElse(null);
-                if (note == null) continue;
-                note.z = changed.z;
-                note.beat = changed.beat;
-                note.time = changed.time;
-            }
-            for (TrackSnapRemovedNote removed : undo.removed) {
-                if (chart.notes.stream().noneMatch(value -> value != null && removed.note.id.equals(value.id))) {
-                    int insertion = Math.min(removed.index, chart.notes.size());
-                    chart.notes.add(insertion, copyNote(removed.note));
-                }
-            }
-            saveChartSynchronously(source.getServer(), chart);
-            TRACK_SNAP_UNDOS.remove(player.getUuid());
-            refreshNoteDisplays(world, chart);
-            player.sendMessage(Text.literal("已撤销上次轨道吸附"), true);
-            return 1;
-        } catch (IOException exception) {
-            chart.notes = current;
-            player.sendMessage(Text.literal("撤销保存失败，已完全回滚"), true);
-            LOGGER.warn("Failed to undo fractional note snap for chart {}", chart.id, exception);
-            return 0;
+        if (isSceneOperationBusy(player.getUuid())) return 0;
+        TrackSnapUndoTask task = new TrackSnapUndoTask(chart, world, undo, copyNotes(chart.notes));
+        TRACK_SNAP_UNDO_TASKS.put(player.getUuid(), task);
+        beginSceneOperation(player.getUuid(), "正在撤销吸附：0%（0/" + task.total + "）");
+        return 1;
+    }
+    private static void processTrackSnapUndoTasks(MinecraftServer server) {
+        for (var entry : TRACK_SNAP_UNDO_TASKS.entrySet()) {
+            UUID playerId = entry.getKey();
+            TrackSnapUndoTask task = entry.getValue();
+            task.cursor = Math.min(task.total, task.cursor + 32);
+            int percent = task.total == 0 ? 100 : Math.min(99, task.cursor * 100 / task.total);
+            updateSceneOperation(playerId, "正在撤销吸附：" + percent + "%（" + task.cursor + "/" + task.total + "）");
+            if (task.cursor >= task.total) finishTrackSnapUndoTask(server, playerId, task);
         }
     }
+
+    private static void finishTrackSnapUndoTask(MinecraftServer server, UUID playerId, TrackSnapUndoTask task) {
+        if (!TRACK_SNAP_UNDO_TASKS.remove(playerId, task)) return;
+        try {
+            java.util.List<ChartManifest.Note> restored = new java.util.ArrayList<>();
+            java.util.Set<String> originalIds = new java.util.HashSet<>();
+            for (ChartManifest.Note note : task.undo.originalNotes) {
+                ChartManifest.Note copy = copyNote(note);
+                restored.add(copy);
+                if (copy.id != null) originalIds.add(copy.id);
+            }
+            for (ChartManifest.Note note : task.current) {
+                if (note.id != null && !task.undo.generatedNoteIds.contains(note.id) && !originalIds.contains(note.id)) restored.add(copyNote(note));
+            }
+            task.chart.notes = restored;
+            updateChartTotalBeats(task.chart);
+            saveChartSynchronously(server, task.chart);
+            TRACK_SNAP_UNDOS.remove(playerId);
+            refreshNoteDisplays(task.world, task.chart);
+            completeSceneOperation(playerId, "已撤销上次轨道吸附");
+        } catch (IOException | RuntimeException exception) {
+            completeSceneOperation(playerId, "撤销保存失败，未完成撤销");
+            LOGGER.warn("Failed to undo fractional note snap for chart {}", task.chart.id, exception);
+        }
+    }
+
     private static java.util.List<ChartManifest.Note> copyNotes(java.util.List<ChartManifest.Note> notes) {
         java.util.List<ChartManifest.Note> result = new java.util.ArrayList<>();
         if (notes != null) for (ChartManifest.Note note : notes) if (note != null) result.add(copyNote(note));
@@ -1086,6 +1108,11 @@ public final class RhythmcMaker implements ModInitializer {
         chart.totalBeats = beats;
         chart.chunkCount = Math.max(1, (int) Math.ceil(beats));
         return Math.max(8, chart.chunkCount * divisionsPerChunk(chart));
+    }
+
+    private static void updateChartTotalBeats(ChartManifest chart) {
+        if (chart.notes == null) { chart.totalBeats = 0.0; return; }
+        chart.totalBeats = chart.notes.stream().filter(java.util.Objects::nonNull).mapToDouble(note -> note.beat).max().orElse(0.0);
     }
 
     private static int divisionsPerChunk(ChartManifest chart) {
@@ -1608,6 +1635,14 @@ public final class RhythmcMaker implements ModInitializer {
 
     public static String consumeSceneOperationNotice(UUID playerId) {
         return playerId == null ? null : SCENE_OPERATION_NOTICES.remove(playerId);
+    }
+
+    public static boolean consumeTrackSnapUndoInvalidation(UUID playerId) {
+        return playerId != null && TRACK_SNAP_UNDO_INVALIDATIONS.remove(playerId);
+    }
+
+    private static void invalidateTrackSnapUndo(UUID playerId) {
+        if (playerId != null && TRACK_SNAP_UNDOS.remove(playerId) != null) TRACK_SNAP_UNDO_INVALIDATIONS.add(playerId);
     }
 
     private static void beginSceneOperation(UUID playerId, String status) {
@@ -3638,7 +3673,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             double beat = Double.isFinite(note.beat) ? Math.max(0.0, note.beat) : timing.secondsToBeat(note.time);
             note.beat = beat;
             note.time = timing.beatToSeconds(beat);
-            note.z = PlaybackCoordinates.editorWorldZAtBeat(chart, beat);
+            note.z = PlaybackCoordinates.editorWorldZAtBeat(chart, beat) - 0.5;
         }
     }
     private static Map<String, BlockPos> captureNotePositions(ChartManifest chart) {
@@ -4325,7 +4360,19 @@ private static void showSceneBoundary(MinecraftServer server) {
     private record TrackSnapKey(double x, double y, double z, int type) {}
     private record TrackSnapChangedNote(String id, double z, double beat, double time) {}
     private record TrackSnapRemovedNote(int index, ChartManifest.Note note) {}
-    private record TrackSnapUndo(String chartId, java.util.List<TrackSnapChangedNote> changed, java.util.List<TrackSnapRemovedNote> removed) {}
+    private record TrackSnapUndo(String chartId, java.util.List<ChartManifest.Note> originalNotes, Set<String> generatedNoteIds) {}
+    private static final class TrackSnapUndoTask {
+        private final ChartManifest chart;
+        private final ServerWorld world;
+        private final TrackSnapUndo undo;
+        private final java.util.List<ChartManifest.Note> current;
+        private final int total;
+        private int cursor;
+        private TrackSnapUndoTask(ChartManifest chart, ServerWorld world, TrackSnapUndo undo, java.util.List<ChartManifest.Note> current) {
+            this.chart = chart; this.world = world; this.undo = undo; this.current = current;
+            this.total = Math.max(1, current.size() + undo.originalNotes.size());
+        }
+    }
     private static final class TrackSnapTask {
         private final UUID playerId;
         private final ChartManifest chart;
@@ -4335,6 +4382,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final java.util.List<TrackSnapChangedNote> changed = new java.util.ArrayList<>();
         private final java.util.List<TrackSnapRemovedNote> removed = new java.util.ArrayList<>();
         private final Set<TrackSnapKey> retainedKeys = new java.util.HashSet<>();
+        private final Set<String> generatedNoteIds = new java.util.HashSet<>();
         private final int total;
         private int cursor;
         private long lastProgressTick = -1L;
