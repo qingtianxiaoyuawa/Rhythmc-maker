@@ -3300,7 +3300,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             double beat = timing.secondsToBeat(songTime - chart.offsetMillis / 1000.0);
             TrackPlayback.Pose pose = trackProfiles.getOrDefault(note.trackId, trackProfiles.get(0)).poseAt(beat);
             Vector3f local = new Vector3f((float) note.x,
-                    (float) (note.y - 66.0),
+                    (float) (note.y - noteHeightBase(note.type)),
                     (float) (note.sourceZ == null ? 0.0 : note.sourceZ));
             local.mul((float) pose.scaleX(), (float) pose.scaleY(), (float) pose.scaleZ());
             trackRotation(pose).transform(local);
@@ -3654,6 +3654,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         int z = -pos.getZ() - 3;
         return x >= laneMinX(chart) && x <= laneMaxX(chart) && pos.getY() >= 65 && pos.getY() <= 68 && z >= 0 && z < calculateTrackLength(chart);
     }
+    private static double noteHeightBase(int type) { return type == 2 ? 65.0 : 66.0; }
     private static boolean isAllowedNoteTypeAtHeight(int y, int type) {
         return type >= 0 && (y == 65 ? type == 2 : y >= 66 && y <= 68 && type != 2);
     }

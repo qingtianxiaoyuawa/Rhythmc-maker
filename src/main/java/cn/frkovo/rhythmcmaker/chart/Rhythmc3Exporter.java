@@ -149,6 +149,8 @@ public final class Rhythmc3Exporter {
         }
     }
 
+    private static double noteHeightBase(int type) { return type == 2 ? 65.0 : 66.0; }
+
     private static double exportBeat(ChartManifest.Note note) {
         if (note == null || !Double.isFinite(note.beat)) return 0.0;
         return note.beat;
@@ -163,7 +165,7 @@ public final class Rhythmc3Exporter {
         }
         JsonArray notes = new JsonArray(); if (chart.notes != null) for (ChartManifest.Note note : chart.notes) if (note != null && note.trackId == track.id) {
             JsonObject value = new JsonObject(); value.addProperty("noteType", Math.max(0, Math.min(3, note.type))); value.addProperty("beat", exportBeat(note));
-            JsonArray position = new JsonArray(); position.add(note.x); position.add(note.y - 66.0); position.add(note.sourceZ == null ? 0.0 : note.sourceZ); value.add("pos", position);
+            JsonArray position = new JsonArray(); position.add(note.x); position.add(note.y - noteHeightBase(note.type)); position.add(note.sourceZ == null ? 0.0 : note.sourceZ); value.add("pos", position);
             JsonArray scale = new JsonArray(); scale.add(note.scaleX); scale.add(note.scaleY); scale.add(note.scaleZ); value.add("scale", scale);
             JsonArray rotation = new JsonArray(); rotation.add(note.rotationX); rotation.add(note.rotationY); rotation.add(note.rotationZ); value.add("rotation", rotation); if (note.holdGroup >= 0) value.addProperty("holdGroup", note.holdGroup); notes.add(value);
         }

@@ -223,12 +223,13 @@ public final class ChartStorage {
             ChartManifest.Note note = new ChartManifest.Note();
             note.id = UUID.randomUUID().toString(); note.trackId = track.id; note.type = jsonNumber(noteSource, "noteType", 0).intValue();
             note.beat = beat; note.time = timing.beatToSeconds(beat); note.holdGroup = jsonNumber(noteSource, "holdGroup", -1).intValue();
-            readVector(noteSource, "pos", values -> { note.sourceX = values[0]; note.sourceY = values[1]; note.sourceZ = values[2]; note.x = values[0]; note.y = values[1] + 66; });
+            readVector(noteSource, "pos", values -> { note.sourceX = values[0]; note.sourceY = values[1]; note.sourceZ = values[2]; note.x = values[0]; note.y = values[1] + noteHeightBase(note.type); });
             readVector(noteSource, "scale", values -> { note.scaleX = values[0]; note.scaleY = values[1]; note.scaleZ = values[2]; });
             readVector(noteSource, "rotation", values -> { note.rotationX = values[0]; note.rotationY = values[1]; note.rotationZ = values[2]; });
             note.z = PlaybackCoordinates.editorWorldZAtBeat(chart, note.beat) - 0.5; chart.notes.add(note); chart.totalBeats = Math.max(chart.totalBeats, note.beat);
         }
     }
+    private static double noteHeightBase(int type) { return type == 2 ? 65.0 : 66.0; }
     private interface VectorConsumer { void accept(double[] values); }
     private static void readVector(JsonObject object, String name, VectorConsumer consumer) {
         double[] values = {0, 0, 0}; if ("scale".equals(name)) java.util.Arrays.fill(values, 1.0);
