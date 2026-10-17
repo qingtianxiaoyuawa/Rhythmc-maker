@@ -108,7 +108,7 @@ public final class RhythmcMaker implements ModInitializer {
     public static final Item PLAY_ITEM = registerMenuItem("play", "播放");
     public static final Item INCREASE_BEATS_ITEM = registerMenuItem("increase_beats", "增加小节拍数");
     public static final Item DECREASE_BEATS_ITEM = registerMenuItem("decrease_beats", "减少小节拍数");
-    public static final Item CHUNK_SCORE_ITEM = registerMenuItem("chunk_score", "修改制谱器轨道");
+    public static final Item BEAT_SCORE_ITEM = registerMenuItem("chunk_score", "修改制谱器轨道");
     public static final Item EXPORT_ITEM = registerMenuItem("export", "导出（右键打开）");
     private static final Map<UUID, String> ACTIVE_CHARTS = new ConcurrentHashMap<>();
     private static final Map<UUID, Integer> ACTIVE_CHART_LANES = new ConcurrentHashMap<>();
@@ -553,7 +553,7 @@ public final class RhythmcMaker implements ModInitializer {
         player.getInventory().setStack(2, new ItemStack(Blocks.DIAMOND_BLOCK.asItem()));
         player.getInventory().setStack(3, new ItemStack(Blocks.TNT.asItem()));
         player.getInventory().setStack(4, menuStack(PLAY_ITEM));
-        player.getInventory().setStack(5, menuStack(CHUNK_SCORE_ITEM));
+        player.getInventory().setStack(5, menuStack(BEAT_SCORE_ITEM));
         player.getInventory().setStack(6, menuStack(CHART_SETTINGS_ITEM));
         player.getInventory().setStack(7, menuStack(MORE_SETTINGS_ITEM));
         player.getInventory().setStack(8, menuStack(QUICK_FUNCTIONS_ITEM));
