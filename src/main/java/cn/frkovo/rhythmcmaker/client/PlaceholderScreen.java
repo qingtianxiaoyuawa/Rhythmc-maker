@@ -282,6 +282,12 @@ final class PlaceholderScreen extends RhythmcScreen {
         trackSnapChartId = chart.id;
     }
 
+    static void invalidateTrackSnapState() {
+        trackSnapUndoAvailable = false;
+        trackSnapChartId = null;
+        lastTrackSnapSummary = null;
+    }
+
     @Override
     public void close() {
         MinecraftClient.getInstance().setScreen(null);
