@@ -64,10 +64,8 @@ public final class EffectParameterMigration {
                 result.remove("color");
             }
         }
-        if (type.equals("EFFECT") && !result.has("effectId") && number(result.get("effect"))) {
-            result.add("effectId", result.get("effect").deepCopy());
-            result.remove("effect");
-        }
+        if (type.equals("EFFECT")) migrateEffect(result);
+        if (type.equals("CLEAR_EFFECT")) migrateClearedEffects(result);
         if (type.equals("HIDE_NOTES") && result.has("noteTypes") && result.get("noteTypes").isJsonArray()) {
             JsonArray values = result.getAsJsonArray("noteTypes");
             if (values.asList().stream().allMatch(value -> number(value) && value.getAsDouble() == value.getAsInt()
@@ -79,6 +77,83 @@ public final class EffectParameterMigration {
             }
         }
         return result;
+    }
+
+    private void migrateEffect(JsonObject properties) {
+        JsonElement effectId = properties.get("effectId");
+        if (effectId == null || !number(effectId) && !string(effectId)) {
+            effectId = number(properties.get("effect"))
+                    ? properties.get("effect")
+                    : firstString(properties, "effect-id", "type", "effect", "potion-effect", "potion");
+        }
+        if (effectId != null && string(effectId)) {
+            properties.addProperty("effectId", toEffectId(effectId.getAsString()));
+        } else if (effectId != null && number(effectId)) {
+            properties.add("effectId", effectId.deepCopy());
+        }
+        properties.remove("effect-id");
+        properties.remove("type");
+        properties.remove("effect");
+        properties.remove("potion-effect");
+        properties.remove("potion");
+
+        JsonElement durationTicks = properties.get("durationTicks");
+        if (!properties.has("duration") && number(durationTicks)) {
+            properties.addProperty("duration", Math.max(0L, Math.round(durationTicks.getAsDouble() * 50.0)));
+            properties.remove("durationTicks");
+        }
+    }
+
+    private void migrateClearedEffects(JsonObject properties) {
+        JsonElement selectedEffects = properties.get("effects");
+        if (selectedEffects != null && selectedEffects.isJsonArray()) {
+            JsonArray normalizedEffects = new JsonArray();
+            for (JsonElement effect : selectedEffects.getAsJsonArray()) {
+                if (string(effect)) normalizedEffects.add(new JsonPrimitive(toEffectId(effect.getAsString())));
+                else normalizedEffects.add(effect.deepCopy());
+            }
+            properties.add("effects", normalizedEffects);
+        } else {
+            JsonElement effect = firstString(properties, "effect-id", "effect");
+            if (effect != null) {
+                JsonArray effects = new JsonArray();
+                effects.add(toEffectId(effect.getAsString()));
+                properties.add("effects", effects);
+            }
+        }
+        properties.remove("effect-id");
+        properties.remove("effect");
+    }
+
+    public int toEffectId(String value) {
+        if (value == null || value.isBlank()) return 1;
+        String normalized = value.trim().toLowerCase(java.util.Locale.ROOT).replace(' ', '_').replace('-', '_');
+        try {
+            int numeric = Integer.parseInt(normalized);
+            if (numeric >= 1 && numeric <= 33) return numeric;
+        } catch (NumberFormatException ignored) {
+        }
+        if (normalized.contains(":")) normalized = normalized.substring(normalized.indexOf(':') + 1);
+        return switch (normalized) {
+            case "speed" -> 1; case "slow", "slowness" -> 2; case "haste" -> 3; case "mining_fatigue", "miningfatigue" -> 4;
+            case "strength" -> 5; case "instant_health", "instanthealth" -> 6; case "instant_damage", "instantdamage" -> 7;
+            case "jump", "jump_boost", "jumpboost" -> 8; case "nausea", "confusion" -> 9; case "regeneration", "regen" -> 10;
+            case "resistance" -> 11; case "fire_resistance", "fireresistance" -> 12; case "water_breathing", "waterbreathing" -> 13;
+            case "invis", "invisible", "invisibility" -> 14; case "blind", "blindness" -> 15; case "nightvision", "night_vision" -> 16;
+            case "hunger" -> 17; case "weakness" -> 18; case "poison" -> 19; case "wither" -> 20; case "health_boost", "healthboost" -> 21;
+            case "absorption" -> 22; case "saturation" -> 23; case "glowing" -> 24; case "levitate", "levitation" -> 25;
+            case "luck" -> 26; case "unluck", "bad_luck" -> 27; case "slow_falling", "slowfalling" -> 28;
+            case "conduit_power", "conduitpower" -> 29; case "dolphins_grace", "dolphinsgrace" -> 30; case "bad_omen", "badomen" -> 31;
+            case "hero_of_the_village", "hero_of_village", "heroofthevillage" -> 32; case "dark", "darkness" -> 33; default -> 1;
+        };
+    }
+
+    private JsonElement firstString(JsonObject properties, String... keys) {
+        for (String key : keys) {
+            JsonElement value = properties.get(key);
+            if (string(value) && !value.getAsString().isBlank()) return value;
+        }
+        return null;
     }
 
     private void coordinates(JsonObject properties, String target, boolean list) {

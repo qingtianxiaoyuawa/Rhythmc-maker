@@ -1,5 +1,7 @@
 package cn.frkovo.rhythmcmaker.chart;
 
+import cn.frkovo.rhythmcmaker.common.effect.parameter.EffectParameterMigration;
+
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
@@ -307,14 +309,14 @@ public final class ChartStorage {
         if (type.equals("EFFECT") && !properties.has("type") && !properties.has("effectId")) {
             String potion = firstJsonString(old, "effect", "potion", firstJsonString(old, "effect-id", "potion-effect", ""));
             if (potion.isBlank()) potion = firstJsonString(properties, "effect", "potion", firstJsonString(properties, "effect-id", "potion-effect", "UNKNOWN"));
-            properties.addProperty("effectId", potionEffectId(potion));
+            properties.addProperty("effectId", EffectParameterMigration.getInstance().toEffectId(potion));
         }
         if (type.equals("EFFECT") && properties.has("type")) {
-            properties.addProperty("effectId", potionEffectId(properties.get("type").getAsString()));
+            properties.addProperty("effectId", EffectParameterMigration.getInstance().toEffectId(properties.get("type").getAsString()));
             properties.remove("type");
         }
         if (type.equals("EFFECT") && properties.has("effectId") && properties.get("effectId").isJsonPrimitive() && properties.get("effectId").getAsJsonPrimitive().isString()) {
-            properties.addProperty("effectId", potionEffectId(properties.get("effectId").getAsString()));
+            properties.addProperty("effectId", EffectParameterMigration.getInstance().toEffectId(properties.get("effectId").getAsString()));
         }
         if (type.equals("EFFECT")) {
             JsonElement duration = properties.has("durationTicks") ? properties.get("durationTicks") : properties.get("duration");
@@ -325,7 +327,7 @@ public final class ChartStorage {
         if (type.equals("CLEAR_EFFECT")) {
             String effectId = firstJsonString(old, "effect-id", "effect", firstJsonString(properties, "effect-id", "effect", ""));
             properties.remove("effect-id"); properties.remove("effect");
-            if (!effectId.isBlank()) { JsonArray effects = new JsonArray(); effects.add(potionEffectId(effectId)); properties.add("effects", effects); }
+            if (!effectId.isBlank()) { JsonArray effects = new JsonArray(); effects.add(EffectParameterMigration.getInstance().toEffectId(effectId)); properties.add("effects", effects); }
             properties.remove("type");
         }
         if (type.equals("TIME") && (legacy.contains("CLIENTTIME") || legacy.contains("TIMECLIENT"))) properties.addProperty("client", true);
@@ -455,24 +457,6 @@ public final class ChartStorage {
             case "RAIN", "DOWNFALL" -> "RAIN";
             case "THUNDER", "THUNDERSTORM", "STORM" -> "THUNDER";
             default -> "CLEAR";
-        };
-    }
-    private static int potionEffectId(String value) {
-        if (value == null || value.isBlank()) return 1;
-        String normalized = value.trim().toLowerCase(java.util.Locale.ROOT).replace(' ', '_').replace('-', '_');
-        try { int numeric = Integer.parseInt(normalized); if (numeric >= 1 && numeric <= 33) return numeric; } catch (NumberFormatException ignored) { }
-        if (normalized.contains(":")) normalized = normalized.substring(normalized.indexOf(':') + 1);
-        return switch (normalized) {
-            case "speed" -> 1; case "slow", "slowness" -> 2; case "haste" -> 3; case "mining_fatigue", "miningfatigue" -> 4;
-            case "strength" -> 5; case "instant_health", "instanthealth" -> 6; case "instant_damage", "instantdamage" -> 7;
-            case "jump", "jump_boost", "jumpboost" -> 8; case "nausea", "confusion" -> 9; case "regeneration", "regen" -> 10;
-            case "resistance" -> 11; case "fire_resistance", "fireresistance" -> 12; case "water_breathing", "waterbreathing" -> 13;
-            case "invis", "invisible", "invisibility" -> 14; case "blind", "blindness" -> 15; case "nightvision", "night_vision" -> 16;
-            case "hunger" -> 17; case "weakness" -> 18; case "poison" -> 19; case "wither" -> 20; case "health_boost", "healthboost" -> 21;
-            case "absorption" -> 22; case "saturation" -> 23; case "glowing" -> 24; case "levitate", "levitation" -> 25;
-            case "luck" -> 26; case "unluck", "bad_luck" -> 27; case "slow_falling", "slowfalling" -> 28;
-            case "conduit_power", "conduitpower" -> 29; case "dolphins_grace", "dolphinsgrace" -> 30; case "bad_omen", "badomen" -> 31;
-            case "hero_of_the_village", "hero_of_village", "heroofthevillage" -> 32; case "dark", "darkness" -> 33; default -> 1;
         };
     }
     private static int oldNoteType(String type) {
