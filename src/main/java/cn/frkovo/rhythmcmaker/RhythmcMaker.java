@@ -2749,11 +2749,19 @@ private static void showSceneBoundary(MinecraftServer server) {
         if (durationTicks != Integer.MIN_VALUE) {
             return scaledPotionDurationTicks(durationTicks, playbackRate);
         }
-        int durationMillis = effectInt(effect, "durationMillis", Integer.MIN_VALUE);
-        if (durationMillis != Integer.MIN_VALUE) {
-            return scaledPotionDurationTicks((durationMillis + 49) / 50, playbackRate);
+        JsonElement durationMillis = effectValue(effect, "durationMillis");
+        if (durationMillis != null) {
+            return scaledPotionDurationTicks(millisecondsToPotionTicks(durationMillis.getAsDouble()), playbackRate);
         }
-        return scaledPotionDurationTicks(effectInt(effect, "duration", 100), playbackRate);
+        JsonElement duration = effectValue(effect, "duration");
+        if (duration != null) {
+            return scaledPotionDurationTicks(millisecondsToPotionTicks(duration.getAsDouble()), playbackRate);
+        }
+        return scaledPotionDurationTicks(100, playbackRate);
+    }
+    private static int millisecondsToPotionTicks(double durationMillis) {
+        double ticks = Math.ceil(Math.max(0.0, durationMillis) / 50.0);
+        return (int) Math.min(Integer.MAX_VALUE, ticks);
     }
     private static int scaledPotionDurationTicks(int durationTicks, double playbackRate) {
         long scaled = (long) Math.ceil(Math.max(1L, durationTicks) / playbackRate);

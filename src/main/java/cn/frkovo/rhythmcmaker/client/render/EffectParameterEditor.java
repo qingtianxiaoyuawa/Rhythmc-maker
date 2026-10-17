@@ -9,6 +9,7 @@ import cn.frkovo.rhythmcmaker.common.effect.parameter.EffectParameterSchema;
 import cn.frkovo.rhythmcmaker.common.effect.parameter.EffectParameterType;
 import cn.frkovo.rhythmcmaker.common.text.EffectTextFormatter;
 import cn.frkovo.rhythmcmaker.chart.ChartManifest;
+import cn.frkovo.rhythmcmaker.chart.ChartTiming;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -18,6 +19,7 @@ import imgui.ImGui;
 import imgui.flag.ImGuiInputTextFlags;
 import imgui.type.ImBoolean;
 import imgui.type.ImDouble;
+import imgui.type.ImInt;
 import imgui.type.ImString;
 import java.util.ArrayList;
 import java.util.List;
@@ -34,12 +36,14 @@ public final class EffectParameterEditor {
     private List<String> availableSceneNames = List.of();
     private String sceneReadError = "";
     private List<Integer> availableTrackIds = List.of();
+    private ChartManifest currentChart;
 
     public boolean render(JsonObject event, List<JsonObject> events, ChartManifest chart) {
         changed = false;
         availableEvents = events == null ? List.of(event) : List.copyOf(events);
         availableSceneNames = sceneNames(chart);
         availableTrackIds = trackIds(chart);
+        currentChart = chart;
         EffectParameterType type = EffectParameterSchema.getInstance().find(codec.type(event));
         if (type == null) return false;
         EventForm form = form(event);
@@ -109,6 +113,123 @@ public final class EffectParameterEditor {
         return state;
     }
 
+    private void renderDurationField(EventForm form, EffectParameterField field, FieldState state, JsonElement actual, ChartManifest chart) {
+        ImGui.textWrapped(field.label());
+        if (!field.help().isBlank()) ImGui.textWrapped(field.help());
+        if (field.optional()) {
+            ImBoolean enabled = new ImBoolean(actual != null);
+            if (ImGui.checkbox("启用此可选参数", enabled)) {
+                if (enabled.get()) {
+                    codec.write(form.event, field.name(), JsonParser.parseString(field.defaultJson()));
+                    state.durationPreferredOnly = true;
+                    state.durationDenominator.set(Math.max(1, Math.min(32, chart == null ? 1 : chart.divisionsPerBeat)));
+                } else codec.remove(form.event, field.name());
+                state.load(codec.read(form.event, field.name()), codec);
+                actual = codec.read(form.event, field.name());
+                changed = true;
+            }
+            if (actual == null) {
+                ImGui.textDisabled("未设置：沿用 Reborn 官方默认持续时间（31536000000 毫秒）。");
+                return;
+            }
+        }
+        if (!state.durationPartsInitialized) {
+            DurationParts parts = durationParts(chart, form.event, actual.getAsLong(),
+                    Math.max(1, Math.min(32, chart == null ? 1 : chart.divisionsPerBeat)), state.durationPreferredOnly);
+            state.durationWhole.set(parts.whole());
+            state.durationNumerator.set(parts.numerator());
+            state.durationDenominator.set(parts.denominator());
+            state.durationPartsInitialized = true;
+            state.durationPreferredOnly = false;
+        }
+        ImGui.setNextItemWidth(72.0f);
+        boolean updated = ImGui.inputInt("n##duration-beat", state.durationWhole, 1, 1);
+        ImGui.sameLine();
+        ImGui.text("+");
+        ImGui.sameLine();
+        ImGui.setNextItemWidth(72.0f);
+        updated |= ImGui.inputInt("a##duration-beat", state.durationNumerator, 1, 1);
+        ImGui.sameLine();
+        ImGui.text("/");
+        ImGui.sameLine();
+        ImGui.setNextItemWidth(72.0f);
+        updated |= ImGui.inputInt("b##duration-beat", state.durationDenominator, 1, 1);
+        ImGui.sameLine();
+        ImGui.text("beat");
+        int whole = state.durationWhole.get();
+        int numerator = state.durationNumerator.get();
+        int denominator = state.durationDenominator.get();
+        if (denominator < 1 || denominator > 32 || numerator < 0 || numerator >= denominator || whole < 0) {
+            state.error = "持续时间需满足 n≥0、1≤b≤32、0≤a<b。";
+        } else if (updated) {
+            long durationMillis = durationMillis(chart, form.event, whole + numerator / (double) denominator);
+            JsonPrimitive value = new JsonPrimitive(durationMillis);
+            state.error = codec.validate(field, value);
+            if (state.error.isEmpty()) {
+                codec.write(form.event, field.name(), value);
+                state.value = value.deepCopy();
+                state.committed = value.deepCopy();
+                state.input.set(value.getAsString());
+                state.repair.set(value.toString());
+                changed = true;
+            }
+        } else state.error = "";
+        if (!state.error.isEmpty()) ImGui.textColored(0xFF7777FF, state.error);
+    }
+
+    private static DurationParts durationParts(ChartManifest chart, JsonObject event, long durationMillis, int preferredDenominator, boolean preferredOnly) {
+        double startBeat = event.has("beat") ? event.get("beat").getAsDouble() : 0.0;
+        double startSeconds = chart == null ? startBeat * 60.0 / 120.0 : ChartTiming.beatToSeconds(chart, startBeat);
+        double targetSeconds = startSeconds + Math.max(0L, durationMillis) / 1000.0;
+        double targetBeat = (chart == null ? targetSeconds * 2.0 : ChartTiming.secondsToBeat(chart, targetSeconds)) - startBeat;
+        int whole = (int) Math.floor(Math.max(0.0, targetBeat));
+        double fraction = Math.max(0.0, targetBeat - whole);
+        int firstDenominator = preferredOnly ? preferredDenominator : 1;
+        int lastDenominator = preferredOnly ? preferredDenominator : 32;
+        int bestDenominator = firstDenominator;
+        int bestNumerator = 0;
+        double bestError = Double.POSITIVE_INFINITY;
+        for (int denominator = firstDenominator; denominator <= lastDenominator; denominator++) {
+            int candidate = (int) Math.round(fraction * denominator);
+            double candidateBeat = whole + candidate / (double) denominator;
+            double candidateSeconds = chart == null ? candidateBeat * 0.5 : ChartTiming.beatToSeconds(chart, startBeat + candidateBeat) - startSeconds;
+            double error = Math.abs(candidateSeconds - durationMillis / 1000.0);
+            if (error < bestError) {
+                bestError = error;
+                bestDenominator = denominator;
+                bestNumerator = candidate;
+            }
+        }
+        if (bestNumerator >= bestDenominator) {
+            whole++;
+            bestNumerator = 0;
+        }
+        if (preferredOnly) {
+            return new DurationParts(whole, bestNumerator, bestDenominator);
+        }
+        int divisor = greatestCommonDivisor(bestNumerator, bestDenominator);
+        return new DurationParts(whole, bestNumerator / divisor, bestDenominator / divisor);
+    }
+
+    private static long durationMillis(ChartManifest chart, JsonObject event, double durationBeats) {
+        double startBeat = event.has("beat") ? event.get("beat").getAsDouble() : 0.0;
+        double seconds = chart == null ? durationBeats * 0.5 : ChartTiming.beatToSeconds(chart, startBeat + durationBeats) - ChartTiming.beatToSeconds(chart, startBeat);
+        return Math.max(0L, Math.round(seconds * 1000.0));
+    }
+
+    private static int greatestCommonDivisor(int first, int second) {
+        int left = Math.abs(first);
+        int right = Math.abs(second);
+        while (right != 0) {
+            int remainder = left % right;
+            left = right;
+            right = remainder;
+        }
+        return Math.max(1, left);
+    }
+
+    private record DurationParts(int whole, int numerator, int denominator) {}
+
     private void renderField(EventForm form, EffectParameterField field) {
         JsonElement actual = codec.read(form.event, field.name());
         FieldState state = state(form, field);
@@ -117,6 +238,10 @@ public final class EffectParameterEditor {
             state.load(codec.read(form.event, field.name()), codec);
             actual = codec.read(form.event, field.name());
             changed = true;
+        }
+        if (field.name().equals("duration")) {
+            renderDurationField(form, field, state, actual, currentChart);
+            return;
         }
         ImGui.textWrapped(field.label());
         if (!field.help().isBlank()) ImGui.textWrapped(field.help());
@@ -827,6 +952,11 @@ public final class EffectParameterEditor {
         private JsonElement value;
         private JsonElement committed;
         private String error = "";
+        private final ImInt durationWhole = new ImInt();
+        private final ImInt durationNumerator = new ImInt();
+        private final ImInt durationDenominator = new ImInt(1);
+        private boolean durationPartsInitialized;
+        private boolean durationPreferredOnly;
 
         private FieldState(EffectParameterField definition) {
             this.definition = definition;
@@ -838,6 +968,7 @@ public final class EffectParameterEditor {
             input.set(codec.input(definition, value));
             repair.set(value == null ? "" : value.toString());
             error = value == null ? "" : codec.validate(definition, value);
+            durationPartsInitialized = false;
             rowTexts.clear();
             angleTexts.clear();
         }

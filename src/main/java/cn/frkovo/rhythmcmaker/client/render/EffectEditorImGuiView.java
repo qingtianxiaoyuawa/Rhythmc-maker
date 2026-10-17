@@ -735,6 +735,10 @@ public final class EffectEditorImGuiView {
             redo();
             return true;
         }
+        if (control && input.key() == GLFW.GLFW_KEY_A && isTimelineKeyboardTarget()) {
+            selectAllEffects();
+            return true;
+        }
         if (io.getWantCaptureKeyboard() || ImGui.isAnyItemActive()) return false;
         if (input.key() == GLFW.GLFW_KEY_SPACE) {
             if (!spaceKeyDown) {
@@ -910,7 +914,7 @@ public final class EffectEditorImGuiView {
         drawTimelineMenus();
         if (timelinePopupOpen() || popupWasOpen && (timelineMenuHovered
                 || !ImGui.isMouseClicked(0) && !ImGui.isMouseClicked(1))) return;
-        if (hovered && (ImGui.isMouseClicked(0) || ImGui.isMouseClicked(1))
+        if (hovered && mouseY < footerTop && (ImGui.isMouseClicked(0) || ImGui.isMouseClicked(1))
                 && (!contentHovered || findTimelineHit(mouseX, mouseY, hits) == null)) clearEffectSelection();
         if (hovered && ImGui.isMouseClicked(1)) {
             List<TimelineRow> rows = buildTimelineRows();
@@ -939,6 +943,7 @@ public final class EffectEditorImGuiView {
             if (isAltPressed()) {
                 int beatSteps = Math.max(1, Math.round(Math.abs(wheel)));
                 moveTimelinePlayhead(wheel > 0.0f ? -beatSteps : beatSteps, true);
+                keepPlayheadVisible(timelineMaxBeat());
             } else if (isControlPressed()) {
                 if (contentHovered) zoomTimelineAt(mouseX, timelineLeft, timelineWidth, wheel);
             } else {
@@ -1359,6 +1364,33 @@ public final class EffectEditorImGuiView {
             timelineLastSeekBeat = target;
         }
         status = "播放头已跳转到 " + formatBeatPosition(target);
+    }
+
+    private boolean isTimelineKeyboardTarget() {
+        float mouseX = ImGui.getMousePosX();
+        float mouseY = ImGui.getMousePosY();
+        return mouseX >= timelineBoundsLeft && mouseX <= timelineBoundsRight
+                && mouseY >= timelineBoundsTop && mouseY <= timelineBoundsBottom;
+    }
+
+    private void selectAllEffects() {
+        selectedIndices.clear();
+        for (int index = 0; index < workingEffects.size(); index++) selectedIndices.add(index);
+        selectedIndex = workingEffects.isEmpty() ? -1 : 0;
+        syncBuffers();
+        status = workingEffects.isEmpty() ? "没有可选中的特效事件" : "已全选特效事件";
+    }
+
+    private void keepPlayheadVisible(double maxBeat) {
+        double span = Math.max(minimumZoomSpan(), timelineZoomMax - timelineZoomMin);
+        double normalizedBeat = maxBeat <= 0.0 ? 0.0 : playhead[0] / maxBeat;
+        if (normalizedBeat < timelineZoomMin) {
+            timelineZoomMin = Math.max(0.0, normalizedBeat - span * 0.5);
+            timelineZoomMax = timelineZoomMin + span;
+        } else if (normalizedBeat > timelineZoomMax) {
+            timelineZoomMax = Math.min(1.0, normalizedBeat + span * 0.5);
+            timelineZoomMin = Math.max(0.0, timelineZoomMax - span);
+        }
     }
 
     private void selectMarkersInRectangle(List<TimelineHit> hits) {

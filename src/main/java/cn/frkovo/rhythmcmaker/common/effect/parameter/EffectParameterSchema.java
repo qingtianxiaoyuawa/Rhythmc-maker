@@ -116,7 +116,8 @@ public final class EffectParameterSchema {
     }
 
     private EffectParameterField duration() {
-        return optional(number("duration", "持续时间（毫秒，64 位整数）", LONG, "31536000000", 0, Long.MAX_VALUE));
+        return optional(new EffectParameterField("duration", "持续时间（beat：n + a/b）", LONG, true,
+                "31536000000", "以 beat 分数编辑；谱面存储与 3.0 互操作仍使用毫秒。", List.of(), List.of(), 0, Long.MAX_VALUE));
     }
 
     private EffectParameterField id(String defaultValue) {
