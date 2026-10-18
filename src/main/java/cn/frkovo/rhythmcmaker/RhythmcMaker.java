@@ -2454,6 +2454,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                     session.updateGlowTeam();
                     preloadedThisTick++;
                 }
+                session.restoreVisibleNotes(player, songTime);
             }
             if (songTime >= session.endSeconds) stopPlayback(server, player, session.formal);
                     } catch (RuntimeException exception) {
@@ -2580,7 +2581,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             case "MESSAGE" -> sendMessageEffect(player, effect, text);
             case "TEXT_DISPLAY", "TEXT_DISPLAY_EFFECT", "TEXT_DISPLAY_SYNC_TRACK", "TEXT_DISPLAY_DESYNC_TRACK", "TEXT_DISPLAY_REMOVE", "HOLOGRAM", "REMOVE_HOLOGRAM" -> session.applyTextEffect(effect);
             case "TIME" -> session.applyTime(player, effect);
-            case "WEATHER" -> session.applyWeather(effect);
+            case "WEATHER" -> session.applyWeather(player, effect);
             case "EFFECT" -> session.applyPotionProxy(player, effect);
             case "CLEAR_EFFECT" -> session.clearPotionEffect(player, effect);
             case "ARENA", "CHANGE_ARENA" -> session.applyArena(effect);
@@ -2806,12 +2807,21 @@ private static void showSceneBoundary(MinecraftServer server) {
         long scaled = (long) Math.ceil(Math.max(1L, durationTicks) / playbackRate);
         return (int) Math.min(Integer.MAX_VALUE, Math.max(1L, scaled));
     }
+    private static void sendPlayerWeather(ServerPlayerEntity player, boolean raining, boolean thunder) {
+        player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket(
+                raining ? net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket.RAIN_STARTED
+                        : net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket.RAIN_STOPPED, 0.0F));
+        player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket(
+                net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket.RAIN_GRADIENT_CHANGED, raining ? 1.0F : 0.0F));
+        player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket(
+                net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket.THUNDER_GRADIENT_CHANGED, thunder ? 1.0F : 0.0F));
+    }
     private static void stopPlayback(MinecraftServer server, ServerPlayerEntity player, boolean returnPlayer) {
         restoreEffectPreviewPlayer(player);
         ScrollJudgementSession scrollSession = SCROLL_JUDGEMENT_SESSIONS.remove(player.getUuid());
         if (scrollSession != null) {
             cleanupPlaybackDisplayEntities(scrollSession.world, player.getUuid(), scrollSession.chart.id);
-            scrollSession.world.setWeather(0, 0, false, false);
+            sendPlayerWeather(player, false, false);
             if (scrollSession.effectSession != null) {
                 scrollSession.effectSession.resetClientTime(player);
                 scrollSession.effectSession.clearTextDisplays();
@@ -2823,7 +2833,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         if (session == null) return;
         cleanupPlaybackDisplayEntities(session.world, player.getUuid(), session.chart.id);
         try {
-            session.world.setWeather(0, 0, false, false);
+            sendPlayerWeather(player, false, false);
             session.resetClientTime(player);
             session.clearGlowTeam();
             for (DisplayEntity.BlockDisplayEntity display : session.displays.values()) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
@@ -3153,7 +3163,28 @@ private static void showSceneBoundary(MinecraftServer server) {
                 }
             }
             updateGlowTeam();
-        }        private boolean shouldHide(ChartManifest.Note note) {
+        }
+        private void restoreVisibleNotes(ServerPlayerEntity player, double songTime) {
+            int restored = 0;
+            for (ChartManifest.Note note : notes) {
+                if (restored >= PLAYBACK_MAX_PRELOADS_PER_TICK || shouldHide(note) || displays.containsKey(note.id)) continue;
+                double noteTime = noteTimes.getOrDefault(note.id, Double.POSITIVE_INFINITY);
+                if (!Double.isFinite(noteTime) || noteTime <= songTime) continue;
+                double relativeDistance = relativeDistance(note, songTime);
+                if (!Double.isFinite(relativeDistance) || relativeDistance < 0.0 || relativeDistance > PLAYBACK_APPROACH_DISTANCE) continue;
+                double displayZ = PLAYBACK_FRAME_Z - Math.max(0.0, relativeDistance);
+                double[] position = displayPosition(note, songTime, displayZ);
+                DisplayEntity.BlockDisplayEntity display = acquire(blockStateForType(note.type), position[0], position[1], position[2]);
+                if (display == null) continue;
+                applyNotePose(display, note, songTime, displayZ);
+                display.addCommandTag("rhythmc_preview:" + player.getUuid());
+                display.setGlowing(true);
+                displays.put(note.id, display);
+                restored++;
+            }
+            if (restored > 0) updateGlowTeam();
+        }
+        private boolean shouldHide(ChartManifest.Note note) {
             return hiddenAllNotes || hiddenNoteTypes.contains(note.type) || hiddenTracks.contains(note.trackId);
         }
         private void updateHiddenNotes(JsonObject effect) {
@@ -3313,11 +3344,11 @@ private static void showSceneBoundary(MinecraftServer server) {
             player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.WorldTimeUpdateS2CPacket(
                     world.getTime(), world.getTimeOfDay(), world.getGameRules().getValue(GameRules.ADVANCE_TIME)));
         }
-        private void applyWeather(JsonObject effect) {
+        private void applyWeather(ServerPlayerEntity player, JsonObject effect) {
             String weather = effectString(effect, "weather", effectString(effect, "type", "clear")).trim().toUpperCase(java.util.Locale.ROOT);
             boolean thunder = weather.equals("THUNDER") || weather.equals("THUNDERSTORM") || weather.equals("STORM");
             boolean raining = thunder || weather.equals("RAIN") || weather.equals("DOWNFALL");
-            world.setWeather(0, raining ? 6000 : 0, raining, thunder);
+            sendPlayerWeather(player, raining, thunder);
         }
         private double calculateEndSeconds() {
             double end = chart.durationSeconds + chart.offsetMillis / 1000.0;
