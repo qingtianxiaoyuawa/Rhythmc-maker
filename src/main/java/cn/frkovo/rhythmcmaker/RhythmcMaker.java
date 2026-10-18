@@ -954,6 +954,7 @@ public final class RhythmcMaker implements ModInitializer {
     private static void finishTrackSnapUndoTask(MinecraftServer server, UUID playerId, TrackSnapUndoTask task) {
         if (!TRACK_SNAP_UNDO_TASKS.remove(playerId, task)) return;
         try {
+            clearNoteBlocks(task.world, captureNotePositions(task.chart));
             java.util.List<ChartManifest.Note> restored = new java.util.ArrayList<>();
             java.util.Set<String> snappedNoteIds = task.undo.snappedNoteIds;
             for (ChartManifest.Note note : task.undo.originalNotes) {
