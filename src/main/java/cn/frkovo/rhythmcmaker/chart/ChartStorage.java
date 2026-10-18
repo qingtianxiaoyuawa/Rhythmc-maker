@@ -61,6 +61,9 @@ public final class ChartStorage {
                 if (charts.stream().noneMatch(chart -> id.equals(chart.id))) readManifest(path, charts);
             });
         }
+        deleteDirectoryIfEmpty(root.resolve("manifests"));
+        deleteDirectoryIfEmpty(root.resolve("charts"));
+        deleteDirectoryIfEmpty(root.resolve("imports"));
         charts.sort(Comparator.comparing(chart -> chart.title == null ? "" : chart.title, String.CASE_INSENSITIVE_ORDER));
         return charts;
     }
@@ -70,7 +73,7 @@ public final class ChartStorage {
         if (!isSupportedAudioExtension(extension)) {
             throw new IOException("不支持的音频格式：" + extension);
         }
-        Path destination = importsDirectory(server).resolve(UUID.randomUUID() + "." + extension);
+        Path destination = Files.createTempFile("rhythmc-maker-", "." + extension);
         Files.copy(source, destination, StandardCopyOption.REPLACE_EXISTING);
         return destination;
     }
@@ -117,18 +120,24 @@ public final class ChartStorage {
 
     public static ChartManifest importRhythmc3(MinecraftServer server, Path difficultyFile, Path manifestFile, Path layoutFile, Path stagedAudio, List<ImportedScene> scenes) throws IOException {
         ChartManifest chart = importRhythmc3(server, difficultyFile, manifestFile, layoutFile, stagedAudio);
-        if (scenes != null && !scenes.isEmpty()) {
-            int sceneIndex = 1;
-            for (ImportedScene importedScene : scenes) {
-                if (importedScene == null || importedScene.schem() == null || importedScene.info() == null || !Files.isRegularFile(importedScene.schem()) || !Files.isRegularFile(importedScene.info())) continue;
-                String sceneName = sceneKey(importedScene.info(), sceneIndex == 1 ? "initial" : "scene" + sceneIndex);
-                String binding = "scene-editor:" + sceneIndex;
-                chart.arenaBindings.put(sceneName, binding);
-                chart.arenaBindings.put(sceneIndex == 1 ? "initial" : "scene" + sceneIndex, binding);
-                if (sceneIndex == 1 && chart.initialArena != null && !chart.initialArena.isBlank()) chart.arenaBindings.put(chart.initialArena, binding);
-                sceneIndex++;
-            }
-        }        if (chart.effects != null) for (JsonObject effect : chart.effects) {
+        List<ImportedScene> orderedScenes = new ArrayList<>();
+        if (scenes != null) {
+            ImportedScene initialScene = scenes.stream().filter(scene -> scene != null && scene.info() != null
+                    && (sceneKey(scene.info(), "").equals(chart.initialArena) || sceneIsInitial(scene.info()))).findFirst().orElse(null);
+            if (initialScene != null) orderedScenes.add(initialScene);
+            for (ImportedScene scene : scenes) if (scene != initialScene) orderedScenes.add(scene);
+        }
+        int sceneIndex = 1;
+        for (ImportedScene importedScene : orderedScenes) {
+            if (importedScene == null || importedScene.schem() == null || importedScene.info() == null
+                    || !Files.isRegularFile(importedScene.schem()) || !Files.isRegularFile(importedScene.info())) continue;
+            String sceneName = sceneKey(importedScene.info(), sceneIndex == 1 ? "initial" : "scene" + sceneIndex);
+            String binding = "scene-editor:" + sceneIndex;
+            chart.arenaBindings.put(sceneName, binding);
+            if (sceneIndex == 1 && chart.initialArena != null && !chart.initialArena.isBlank()) chart.arenaBindings.put(chart.initialArena, binding);
+            sceneIndex++;
+        }
+        if (chart.effects != null) for (JsonObject effect : chart.effects) {
             if (effect == null) continue;
             JsonObject properties = effect.has("properties") && effect.get("properties").isJsonObject() ? effect.getAsJsonObject("properties") : effect;
             if (!properties.has("arena")) continue;
@@ -136,7 +145,7 @@ public final class ChartStorage {
             String path = chart.arenaBindings.get(arena);
             if (path != null) properties.addProperty("arenaPath", path);
         }
-        RhythmcMaker.installImportedScenes(server, chart, scenes);
+        RhythmcMaker.installImportedScenes(server, chart, orderedScenes);
         writeLocalChart(server, chart);
         return chart;
     }
@@ -498,6 +507,9 @@ public final class ChartStorage {
         } catch (RuntimeException exception) { throw new IOException("无法解析 YAML：" + file.getFileName(), exception); }
     }
     private static String yamlString(Map<String, Object> values, String key, String fallback) { Object value = values.get(key); return value == null || value.toString().isBlank() ? fallback : value.toString(); }
+    private static boolean sceneIsInitial(Path file) {
+        try { return "initial".equalsIgnoreCase(yamlString(readYaml(file), "type", "")); } catch (IOException ignored) { return false; }
+    }
     private static String sceneKey(Path file, String fallback) {
         try { return yamlString(readYaml(file), "name", fallback); } catch (IOException ignored) { return fallback; }
     }
@@ -748,27 +760,15 @@ public final class ChartStorage {
     }
 
     private static Path manifestsDirectory(MinecraftServer server) throws IOException {
-        Path directory = root(server).resolve("manifests");
-        Files.createDirectories(directory);
-        return directory;
+        return root(server).resolve("manifests");
     }
 
     private static Path audioDirectory(MinecraftServer server) throws IOException {
-        Path directory = root(server).resolve("audio");
-        Files.createDirectories(directory);
-        return directory;
-    }
-
-    private static Path importsDirectory(MinecraftServer server) throws IOException {
-        Path directory = root(server).resolve("imports");
-        Files.createDirectories(directory);
-        return directory;
+        return root(server).resolve("audio");
     }
 
     private static Path chartDirectory(MinecraftServer server) throws IOException {
-        Path directory = root(server).resolve("charts");
-        Files.createDirectories(directory);
-        return directory;
+        return root(server).resolve("charts");
     }
 
     private static Path manifestPath(MinecraftServer server, String chartId) throws IOException {

@@ -7,8 +7,6 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
-import com.github.luben.zstd.ZstdOutputStream;
-import java.io.OutputStream;
 import net.minecraft.block.BlockState;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtIo;
@@ -235,9 +233,7 @@ public final class Rhythmc3Exporter {
         if (chart.effects != null) for (JsonObject effect : chart.effects) if (effect != null) effects.add(Rhythmc3EffectCodec.exportEffect(effect));
         root.add("effects", effects);
         Path difficultyPath = folder.resolve(difficultyFile(chart.difficulty) + ".rmcc");
-        try (OutputStream output = new ZstdOutputStream(Files.newOutputStream(difficultyPath))) {
-            output.write(GSON.toJson(root).getBytes(StandardCharsets.UTF_8));
-        }
+        Files.writeString(difficultyPath, GSON.toJson(root), StandardCharsets.UTF_8);
     }
 
     private static double noteHeightBase(int type) { return type == 2 ? 65.0 : 66.0; }

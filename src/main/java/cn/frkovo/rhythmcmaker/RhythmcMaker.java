@@ -1382,6 +1382,7 @@ public final class RhythmcMaker implements ModInitializer {
         java.util.List<SceneEditStorage.Scene> scenes = SceneEditStorage.list(server, chart.id);
         int nextIndex = scenes.stream().mapToInt(scene -> scene.index).max().orElse(0) + 1;
         SceneEditStorage.Scene initialScene = scenes.stream().filter(scene -> scene.initial).findFirst().orElseThrow();
+        if (chart.initialArena != null && !chart.initialArena.isBlank()) initialScene.name = chart.initialArena;
         if (chart.initialArena != null && !chart.initialArena.isBlank()) {
             chart.arenaBindings.put(chart.initialArena, "scene-editor:" + initialScene.index);
         }
