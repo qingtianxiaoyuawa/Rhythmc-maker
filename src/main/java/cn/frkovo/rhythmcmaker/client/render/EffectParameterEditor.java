@@ -813,13 +813,16 @@ public final class EffectParameterEditor {
         for (String value : values) {
             for (EffectTextFormatter.PreviewSegment segment : EffectTextFormatter.getInstance().preview(value, 0xFFFFFF)) {
                 ImGui.sameLine(0, 0);
-                int colour = 0xFF000000 | (segment.color() & 0xFFFFFF);
+                float textX = ImGui.getCursorScreenPosX();
+                float textY = ImGui.getCursorScreenPosY();
+                int colour = imguiColor(segment.color());
                 String text = segment.obfuscated() ? obfuscate(segment.text()) : segment.text();
-                if (segment.bold()) text = "▌" + text;
-                if (segment.italic()) text = "╱" + text;
-                if (segment.strikethrough()) text = decoratePreviewText(text, '\u0336');
-                if (segment.underlined()) text = decoratePreviewText(text, '\u0332');
                 ImGui.textColored(colour, text);
+                imgui.ImVec2 textSize = new imgui.ImVec2();
+                ImGui.calcTextSize(textSize, text);
+                float textWidth = textSize.x;
+                float textHeight = ImGui.getTextLineHeight();
+                imguiStyleOverlay(textX, textY, textWidth, textHeight, colour, text, segment);
             }
             ImGui.newLine();
         }
@@ -842,14 +845,24 @@ public final class EffectParameterEditor {
         }
         return result.toString();
     }
-    private String decoratePreviewText(String value, char decoration) {
-        StringBuilder result = new StringBuilder(value.length() * 2);
-        for (int index = 0; index < value.length(); index++) {
-            char character = value.charAt(index);
-            result.append(character);
-            if (!Character.isWhitespace(character)) result.append(decoration);
+    private static int imguiColor(int minecraftRgb) {
+        int red = (minecraftRgb >> 16) & 0xFF;
+        int green = (minecraftRgb >> 8) & 0xFF;
+        int blue = minecraftRgb & 0xFF;
+        return 0xFF000000 | red | (green << 8) | (blue << 16);
+    }
+
+    private static void imguiStyleOverlay(float x, float y, float width, float height, int colour, String text,
+                                          EffectTextFormatter.PreviewSegment segment) {
+        if (width <= 0.0f) return;
+        imgui.ImDrawList drawList = ImGui.getWindowDrawList();
+        if (segment.bold()) drawList.addText(x + 0.6f, y, colour, text);
+        if (segment.strikethrough()) {
+            drawList.addLine(x, y + height * 0.52f, x + width, y + height * 0.52f, colour, 1.0f);
         }
-        return result.toString();
+        if (segment.underlined()) {
+            drawList.addLine(x, y + height - 1.0f, x + width, y + height - 1.0f, colour, 1.0f);
+        }
     }
 
     private void renderNoteTypes(EventForm form, FieldState state) {
