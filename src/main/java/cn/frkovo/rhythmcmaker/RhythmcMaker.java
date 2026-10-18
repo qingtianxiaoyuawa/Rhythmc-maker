@@ -1333,10 +1333,13 @@ public final class RhythmcMaker implements ModInitializer {
         chart.sceneImportIncomplete = imported.stream().anyMatch(scene -> !isCompleteImportedScene(scene));
         ChartDimensionManager.key(chart);
         java.util.List<SceneEditStorage.Scene> scenes = SceneEditStorage.list(server, chart.id);
+        SceneEditStorage.save(server, chart.id, scenes);
         java.util.List<SceneImportTask> pending = new java.util.ArrayList<>();
         int nextIndex = scenes.stream().mapToInt(scene -> scene.index).max().orElse(0) + 1;
         ImportedScene initial = imported.get(0);
         if (isCompleteImportedScene(initial)) {
+            scenes.stream().filter(scene -> scene.index == 1).findFirst().ifPresent(scene -> scene.name = readSceneName(initial.info(), chart.initialArena == null ? "初始场景" : chart.initialArena));
+            SceneEditStorage.save(server, chart.id, scenes);
             SceneEditStorage.copySchematic(server, chart.id, 1, initial.schem());
             chart.sceneInitialized = true;
             pending.add(new SceneImportTask(chart, initial.schem(), PLAYBACK_PLATFORM_X, PLAYBACK_PLATFORM_Y, PLAYBACK_PLATFORM_Z));
@@ -1346,10 +1349,11 @@ public final class RhythmcMaker implements ModInitializer {
             if (!isCompleteImportedScene(importedScene)) continue;
             int sceneIndex = nextIndex++;
             SceneEditStorage.Scene scene = new SceneEditStorage.Scene(sceneIndex);
-            scene.name = "场景" + sceneIndex;
+            scene.name = readSceneName(importedScene.info(), "场景" + sceneIndex);
             scene.icon = readSceneIcon(importedScene.info());
             scene.saved = true;
             scenes.add(scene);
+            SceneEditStorage.save(server, chart.id, scenes);
             SceneEditStorage.copySchematic(server, chart.id, sceneIndex, importedScene.schem());
             pending.add(new SceneImportTask(chart, importedScene.schem(), scene.x, PLAYBACK_PLATFORM_Y, PLAYBACK_PLATFORM_Z));
         }
@@ -1390,6 +1394,20 @@ public final class RhythmcMaker implements ModInitializer {
         return scene != null && scene.schem() != null && scene.info() != null
                 && Files.isRegularFile(scene.schem()) && Files.isRegularFile(scene.info());
     }
+    private static String readSceneName(Path info, String fallback) {
+        if (info == null || !Files.isRegularFile(info)) return fallback;
+        try {
+            for (String line : Files.readAllLines(info)) {
+                String trimmed = line.trim();
+                if (trimmed.startsWith("name:")) {
+                    String value = trimmed.substring(5).trim().replace("\"", "");
+                    if (!value.isBlank()) return value;
+                }
+            }
+        } catch (IOException ignored) { }
+        return fallback;
+    }
+
     private static String readSceneIcon(Path info) {
         if (info == null || !Files.isRegularFile(info)) return "minecraft:grass_block";
         try {

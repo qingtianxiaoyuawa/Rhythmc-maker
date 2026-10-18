@@ -2,6 +2,7 @@ package cn.frkovo.rhythmcmaker.chart;
 
 import cn.frkovo.rhythmcmaker.ChartDimensionManager;
 import cn.frkovo.rhythmcmaker.common.chart.Rhythmc3EffectCodec;
+import cn.frkovo.rhythmcmaker.scene.SceneEditStorage;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
@@ -55,26 +56,116 @@ public final class Rhythmc3Exporter {
         ServerWorld world = server.getWorld(ChartDimensionManager.key(chart));
         if (world == null) throw new IOException("请先进入该谱面制谱维度，再进行导出");
 
-        Path exportRoot = ChartStorage.root(server).resolve("exports").toAbsolutePath().normalize();
-        String songFolderName = safeFolderName(chart);
+        Path exportRoot = ChartStorage.chartDirectoryPath(server, chart.id).resolve("exports").toAbsolutePath().normalize();
+        String songFolderName = safeExportName(chart.title);
         String arenaKey = safeArenaKey(chart);
-        Path folder = exportRoot.resolve(songFolderName).normalize();
-        if (!folder.startsWith(exportRoot)) throw new IOException("导出目录无效");
-        replaceDirectory(folder);
-        Files.createDirectories(folder);
+        Files.createDirectories(exportRoot);
+        String timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
+        Path folder = uniqueExportFolder(exportRoot, songFolderName + " - " + timestamp);
+        Path temporary = exportRoot.resolve(".tmp-" + java.util.UUID.randomUUID()).normalize();
+        if (!temporary.startsWith(exportRoot)) throw new IOException("导出目录无效");
+        Files.createDirectories(temporary);
 
-        Path chartFolder = folder.resolve("Data").resolve("Charts").resolve(songFolderName).normalize();
-        Path arenaFolder = folder.resolve("Data").resolve("Arenas").resolve(arenaKey).normalize();
-        if (!chartFolder.startsWith(folder) || !arenaFolder.startsWith(folder)) throw new IOException("导出目录无效");
-        Files.createDirectories(chartFolder);
-        Files.createDirectories(arenaFolder);
-        writeManifest(chartFolder, chart);
-        writeEditorTrackLayout(chartFolder, chart);
-        writeChart(chartFolder, chart, arenaKey);
-        writeScene(arenaFolder, world, chart, arenaKey);
-        copyAudio(server, folder, chart);
-        return folder;
+        try {
+            Path chartFolder = temporary.resolve("charts").normalize();
+            Files.createDirectories(chartFolder);
+            writeManifest(chartFolder, chart);
+            writeEditorTrackLayout(chartFolder, chart);
+            writeChart(chartFolder, chart, arenaKey);
+            exportScenes(server, world, chart, temporary.resolve("Arenas"), arenaKey);
+            copyAudio(server, temporary, chart);
+            writeExportManifest(temporary, chart, chartFolder, arenaKey);
+            Files.move(temporary, folder, StandardCopyOption.ATOMIC_MOVE);
+            return folder;
+        } catch (IOException | RuntimeException exception) {
+            replaceDirectory(temporary);
+            throw exception;
+        }
     }
+
+    private static Path uniqueExportFolder(Path root, String base) throws IOException {
+        Path candidate = root.resolve(base).normalize();
+        int suffix = 1;
+        while (Files.exists(candidate)) candidate = root.resolve(base + "-" + suffix++).normalize();
+        if (!candidate.startsWith(root)) throw new IOException("导出目录无效");
+        return candidate;
+    }
+
+    private static void exportScenes(MinecraftServer server, ServerWorld world, ChartManifest chart, Path arenas, String arenaKey) throws IOException {
+        Files.createDirectories(arenas);
+        for (SceneEditStorage.Scene scene : SceneEditStorage.list(server, chart.id)) {
+            String directoryName = scene.initial ? "initial" : safeSceneName(scene.name, scene.sceneId);
+            Path target = arenas.resolve(directoryName).normalize();
+            Files.createDirectories(target);
+            Path source = SceneEditStorage.schematicPath(server, chart.id, scene.index);
+            if (Files.isRegularFile(source)) {
+                Files.copy(source, target.resolve("arena.schem"), StandardCopyOption.REPLACE_EXISTING);
+                writeExportSceneMetadata(target, chart, scene, arenaKey);
+            } else if (scene.initial) {
+                writeScene(target, world, chart, arenaKey);
+            } else {
+                throw new IOException("场景缺少 arena.schem：" + scene.name);
+            }
+        }
+    }
+
+    private static void writeExportSceneMetadata(Path folder, ChartManifest chart, SceneEditStorage.Scene scene, String arenaKey) throws IOException {
+        String sceneName = scene.initial ? arenaKey : blank(scene.name, "scene").toLowerCase(Locale.ROOT);
+        String content = "name: " + yaml(sceneName) + "\n"
+                + "display-name: " + yaml(scene.name) + "\n"
+                + "author: " + yaml(blank(chart.charter, "Unknown")) + "\n"
+                + "description: \"\"\n"
+                + "icon: " + bukkitMaterial(scene.icon) + "\n"
+                + "border: CYAN_CONCRETE\n"
+                + "success: GREEN_CONCRETE\n"
+                + "schematic: arena.schem\n"
+                + "hide: false\n";
+        Files.writeString(folder.resolve("metadata.yml"), content, StandardCharsets.UTF_8);
+    }
+
+    private static String safeSceneName(String name, String id) {
+        String value = name == null ? "scene" : name.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_").replace("..", "_").trim();
+        if (value.isBlank()) value = "scene";
+        String suffix = id == null ? "scene" : id.replace("-", "");
+        return value + "~" + suffix.substring(0, Math.min(8, suffix.length()));
+    }
+
+    private static void writeExportManifest(Path folder, ChartManifest chart, Path chartFolder, String arenaKey) throws IOException {
+        JsonObject root = new JsonObject();
+        root.addProperty("chartId", chart.id); root.addProperty("title", chart.title);
+        root.addProperty("exportedAt", java.time.Instant.now().toString());
+        root.addProperty("audio", "audio." + extension(chart.audioFile));
+        root.addProperty("chart", folder.relativize(chartFolder.resolve(difficultyFile(chart.difficulty) + ".rmcc")).toString().replace('\\', '/'));
+        root.addProperty("initialArena", "Arenas/initial");
+        JsonArray arenas = new JsonArray();
+        Path arenaRoot = folder.resolve("Arenas");
+        if (Files.isDirectory(arenaRoot)) {
+            try (var stream = Files.list(arenaRoot)) {
+                for (Path arena : stream.filter(Files::isDirectory).sorted().toList()) {
+                    arenas.add(folder.relativize(arena).toString().replace('\\', '/'));
+                }
+            }
+        }
+        root.add("arenas", arenas);
+        root.addProperty("manifest", "charts/manifest.yml");
+        root.addProperty("layout", "charts/" + EditorTrackLayoutFile.FILE_NAME);
+        JsonArray sceneFiles = new JsonArray();
+        if (Files.isDirectory(arenaRoot)) {
+            try (var stream = Files.list(arenaRoot)) {
+                for (Path arena : stream.filter(Files::isDirectory).sorted().toList()) {
+                    JsonObject scene = new JsonObject();
+                    scene.addProperty("directory", folder.relativize(arena).toString().replace('\\', '/'));
+                    scene.addProperty("schematic", folder.relativize(arena.resolve("arena.schem")).toString().replace('\\', '/'));
+                    scene.addProperty("metadata", folder.relativize(arena.resolve("metadata.yml")).toString().replace('\\', '/'));
+                    sceneFiles.add(scene);
+                }
+            }
+        }
+        root.add("sceneFiles", sceneFiles);
+        Files.writeString(folder.resolve("export.json"), GSON.toJson(root), StandardCharsets.UTF_8);
+    }
+
+    private static String extension(String file) { int index = file == null ? -1 : file.lastIndexOf('.'); return index < 0 ? "mp3" : file.substring(index + 1); }
 
     private static void writeManifest(Path folder, ChartManifest chart) throws IOException {
         String icon = bukkitMaterial(chart.coverItemId);
@@ -87,7 +178,7 @@ public final class Rhythmc3Exporter {
             + "respack_sha1: \"\"\n"
             + "description: \"\"\n"
             + "song_id: " + positiveId(chart.id) + "\n"
-            + "version: \"1.0\"\n"
+            + "version: \"2.0\"\n"
             + "comments: []\n"
             + "player-alias: []\n"
             + "tags: []\n"
@@ -115,7 +206,7 @@ public final class Rhythmc3Exporter {
         meta.addProperty("level", chart.level);
         meta.addProperty("offset", chart.offsetMillis);
         meta.addProperty("uid", positiveId(chart.id) * 10 + difficultyIndex(chart.difficulty));
-        meta.addProperty("initialArena", chart.initialArena == null || chart.initialArena.isBlank() ? arenaKey : chart.initialArena);
+        meta.addProperty("initialArena", arenaKey);
         meta.add("comments", new JsonArray());
         JsonArray bpms = new JsonArray();
         if (chart.bpms == null || chart.bpms.isEmpty()) {
@@ -241,8 +332,7 @@ public final class Rhythmc3Exporter {
 
     private static void copyAudio(MinecraftServer server, Path folder, ChartManifest chart) throws IOException {
         Path source = ChartStorage.audioPath(server, chart);
-        String filename = source.getFileName().toString();
-        Files.copy(source, folder.resolve(filename), StandardCopyOption.REPLACE_EXISTING);
+        Files.copy(source, folder.resolve("audio." + extension(source.getFileName().toString())), StandardCopyOption.REPLACE_EXISTING);
     }
 
     private static String stateId(BlockState state) {
@@ -278,7 +368,12 @@ public final class Rhythmc3Exporter {
 
     private static String difficultyFile(String difficulty) { return switch (difficulty == null ? "" : difficulty) { case "NR" -> "nether"; case "ED" -> "end"; case "VO" -> "void"; default -> "world"; }; }
     private static int difficultyIndex(String difficulty) { return switch (difficulty == null ? "" : difficulty) { case "NR" -> 2; case "ED" -> 3; case "VO" -> 4; default -> 1; }; }
-    private static int positiveId(String value) { return Math.max(1, value.hashCode() & 0x7FFFFFFF); }
+    private static int positiveId(String value) { return Math.floorMod(value.hashCode(), (Integer.MAX_VALUE - 4) / 10) + 1; }
+    private static String safeExportName(String name) {
+        String value = blank(name, "untitled").replaceAll("[\\/:*?\"<>|\\p{Cntrl}]", "_").trim();
+        return value.isBlank() ? "untitled" : value;
+    }
+
     private static String safeFolderName(ChartManifest chart) { return (blank(chart.title, "untitled") + "-" + chart.id).replaceAll("[^a-zA-Z0-9 _.-]", "_").trim(); }
     private static String safeArenaKey(ChartManifest chart) { return safeFolderName(chart).toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9._-]", "_"); }
     private static String bukkitMaterial(String itemId) { try { Identifier id = Identifier.of(blank(itemId, "minecraft:note_block")); return id.getPath().toUpperCase(Locale.ROOT); } catch (RuntimeException ignored) { return "NOTE_BLOCK"; } }

@@ -15,6 +15,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.util.WorldSavePath;
 import cn.frkovo.rhythmcmaker.RhythmcMaker;
 import cn.frkovo.rhythmcmaker.common.chart.Rhythmc3EffectCodec;
+import cn.frkovo.rhythmcmaker.scene.SceneEditStorage;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -40,13 +41,23 @@ public final class ChartStorage {
     }
 
     public static List<ChartManifest> list(MinecraftServer server) throws IOException {
-        Path manifests = manifestsDirectory(server);
-        if (!Files.exists(manifests)) return List.of();
-
         List<ChartManifest> charts = new ArrayList<>();
-        try (var files = Files.list(manifests)) {
-            files.filter(path -> path.getFileName().toString().endsWith(".json"))
-                    .forEach(path -> readManifest(path, charts));
+        Path root = root(server);
+        try (var entries = Files.list(root)) {
+            entries.filter(Files::isDirectory)
+                    .filter(path -> !path.getFileName().toString().equals("imports")
+                            && !path.getFileName().toString().equals("exports"))
+                    .forEach(path -> {
+                        try { ChartManifest chart = find(server, path.getFileName().toString()); if (chart != null) charts.add(chart); }
+                        catch (IOException ignored) { }
+                    });
+        }
+        Path manifests = root.resolve("manifests");
+        if (Files.exists(manifests)) try (var files = Files.list(manifests)) {
+            files.filter(path -> path.getFileName().toString().endsWith(".json")).forEach(path -> {
+                String id = stripExtension(path.getFileName().toString());
+                if (charts.stream().noneMatch(chart -> id.equals(chart.id))) readManifest(path, charts);
+            });
         }
         charts.sort(Comparator.comparing(chart -> chart.title == null ? "" : chart.title, String.CASE_INSENSITIVE_ORDER));
         return charts;
@@ -93,8 +104,7 @@ public final class ChartStorage {
             }
         }
         chart.trackLength = calculateImportedTrackLength(chart);
-        writeManifest(manifestPath(server, chart.id), chart);
-        writeChartDocument(chartDocumentPath(server, chart.id), chart);
+        writeLocalChart(server, chart);
         RhythmcMaker.installDefaultArenaScenes(server, chart, arenaNames);
         return chart;
     }
@@ -106,25 +116,17 @@ public final class ChartStorage {
     public static ChartManifest importRhythmc3(MinecraftServer server, Path difficultyFile, Path manifestFile, Path layoutFile, Path stagedAudio, List<ImportedScene> scenes) throws IOException {
         ChartManifest chart = importRhythmc3(server, difficultyFile, manifestFile, layoutFile, stagedAudio);
         if (scenes != null && !scenes.isEmpty()) {
-            Path sceneRoot = root(server).resolve("scenes").resolve(chart.id).toAbsolutePath().normalize();
-            Files.createDirectories(sceneRoot);
-            int index = 0;
-            for (ImportedScene scene : scenes) {
-                if (scene == null || scene.schem() == null || scene.info() == null || !Files.isRegularFile(scene.schem()) || !Files.isRegularFile(scene.info())) continue;
-                Path folder = sceneRoot.resolve(index == 0 ? "initial" : "scene" + index).normalize();
-                if (!folder.startsWith(sceneRoot)) continue;
-                Files.createDirectories(folder);
-                Files.copy(scene.schem(), folder.resolve("arena.schem"), StandardCopyOption.REPLACE_EXISTING);
-                Files.copy(scene.info(), folder.resolve("metadata.yml"), StandardCopyOption.REPLACE_EXISTING);
-                String sceneKey = sceneKey(scene.info(), index == 0 ? "initial" : "scene" + index);
-                String scenePath = folder.toString();
-                chart.arenaBindings.put(sceneKey, scenePath);
-                chart.arenaBindings.put(index == 0 ? "initial" : "scene" + index, scenePath);
-                if (index == 0 && chart.initialArena != null && !chart.initialArena.isBlank()) chart.arenaBindings.put(chart.initialArena, scenePath);
-                index++;
+            int sceneIndex = 1;
+            for (ImportedScene importedScene : scenes) {
+                if (importedScene == null || importedScene.schem() == null || importedScene.info() == null || !Files.isRegularFile(importedScene.schem()) || !Files.isRegularFile(importedScene.info())) continue;
+                String sceneName = sceneKey(importedScene.info(), sceneIndex == 1 ? "initial" : "scene" + sceneIndex);
+                String binding = "scene-editor:" + sceneIndex;
+                chart.arenaBindings.put(sceneName, binding);
+                chart.arenaBindings.put(sceneIndex == 1 ? "initial" : "scene" + sceneIndex, binding);
+                if (sceneIndex == 1 && chart.initialArena != null && !chart.initialArena.isBlank()) chart.arenaBindings.put(chart.initialArena, binding);
+                sceneIndex++;
             }
-        }
-        if (chart.effects != null) for (JsonObject effect : chart.effects) {
+        }        if (chart.effects != null) for (JsonObject effect : chart.effects) {
             if (effect == null) continue;
             JsonObject properties = effect.has("properties") && effect.get("properties").isJsonObject() ? effect.getAsJsonObject("properties") : effect;
             if (!properties.has("arena")) continue;
@@ -133,7 +135,7 @@ public final class ChartStorage {
             if (path != null) properties.addProperty("arenaPath", path);
         }
         RhythmcMaker.installImportedScenes(server, chart, scenes);
-        writeManifest(manifestPath(server, chart.id), chart);
+        writeLocalChart(server, chart);
         return chart;
     }
 
@@ -591,18 +593,18 @@ public final class ChartStorage {
         chart.durationSeconds = readAudioDuration(stagedAudio);
         calculateImportedTrackLength(chart);
         ensureDefaultTrackSpeed(chart);
-        chart.audioFile = chart.id + "." + extension;
+        chart.audioFile = "audio." + extension;
         chart.lastEdited = "";
-        Files.move(stagedAudio, audioDirectory(server).resolve(chart.audioFile), StandardCopyOption.REPLACE_EXISTING);
-        writeManifest(manifestPath(server, chart.id), chart);
-        writeChartDocument(chartDocumentPath(server, chart.id), chart);
-        Files.createDirectories(effectScenesDirectory(server, chart.id));
+        Path localDirectory = chartDirectory(server, chart.id);
+        Files.createDirectories(localDirectory);
+        Files.move(stagedAudio, localDirectory.resolve(chart.audioFile), StandardCopyOption.REPLACE_EXISTING);
+        writeLocalChart(server, chart);
     }
 
     public static Path effectScenesDirectory(MinecraftServer server, String chartId) throws IOException {
         if (chartId == null || chartId.isBlank()) throw new IOException("谱面编号无效");
-        Path rootDirectory = root(server).resolve("effect-scenes").toAbsolutePath().normalize();
-        Path directory = rootDirectory.resolve(chartId).normalize();
+        Path rootDirectory = chartDirectory(server, chartId).resolve("scene").toAbsolutePath().normalize();
+        Path directory = rootDirectory.normalize();
         if (!directory.startsWith(rootDirectory)) throw new IOException("特效场景目录无效");
         Files.createDirectories(directory);
         return directory;
@@ -659,12 +661,15 @@ public final class ChartStorage {
         if (chart == null || chart.id == null || chart.id.isBlank() || !chart.id.matches("[a-zA-Z0-9_-]+")) {
             throw new IOException("谱面编号无效");
         }
-        writeManifest(manifestPath(server, chart.id), chart);
-        writeChartDocument(chartDocumentPath(server, chart.id), chart);
-        Files.createDirectories(effectScenesDirectory(server, chart.id));
+        migrateLegacyChart(server, chart.id);
+        writeLocalChart(server, chart);
     }
 
     public static ChartManifest find(MinecraftServer server, String chartId) throws IOException {
+        Path localManifest = localManifestPath(server, chartId);
+        if (Files.isRegularFile(localManifest)) return parseLocalChart(server, chartId);
+        migrateLegacyChart(server, chartId);
+        if (Files.isRegularFile(localManifest)) return parseLocalChart(server, chartId);
         Path path = manifestPath(server, chartId);
         if (!Files.exists(path)) {
             Path backup = backupPath(path);
@@ -692,12 +697,8 @@ public final class ChartStorage {
 
     public static ChartManifest findByDimensionId(MinecraftServer server, String dimensionId) throws IOException {
         if (dimensionId == null || dimensionId.isBlank()) return null;
-        Path manifests = manifestsDirectory(server);
-        try (var files = Files.list(manifests)) {
-            for (Path path : files.filter(file -> file.getFileName().toString().endsWith(".json")).toList()) {
-                String chartId = stripExtension(path.getFileName().toString());
-                if (cn.frkovo.rhythmcmaker.ChartDimensionManager.stableDimensionId(chartId).equals(dimensionId)) return find(server, chartId);
-            }
+        for (ChartManifest chart : list(server)) {
+            if (cn.frkovo.rhythmcmaker.ChartDimensionManager.stableDimensionId(chart.id).equals(dimensionId)) return chart;
         }
         return null;
     }
@@ -710,10 +711,11 @@ public final class ChartStorage {
         if (chart == null || chart.id == null || chart.id.isBlank() || !chart.id.matches("[a-zA-Z0-9_-]+")) {
             throw new IOException("谱面编号无效");
         }
+        deleteTree(chartDirectory(server, chart.id));
         Files.deleteIfExists(manifestPath(server, chart.id));
         Files.deleteIfExists(chartDocumentPath(server, chart.id));
         if (chart.audioFile != null && !chart.audioFile.isBlank()) {
-            Path audioRoot = audioDirectory(server).toAbsolutePath().normalize();
+            Path audioRoot = chartDirectory(server, chart.id).toAbsolutePath().normalize();
             Path audioPath = audioRoot.resolve(chart.audioFile).normalize();
             if (audioPath.startsWith(audioRoot)) Files.deleteIfExists(audioPath);
         }
@@ -727,10 +729,16 @@ public final class ChartStorage {
 
     public static Path audioPath(MinecraftServer server, ChartManifest chart) throws IOException {
         if (chart == null || chart.audioFile == null || chart.audioFile.isBlank()) throw new IOException("audio missing");
+        Path local = chartDirectory(server, chart.id).resolve(chart.audioFile).toAbsolutePath().normalize();
+        if (Files.isRegularFile(local)) return local;
         Path audioRoot = audioDirectory(server).toAbsolutePath().normalize();
-        Path audioPath = audioRoot.resolve(chart.audioFile).normalize();
-        if (!audioPath.startsWith(audioRoot)) throw new IOException("invalid audio path");
-        return audioPath;
+        Path legacy = audioRoot.resolve(chart.audioFile).normalize();
+        if (!legacy.startsWith(audioRoot)) throw new IOException("invalid audio path");
+        return legacy;
+    }
+
+    public static Path chartDirectoryPath(MinecraftServer server, String chartId) throws IOException {
+        return chartDirectory(server, chartId);
     }
 
     private static Path manifestsDirectory(MinecraftServer server) throws IOException {
@@ -765,6 +773,22 @@ public final class ChartStorage {
         return chartDirectory(server).resolve(chartId + ".rmcc");
     }
 
+    private static Path chartDirectory(MinecraftServer server, String chartId) throws IOException {
+        if (chartId == null || !chartId.matches("[a-zA-Z0-9._-]+")) throw new IOException("谱面目录无效");
+        Path base = root(server).toAbsolutePath().normalize();
+        Path directory = base.resolve(chartId).normalize();
+        if (!directory.startsWith(base)) throw new IOException("谱面目录无效");
+        return directory;
+    }
+
+    private static Path localManifestPath(MinecraftServer server, String chartId) throws IOException {
+        return chartDirectory(server, chartId).resolve("manifests.json");
+    }
+
+    private static Path localChartPath(MinecraftServer server, String chartId) throws IOException {
+        return chartDirectory(server, chartId).resolve("chart.rmcc");
+    }
+
     private static void readManifest(Path path, List<ChartManifest> charts) {
         try {
             ChartManifest chart = parseManifest(path);
@@ -785,6 +809,93 @@ public final class ChartStorage {
     private static void writeChartDocument(Path path, ChartManifest chart) throws IOException {
         String document = GSON.toJson(new ChartDocument(chart));
         writeJsonAtomically(path, document);
+    }
+
+    private static void writeLocalChart(MinecraftServer server, ChartManifest chart) throws IOException {
+        Files.createDirectories(chartDirectory(server, chart.id));
+        writeChartDocument(localChartPath(server, chart.id), chart);
+        writeLocalMetadata(server, chart);
+    }
+
+    private static void writeLocalMetadata(MinecraftServer server, ChartManifest chart) throws IOException {
+        JsonObject metadata = JsonParser.parseString(GSON.toJson(chart)).getAsJsonObject();
+        metadata.remove("tracks");
+        metadata.remove("notes");
+        metadata.remove("effects");
+        metadata.remove("speedEvents");
+        metadata.remove("bpms");
+        writeJsonAtomically(localManifestPath(server, chart.id), GSON.toJson(metadata));
+    }
+
+    private static ChartManifest parseLocalChart(MinecraftServer server, String chartId) throws IOException {
+        ChartManifest chart = parseManifest(localManifestPath(server, chartId));
+        JsonObject root = JsonParser.parseString(Files.readString(localChartPath(server, chartId), StandardCharsets.UTF_8)).getAsJsonObject();
+        if (root.has("meta") && root.get("meta").isJsonObject()) chart = GSON.fromJson(root.get("meta"), CHART_TYPE);
+        if (root.has("tracks") && root.get("tracks").isJsonArray()) chart.tracks = GSON.fromJson(root.get("tracks"), new TypeToken<List<ChartManifest.Track>>() {}.getType());
+        if (root.has("notes") && root.get("notes").isJsonArray()) chart.notes = GSON.fromJson(root.get("notes"), new TypeToken<List<ChartManifest.Note>>() {}.getType());
+        if (root.has("effects") && root.get("effects").isJsonArray()) chart.effects = GSON.fromJson(root.get("effects"), new TypeToken<List<JsonObject>>() {}.getType());
+        if (root.has("speedEvents") && root.get("speedEvents").isJsonArray()) chart.speedEvents = GSON.fromJson(root.get("speedEvents"), new TypeToken<List<ChartManifest.SpeedEvent>>() {}.getType());
+        if (root.has("layout") && root.get("layout").isJsonObject()) {
+            JsonObject layout = root.getAsJsonObject("layout");
+            if (layout.has("divisionsPerBeat")) chart.divisionsPerBeat = layout.get("divisionsPerBeat").getAsInt();
+            if (layout.has("laneCount")) chart.laneCount = layout.get("laneCount").getAsInt();
+            if (layout.has("beatsPerMeasure")) chart.beatsPerMeasure = layout.get("beatsPerMeasure").getAsInt();
+            if (layout.has("selectedStartBeat")) chart.selectedStartBeat = layout.get("selectedStartBeat").getAsInt();
+        }
+        return chart;
+    }
+
+    private static void migrateLegacyChart(MinecraftServer server, String chartId) throws IOException {
+        Path local = chartDirectory(server, chartId);
+        if (Files.isRegularFile(localManifestPath(server, chartId))) return;
+        Path oldManifest = manifestPath(server, chartId), oldChart = chartDocumentPath(server, chartId);
+        if (!Files.isRegularFile(oldManifest) || !Files.isRegularFile(oldChart)) return;
+        ChartManifest chart = GSON.fromJson(Files.readString(oldManifest, StandardCharsets.UTF_8), CHART_TYPE);
+        Path temporary = root(server).resolve(".migration-tmp-" + UUID.randomUUID()).toAbsolutePath().normalize();
+        try {
+            Files.createDirectories(temporary);
+            Path oldAudio = null;
+            if (chart.audioFile != null && !chart.audioFile.isBlank()) {
+                Path audioRoot = audioDirectory(server).toAbsolutePath().normalize();
+                oldAudio = audioRoot.resolve(chart.audioFile).normalize();
+                if (!oldAudio.startsWith(audioRoot)) throw new IOException("legacy audio path invalid");
+                if (!Files.isRegularFile(oldAudio)) throw new IOException("legacy chart audio missing; migration aborted");
+                chart.audioFile = "audio." + extensionOf(oldAudio.getFileName().toString());
+                Files.copy(oldAudio, temporary.resolve(chart.audioFile));
+            }
+            Files.createDirectories(local);
+            if (chart.audioFile != null && Files.exists(temporary.resolve(chart.audioFile))) Files.move(temporary.resolve(chart.audioFile), local.resolve(chart.audioFile), StandardCopyOption.REPLACE_EXISTING);
+            writeChartDocument(localChartPath(server, chartId), chart);
+            JsonObject migratedDocument = JsonParser.parseString(Files.readString(localChartPath(server, chartId), StandardCharsets.UTF_8)).getAsJsonObject();
+            if (!migratedDocument.has("meta") || !chartId.equals(migratedDocument.getAsJsonObject("meta").get("id").getAsString())) throw new IOException("migrated chart document validation failed");
+            if (chart.audioFile != null && !Files.isRegularFile(chartDirectory(server, chartId).resolve(chart.audioFile))) throw new IOException("migrated audio validation failed");
+            SceneEditStorage.migrateLegacySceneDirectory(server, chartId, root(server).resolve("scenes").resolve(chartId));
+            writeLocalMetadata(server, chart);
+            ChartManifest migrated = parseLocalChart(server, chartId);
+            if (migrated == null || !chartId.equals(migrated.id)) throw new IOException("migrated chart validation failed");
+            Files.deleteIfExists(oldManifest);
+            Files.deleteIfExists(oldChart);
+            if (oldAudio != null) Files.deleteIfExists(oldAudio);
+            deleteDirectoryIfEmpty(oldManifest.getParent());
+            deleteDirectoryIfEmpty(oldChart.getParent());
+        } finally { deleteTree(temporary); }
+    }
+
+    private static void deleteDirectoryIfEmpty(Path directory) throws IOException {
+        if (!Files.isDirectory(directory)) return;
+        try (var entries = Files.list(directory)) {
+            if (entries.findAny().isEmpty()) Files.deleteIfExists(directory);
+        }
+    }
+
+    private static void deleteTree(Path directory) throws IOException {
+        if (!Files.exists(directory)) return;
+        try (var walk = Files.walk(directory)) {
+            walk.sorted(Comparator.reverseOrder()).forEach(path -> { try { Files.deleteIfExists(path); } catch (IOException exception) { throw new RuntimeException(exception); } });
+        } catch (RuntimeException exception) {
+            if (exception.getCause() instanceof IOException io) throw io;
+            throw exception;
+        }
     }
 
     private static ChartManifest parseManifest(Path path) throws IOException {
@@ -860,7 +971,3 @@ public final class ChartStorage {
         }
     }
 }
-
-
-
-

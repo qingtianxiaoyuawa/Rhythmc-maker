@@ -14,10 +14,12 @@ import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class SceneEditStorage {
@@ -28,6 +30,7 @@ public final class SceneEditStorage {
 
     public static List<Scene> list(MinecraftServer server, String chartId) throws IOException {
         Path path = path(server, chartId).toAbsolutePath().normalize();
+        if (Files.isDirectory(localRoot(server, chartId)) && !Files.isRegularFile(path(server, chartId))) return listLocal(server, chartId);
         long modified = Files.exists(path) ? Files.getLastModifiedTime(path).toMillis() : -1L;
         long size = Files.exists(path) ? Files.size(path) : -1L;
         CacheEntry cached = CACHE.get(path);
@@ -42,6 +45,8 @@ public final class SceneEditStorage {
         if (scenes == null) scenes = new ArrayList<>();
         normalize(scenes);
         refreshSavedState(server, chartId, scenes);
+        migrateLegacyScenes(server, chartId, scenes);
+        refreshSavedState(server, chartId, scenes);
         CACHE.put(path, new CacheEntry(modified, size, copyScenes(scenes)));
         return scenes;
     }
@@ -51,10 +56,17 @@ public final class SceneEditStorage {
     }
 
     public static void save(MinecraftServer server, String chartId, List<Scene> scenes) throws IOException {
-        Path path = path(server, chartId).toAbsolutePath().normalize();
-        Files.createDirectories(path.getParent());
-        CACHE.remove(path);
-        Files.writeString(path, GSON.toJson(scenes, LIST_TYPE), StandardCharsets.UTF_8);
+        normalize(scenes);
+        migrateLegacyScenes(server, chartId, scenes);
+        Path root = localRoot(server, chartId);
+        Files.createDirectories(root);
+        for (Scene scene : scenes) {
+            Path directory = root.resolve(sceneDirectoryName(scene)).normalize();
+            if (!directory.startsWith(root)) throw new IOException("场景目录无效");
+            Files.createDirectories(directory);
+            Files.writeString(directory.resolve("metadata.yml"), metadata(scene), StandardCharsets.UTF_8);
+        }
+        CACHE.remove(path(server, chartId).toAbsolutePath().normalize());
     }
 
     private static void normalize(List<Scene> scenes) {
@@ -70,6 +82,7 @@ public final class SceneEditStorage {
         List<Scene> customScenes = new ArrayList<>();
         for (Scene scene : scenes) if (scene != initial) customScenes.add(scene);
         scenes.clear();
+        if (initial.sceneId == null || initial.sceneId.isBlank()) initial.sceneId = UUID.randomUUID().toString();
         initial.index = 1;
         initial.x = 200;
         if (initial.name == null || initial.name.isBlank()) initial.name = "初始场景";
@@ -78,6 +91,7 @@ public final class SceneEditStorage {
         for (int position = 0; position < customScenes.size(); position++) {
             Scene scene = customScenes.get(position);
             scene.initial = false;
+            if (scene.sceneId == null || scene.sceneId.isBlank()) scene.sceneId = UUID.randomUUID().toString();
             scene.index = position + 2;
             scene.x = 600 + position * 200;
             if (scene.name == null || scene.name.isBlank()) scene.name = "场景" + scene.index;
@@ -90,6 +104,106 @@ public final class SceneEditStorage {
         for (Scene scene : scenes) scene.saved = Files.isRegularFile(schematicPath(server, chartId, scene.index));
     }
 
+    private static void migrateLegacyScenes(MinecraftServer server, String chartId, List<Scene> scenes) throws IOException {
+        Path legacyIndex = path(server, chartId);
+        if (!Files.isRegularFile(legacyIndex)) return;
+        Path local = localRoot(server, chartId);
+        Path staging = local.resolveSibling("scene-migration-" + UUID.randomUUID()).normalize();
+        if (!staging.startsWith(local.getParent())) throw new IOException("scene migration directory invalid");
+        Files.createDirectories(staging);
+        try {
+            for (Scene scene : scenes) {
+                Path old = legacySchematicPath(server, chartId, scene.index);
+                Path staged = staging.resolve(sceneDirectoryName(scene));
+                Files.createDirectories(staged);
+                Files.writeString(staged.resolve("metadata.yml"), metadata(scene), StandardCharsets.UTF_8);
+                if (Files.isRegularFile(old)) Files.copy(old, staged.resolve("arena.schem"));
+            }
+            Files.createDirectories(local);
+            for (Scene scene : scenes) {
+                Path target = local.resolve(sceneDirectoryName(scene));
+                Path staged = staging.resolve(sceneDirectoryName(scene));
+                if (!Files.exists(target)) Files.move(staged, target, StandardCopyOption.ATOMIC_MOVE);
+                else {
+                    if (!Files.isRegularFile(target.resolve("arena.schem")) && Files.isRegularFile(staged.resolve("arena.schem"))) Files.copy(staged.resolve("arena.schem"), target.resolve("arena.schem"));
+                    Files.writeString(target.resolve("metadata.yml"), metadata(scene), StandardCharsets.UTF_8);
+                }
+            }
+            for (Scene scene : scenes) {
+                Path old = legacySchematicPath(server, chartId, scene.index);
+                Path current = local.resolve(sceneDirectoryName(scene)).resolve("arena.schem");
+                if (Files.isRegularFile(old) && !Files.isRegularFile(current)) throw new IOException("scene migration validation failed");
+            }
+            for (Scene scene : scenes) {
+                Path old = legacySchematicPath(server, chartId, scene.index);
+                Files.deleteIfExists(old);
+                Files.deleteIfExists(old.getParent());
+            }
+            Files.deleteIfExists(legacyIndex);
+            deleteDirectoryIfEmpty(legacyIndex.getParent());
+        } finally {
+            deleteTree(staging);
+        }
+    }
+
+    private static void deleteDirectoryIfEmpty(Path directory) throws IOException {
+        if (!Files.isDirectory(directory)) return;
+        try (var entries = Files.list(directory)) {
+            if (entries.findAny().isEmpty()) Files.deleteIfExists(directory);
+        }
+    }
+
+    private static void deleteTree(Path directory) throws IOException {
+        if (!Files.exists(directory)) return;
+        try (var paths = Files.walk(directory)) {
+            for (Path entry : paths.sorted(Comparator.reverseOrder()).toList()) Files.deleteIfExists(entry);
+        }
+    }
+
+    private static List<Scene> listLocal(MinecraftServer server, String chartId) throws IOException {
+        List<Scene> scenes = new ArrayList<>();
+        Path root = localRoot(server, chartId);
+        try (var stream = Files.list(root)) {
+            for (Path directory : stream.filter(Files::isDirectory).toList()) {
+                Path metadata = directory.resolve("metadata.yml");
+                if (Files.isRegularFile(metadata)) scenes.add(parseMetadata(metadata, directory.getFileName().toString()));
+            }
+        }
+        normalize(scenes);
+        refreshSavedState(server, chartId, scenes);
+        return scenes;
+    }
+
+    private static String sceneDirectoryName(Scene scene) {
+        String id = scene.sceneId == null ? "scene" : scene.sceneId.replaceAll("[^a-zA-Z0-9_-]", "");
+        return "scene-" + id;
+    }
+
+    private static String metadata(Scene scene) {
+        return "sceneId: " + scene.sceneId + "\nindex: " + scene.index + "\nname: \"" + yaml(scene.name) + "\"\ntype: "
+                + (scene.initial ? "initial" : "effect") + "\nschematic: arena.schem\nicon: " + scene.icon + "\n";
+    }
+
+    private static String yaml(String value) { return value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\""); }
+
+    private static Scene parseMetadata(Path file, String fallbackName) throws IOException {
+        Scene scene = new Scene();
+        for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+            int separator = line.indexOf(':');
+            if (separator < 0) continue;
+            String key = line.substring(0, separator).trim();
+            String value = line.substring(separator + 1).trim().replace("\"", "");
+            if (key.equals("sceneId") && !value.isBlank()) scene.sceneId = value;
+            else if (key.equals("index")) scene.index = Integer.parseInt(value);
+
+            else if (key.equals("name")) scene.name = value;
+            else if (key.equals("type")) scene.initial = value.equals("initial");
+            else if (key.equals("icon")) scene.icon = value;
+        }
+        if (scene.name == null || scene.name.isBlank()) scene.name = fallbackName;
+        return scene;
+    }
+
     private static List<Scene> copyScenes(List<Scene> source) {
         List<Scene> copy = new ArrayList<>(source.size());
         for (Scene scene : source) {
@@ -100,6 +214,7 @@ public final class SceneEditStorage {
             value.icon = scene.icon;
             value.x = scene.x;
             value.saved = scene.saved;
+            value.sceneId = scene.sceneId;
             copy.add(value);
         }
         return copy;
@@ -111,12 +226,84 @@ public final class SceneEditStorage {
         save(server, "global", scenes);
     }
 
+    public static void migrateLegacySceneDirectory(MinecraftServer server, String chartId, Path legacyRoot) throws IOException {
+        if (!Files.isDirectory(legacyRoot)) return;
+        List<Path> folders;
+        try (var stream = Files.list(legacyRoot)) {
+            folders = stream.filter(Files::isDirectory).sorted().toList();
+        }
+        List<Scene> scenes = list(server, chartId);
+        List<LegacyScene> imports = new ArrayList<>();
+        java.util.Set<String> assignedSceneIds = new java.util.HashSet<>();
+        int nextIndex = scenes.stream().mapToInt(scene -> scene.index).max().orElse(0) + 1;
+        for (Path folder : folders) {
+            Path source = folder.resolve("arena.schem");
+            Path metadataFile = folder.resolve("metadata.yml");
+            String name = readLegacySceneValue(metadataFile, "name", folder.getFileName().toString());
+            String icon = readLegacySceneValue(metadataFile, "icon", "minecraft:grass_block");
+            boolean initial = folder.getFileName().toString().equalsIgnoreCase("initial");
+            Scene scene = initial ? scenes.stream().filter(value -> value.initial).findFirst().orElse(null) : scenes.stream().filter(value -> !value.initial && value.name.equals(name) && !assignedSceneIds.contains(value.sceneId)).findFirst().orElse(null);
+            if (scene != null && !assignedSceneIds.add(scene.sceneId)) scene = null;
+            if (scene == null) {
+                scene = new Scene(nextIndex++);
+                scene.initial = false;
+                scenes.add(scene);
+                assignedSceneIds.add(scene.sceneId);
+            }
+            if (!name.isBlank()) scene.name = name;
+            if (!icon.isBlank()) scene.icon = icon;
+            imports.add(new LegacyScene(scene, source, metadataFile));
+        }
+        normalize(scenes);
+        save(server, chartId, scenes);
+        for (LegacyScene legacy : imports) {
+            Scene scene = scenes.stream().filter(value -> value.sceneId.equals(legacy.scene.sceneId)).findFirst().orElseThrow(() -> new IOException("legacy scene mapping missing"));
+            if (Files.isRegularFile(legacy.schematic)) copySchematic(server, chartId, scene.index, legacy.schematic);
+            if (Files.isRegularFile(legacy.schematic) && !Files.isRegularFile(schematicPath(server, chartId, scene.index))) throw new IOException("legacy scene copy validation failed");
+        }
+        for (LegacyScene legacy : imports) {
+            Files.deleteIfExists(legacy.schematic);
+            Files.deleteIfExists(legacy.metadata);
+            deleteDirectoryIfEmpty(legacy.schematic.getParent());
+        }
+        deleteDirectoryIfEmpty(legacyRoot);
+    }
+
+    private static String readLegacySceneValue(Path metadata, String key, String fallback) throws IOException {
+        if (!Files.isRegularFile(metadata)) return fallback;
+        for (String line : Files.readAllLines(metadata, StandardCharsets.UTF_8)) {
+            int separator = line.indexOf(':');
+            if (separator < 0 || !line.substring(0, separator).trim().equals(key)) continue;
+            return line.substring(separator + 1).trim().replace("\"", "");
+        }
+        return fallback;
+    }
+
+    private record LegacyScene(Scene scene, Path schematic, Path metadata) {}
+
     public static Path schematicPath(MinecraftServer server, String chartId, int sceneIndex) throws IOException {
         if (sceneIndex < 1) throw new IOException("场景编号无效");
-        Path metadata = path(server, chartId).toAbsolutePath().normalize();
-        Path directory = metadata.getParent().resolve(chartId).resolve(sceneIndex == 1 ? "initial" : "scene" + sceneIndex).normalize();
-        if (!directory.startsWith(metadata.getParent())) throw new IOException("场景存储路径无效");
+        Path root = localRoot(server, chartId);
+        Path directory = localSceneDirectory(root, sceneIndex);
+        if (directory == null) {
+            Scene scene = new Scene(sceneIndex);
+            directory = root.resolve(sceneDirectoryName(scene)).normalize();
+        }
+        if (!directory.startsWith(root)) throw new IOException("场景存储路径无效");
         return directory.resolve("arena.schem");
+    }
+
+    private static Path localSceneDirectory(Path root, int sceneIndex) throws IOException {
+        if (!Files.isDirectory(root)) return null;
+        try (var stream = Files.list(root)) {
+            for (Path directory : stream.filter(Files::isDirectory).sorted().toList()) {
+                Path metadata = directory.resolve("metadata.yml");
+                if (!Files.isRegularFile(metadata)) continue;
+                Scene scene = parseMetadata(metadata, directory.getFileName().toString());
+                if (scene.index == sceneIndex) return directory;
+            }
+        }
+        return null;
     }
 
     public static void moveSchematic(MinecraftServer server, String chartId, int fromIndex, int toIndex) throws IOException {
@@ -175,6 +362,17 @@ public final class SceneEditStorage {
         return server.getSavePath(WorldSavePath.ROOT).resolve("rhythmc maker").resolve("scene-editors").resolve(chartId + ".json");
     }
 
+    private static Path legacySchematicPath(MinecraftServer server, String chartId, int sceneIndex) throws IOException {
+        Path metadata = path(server, chartId).toAbsolutePath().normalize();
+        Path directory = metadata.getParent().resolve(chartId).resolve(sceneIndex == 1 ? "initial" : "scene" + sceneIndex).normalize();
+        if (!directory.startsWith(metadata.getParent())) throw new IOException("legacy scene path invalid");
+        return directory.resolve("arena.schem");
+    }
+
+    private static Path localRoot(MinecraftServer server, String chartId) throws IOException {
+        return server.getSavePath(WorldSavePath.ROOT).resolve("rhythmc maker").resolve(chartId).resolve("scene").toAbsolutePath().normalize();
+    }
+
     public static final class Scene {
         public int index;
         public boolean initial;
@@ -182,6 +380,7 @@ public final class SceneEditStorage {
         public String icon;
         public int x;
         public boolean saved;
+        public String sceneId;
 
         public Scene() {}
         public Scene(int index) {
@@ -190,6 +389,7 @@ public final class SceneEditStorage {
             this.name = "场景" + index;
             this.icon = "minecraft:grass_block";
             this.x = index == 1 ? 200 : 600 + (index - 2) * 200;
+            this.sceneId = UUID.randomUUID().toString();
         }
     }
 }
