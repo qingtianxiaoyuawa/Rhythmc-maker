@@ -44,7 +44,7 @@ public final class EffectParameterSchema {
                 "DARK_GRAY", "BLUE", "GREEN", "AQUA", "RED", "LIGHT_PURPLE", "YELLOW", "WHITE")));
         add("MESSAGE", "聊天消息", true, field("contents", "消息内容", STRING_LIST, "[\"消息\"]", "每行发送一条消息。"));
         add("TEXT_DISPLAY", "文本展示实体", true,
-                vector("position", "位置偏移 [x,y,z]（格）", "[0,0,0]", "相对固定播放中心 (200.5, 66, -1.5) 的偏移；不填写绝对世界坐标。"),
+                vector("position", "位置偏移 [x,y,z]（格）", "[0,1.5,0]", "相对固定播放中心 (200.5, 66, -1.5) 的偏移；不填写绝对世界坐标。"),
                 vector("rotation", "旋转 [x,y,z]（角度）", "[0,0,0]", ""),
                 vector("scale", "缩放 [x,y,z]", "[1,1,1]", "每个坐标轴独立缩放。"),
                 field("text", "文本", MULTILINE_TEXT, "\"文本\"", ""), id("text-display-1"));
@@ -55,7 +55,7 @@ public final class EffectParameterSchema {
                 branch(field("shadowed", "文字阴影", BOOLEAN, "true", ""), "SHADOW"),
                 branch(number("targetOpacity", "目标不透明度（0–255）", DECIMAL, "255", 0, 255), "OPACITY"),
                 branch(field("color", "背景颜色 [r,g,b,a]", RGBA, "[0,0,0,128]", "Reborn 官方 RGBA 数组；四个分量均为 0–255 的整数，不是 RGB、ARGB 数字或十六进制。"), "BACKGROUND_COLOR"),
-                branch(vector("position", "位置偏移 [x,y,z]（格）", "[0,0,0]", ""), "LINEAR_TRANSFORMATION"),
+                branch(vector("position", "位置偏移 [x,y,z]（格）", "[0,1.5,0]", ""), "LINEAR_TRANSFORMATION"),
                 branch(vector("rotation", "旋转 [x,y,z]（弧度）", "[0,0,0]", ""), "LINEAR_TRANSFORMATION"),
                 branch(vector("scale", "缩放 [x,y,z]", "[1,1,1]", ""), "LINEAR_TRANSFORMATION"),
                 branch(field("glowing", "发光", BOOLEAN, "false", ""), "GLOWING"));

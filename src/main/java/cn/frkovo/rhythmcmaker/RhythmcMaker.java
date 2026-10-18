@@ -2399,6 +2399,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 }
             }
             if (session.formal) {
+                session.playHiddenNoteJudgements(player, songTime);
                 int preloadedThisTick = 0;
                 for (var iterator = session.displays.entrySet().iterator(); iterator.hasNext();) {
                     var entry = iterator.next();
@@ -2436,6 +2437,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                     }
                     if (relativeDistance > PLAYBACK_APPROACH_DISTANCE) break;
                     session.nextNoteIndex++;
+                    if (session.shouldHide(note)) continue;
                     double displayZ = PLAYBACK_FRAME_Z - Math.max(0.0, relativeDistance);
                     double[] position = session.displayPosition(note, songTime, displayZ);
                     DisplayEntity.BlockDisplayEntity display = session.acquire(blockStateForType(note.type), position[0], position[1], position[2]);
@@ -2572,6 +2574,8 @@ private static void showSceneBoundary(MinecraftServer server) {
             case "TITLE" -> session.applyTitle(player, effect);
             case "MESSAGE" -> sendMessageEffect(player, effect, text);
             case "TEXT_DISPLAY", "TEXT_DISPLAY_EFFECT", "TEXT_DISPLAY_SYNC_TRACK", "TEXT_DISPLAY_DESYNC_TRACK", "TEXT_DISPLAY_REMOVE", "HOLOGRAM", "REMOVE_HOLOGRAM" -> session.applyTextEffect(effect);
+            case "TIME" -> session.applyTime(player, effect);
+            case "WEATHER" -> session.applyWeather(effect);
             case "EFFECT" -> session.applyPotionProxy(player, effect);
             case "CLEAR_EFFECT" -> session.clearPotionEffect(player, effect);
             case "ARENA", "CHANGE_ARENA" -> session.applyArena(effect);
@@ -3127,6 +3131,13 @@ private static void showSceneBoundary(MinecraftServer server) {
             LOGGER.info("Playback preload initialized: chart={}, notes={}, nextNoteIndex={}, firstDistance={}, activeDisplays={}",
                     chart.id, notes.size(), nextNoteIndex, firstDistance, displays.size());
         }
+        private void playHiddenNoteJudgements(ServerPlayerEntity player, double songTime) {
+            for (ChartManifest.Note note : notes) {
+                if (!shouldHide(note)) continue;
+                double noteTime = noteTimes.getOrDefault(note.id, Double.POSITIVE_INFINITY);
+                if (noteTime <= songTime && hitNotes.add(note.id)) playHitSound(this, player, note);
+            }
+        }
         private void applyVisualState() {
             for (var iterator = displays.entrySet().iterator(); iterator.hasNext();) {
                 var entry = iterator.next();
@@ -3557,7 +3568,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 case "BACKGROUND_COLOR" -> display.setBackground(textDisplayBackground(effect));
                 case "GLOWING" -> display.setGlowing(effectBoolean(effect, "glowing", true));
                 case "LINEAR_TRANSFORMATION" -> {
-                    double[] position = effectVector(effect, "position", new double[]{0.0, 0.0, 0.0});
+                    double[] position = effectVector(effect, "position", new double[]{0.0, 1.5, 0.0});
                     double[] rotation = effectVector(effect, "rotation", new double[]{0.0, 0.0, 0.0});
                     double[] scale = effectVector(effect, "scale", new double[]{1.0, 1.0, 1.0});
                     setTextDisplayTransform(display, position, rotation, scale);
