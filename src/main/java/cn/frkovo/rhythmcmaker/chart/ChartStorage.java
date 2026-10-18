@@ -73,7 +73,7 @@ public final class ChartStorage {
         if (!isSupportedAudioExtension(extension)) {
             throw new IOException("不支持的音频格式：" + extension);
         }
-        Path destination = Files.createTempFile("rhythmc-maker-", "." + extension);
+        Path destination = importsDirectory(server).resolve(UUID.randomUUID() + "." + extension);
         Files.copy(source, destination, StandardCopyOption.REPLACE_EXISTING);
         return destination;
     }
@@ -767,6 +767,11 @@ public final class ChartStorage {
         return root(server).resolve("audio");
     }
 
+    private static Path importsDirectory(MinecraftServer server) throws IOException {
+        Path directory = root(server).resolve("imports");
+        Files.createDirectories(directory);
+        return directory;
+    }
     private static Path chartDirectory(MinecraftServer server) throws IOException {
         return root(server).resolve("charts");
     }
