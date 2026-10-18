@@ -21,6 +21,7 @@ import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import net.minecraft.block.BlockState;
@@ -2557,16 +2558,17 @@ private static void showSceneBoundary(MinecraftServer server) {
         double z = effectDouble(effect, "z", PLAYBACK_PLATFORM_Z + 0.5);
         switch (type) {
             case "GLOW_COLOR" -> session.applyGlowColor(effect);
-            case "HIDE_NOTES" -> session.updateHiddenNotes(effect);
+            case "HIDE_NOTES" -> {
+                session.updateHiddenNotes(effect);
+                session.applyVisualState();
+            }
             case "TITLE" -> session.applyTitle(player, effect);
             case "MESSAGE" -> sendMessageEffect(player, effect, text);
             case "TEXT_DISPLAY", "TEXT_DISPLAY_EFFECT", "TEXT_DISPLAY_SYNC_TRACK", "TEXT_DISPLAY_DESYNC_TRACK", "TEXT_DISPLAY_REMOVE", "HOLOGRAM", "REMOVE_HOLOGRAM" -> session.applyTextEffect(effect);
             case "EFFECT" -> session.applyPotionProxy(player, effect);
             case "CLEAR_EFFECT" -> session.clearPotionEffect(player, effect);
-            case "TIME" -> session.applyTime(player, effect);
-            case "WEATHER" -> session.applyWeather(effect);
             case "ARENA", "CHANGE_ARENA" -> session.applyArena(effect);
-            case "FIREWORK" -> session.launchFirework(x, y, z, effect);
+            case "FIREWORK" -> session.launchFireworks(effect);
             default -> LOGGER.warn("Ignoring unsupported RhythMC effect '{}' instead of substituting a particle placeholder", type);
         }
     }
@@ -2613,7 +2615,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             case "RED" -> 0xFF0000; case "GREEN" -> 0x00FF00; case "BLUE" -> 0x0000FF; case "YELLOW" -> 0xFFFF00;
             case "WHITE" -> 0xFFFFFF; case "BLACK" -> 0x000000; case "PURPLE" -> 0x800080; case "CYAN" -> 0x00FFFF;
             case "ORANGE" -> 0xFFA500;
-            default -> normalized.startsWith("#") ? Integer.parseInt(normalized.substring(1), 16) : Integer.decode(normalized);
+            default -> parseColorNumber(normalized, 0xB77BFF);
         };
     }
     private static int effectColor(JsonObject effect) {
@@ -2793,6 +2795,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         ScrollJudgementSession scrollSession = SCROLL_JUDGEMENT_SESSIONS.remove(player.getUuid());
         if (scrollSession != null) {
             cleanupPlaybackDisplayEntities(scrollSession.world, player.getUuid(), scrollSession.chart.id);
+            scrollSession.world.setWeather(0, 0, false, false);
             if (scrollSession.effectSession != null) {
                 scrollSession.effectSession.resetClientTime(player);
                 scrollSession.effectSession.clearTextDisplays();
@@ -2804,6 +2807,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         if (session == null) return;
         cleanupPlaybackDisplayEntities(session.world, player.getUuid(), session.chart.id);
         try {
+            session.world.setWeather(0, 0, false, false);
             session.resetClientTime(player);
             session.clearGlowTeam();
             for (DisplayEntity.BlockDisplayEntity display : session.displays.values()) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
@@ -3538,7 +3542,11 @@ private static void showSceneBoundary(MinecraftServer server) {
                     display.setInterpolationDuration(bootstrap ? 0 : 1);
                 }
                 case "SHADOW" -> setTextDisplayShadow(display, effectBoolean(effect, "shadowed", true));
-                case "OPACITY" -> display.setTextOpacity(textDisplayOpacity(effect, "targetOpacity", 255));
+                case "OPACITY" -> {
+                    byte opacity = textDisplayOpacity(effect, "targetOpacity", 255);
+                    display.setTextOpacity(opacity);
+                    display.setInvisible(opacity == 0);
+                }
                 case "BACKGROUND_COLOR" -> display.setBackground(textDisplayBackground(effect));
                 case "GLOWING" -> display.setGlowing(effectBoolean(effect, "glowing", true));
                 case "LINEAR_TRANSFORMATION" -> {
@@ -3554,6 +3562,12 @@ private static void showSceneBoundary(MinecraftServer server) {
                 }
                 default -> LOGGER.warn("Unknown RhythMC text display transformation '{}'", transformation);
             }
+            if (display.getText().getString().isBlank()) {
+                String value = effectString(effect, "text", effectString(effect, "content", ""));
+                if (!value.isBlank()) display.setText(coloredText(value, textDisplayColor(effect)));
+            }
+            if (display.getTextOpacity() != 0) display.setInvisible(false);
+            display.setInterpolationDuration(bootstrap ? 0 : 1);
         }
         private void applyArena(JsonObject effect) {
             String arena = effectString(effect, "arena", "").trim();
@@ -3583,6 +3597,29 @@ private static void showSceneBoundary(MinecraftServer server) {
                 LOGGER.warn("Failed to queue RhythMC arena effect '{}'", arena, exception);
             }
         }
+        private void launchFireworks(JsonObject effect) {
+            JsonElement locations = effectValue(effect, "locations");
+            if (locations != null && locations.isJsonArray()) {
+                for (JsonElement location : locations.getAsJsonArray()) {
+                    if (!location.isJsonArray() || location.getAsJsonArray().size() < 3) continue;
+                    JsonArray vector = location.getAsJsonArray();
+                    try {
+                        launchFirework(
+                                TEXT_DISPLAY_CENTER_X + vector.get(0).getAsDouble(),
+                                TEXT_DISPLAY_CENTER_Y + vector.get(1).getAsDouble(),
+                                TEXT_DISPLAY_CENTER_Z + vector.get(2).getAsDouble(),
+                                effect);
+                    } catch (RuntimeException exception) {
+                        LOGGER.warn("Ignoring invalid RhythMC firework location", exception);
+                    }
+                }
+                return;
+            }
+            launchFirework(
+                    effectDouble(effect, "x", TEXT_DISPLAY_CENTER_X),
+                    effectDouble(effect, "y", TEXT_DISPLAY_CENTER_Y),
+                    effectDouble(effect, "z", TEXT_DISPLAY_CENTER_Z), effect);
+        }
         private void launchFirework(double x, double y, double z, JsonObject effect) {
             int color = effectColor(effect);
             ItemStack stack = new ItemStack(Items.FIREWORK_ROCKET);
@@ -3590,7 +3627,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             com.google.gson.JsonElement colorValues = effect != null && effect.has("colors") ? effect.get("colors") : effectProperties(effect).get("colors");
             if (colorValues != null && colorValues.isJsonArray()) {
                 for (com.google.gson.JsonElement value : colorValues.getAsJsonArray()) {
-                    try { colors.add(value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber() ? value.getAsInt() & 0xFFFFFF : parseEffectColor(value.getAsString())); }
+                    try { colors.add(value.isJsonArray() ? colorArray(value.getAsJsonArray(), 0xFFFFFF, false) : value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber() ? value.getAsInt() & 0xFFFFFF : parseEffectColor(value.getAsString())); }
                     catch (RuntimeException ignored) { }
                 }
             }
@@ -3599,7 +3636,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             com.google.gson.JsonElement fadeValues = effect != null && effect.has("fadeColors") ? effect.get("fadeColors") : effectProperties(effect).get("fadeColors");
             if (fadeValues != null && fadeValues.isJsonArray()) {
                 for (com.google.gson.JsonElement value : fadeValues.getAsJsonArray()) {
-                    try { fadeColors.add(value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber() ? value.getAsInt() & 0xFFFFFF : parseEffectColor(value.getAsString())); }
+                    try { fadeColors.add(value.isJsonArray() ? colorArray(value.getAsJsonArray(), 0xFFFFFF, false) : value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber() ? value.getAsInt() & 0xFFFFFF : parseEffectColor(value.getAsString())); }
                     catch (RuntimeException ignored) { }
                 }
             }
