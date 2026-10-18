@@ -8,8 +8,6 @@ import io.wispforest.owo.ui.container.UIContainers;
 import io.wispforest.owo.ui.core.Sizing;
 import io.wispforest.owo.ui.core.Surface;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.item.ItemStack;
-import net.minecraft.registry.Registries;
 import net.minecraft.text.Text;
 
 import java.io.IOException;
@@ -53,7 +51,7 @@ final class SceneEditScreen extends RhythmcScreen {
             });
             content.child(nameBox);
             content.child(UIComponents.label(Text.literal("当前图标物品 ID：" + selected.icon)));
-            content.child(UIComponents.button(Text.literal("使用主手物品作为图标"), button -> useHeldItemAsIcon()).horizontalSizing(Sizing.fill()));
+            content.child(UIComponents.button(Text.literal("选择图标物品"), button -> chooseIcon()).horizontalSizing(Sizing.fill()));
             content.child(UIComponents.label(Text.literal("保存状态：" + (selected.saved ? "已保存，可供后续特效调用" : "未保存"))));
             content.child(UIComponents.button(Text.literal("保存设置"), button -> save()).horizontalSizing(Sizing.fill()));
             content.child(UIComponents.button(Text.literal("重置场景"), button -> MinecraftClient.getInstance().setScreen(new SceneResetConfirmScreen(selected))).horizontalSizing(Sizing.fill()));
@@ -73,14 +71,12 @@ final class SceneEditScreen extends RhythmcScreen {
         } catch (IOException exception) { ClientSceneAccess.status("新建场景失败：" + exception.getMessage()); }
     }
 
-    private void useHeldItemAsIcon() {
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (client.player == null) return;
-        ItemStack stack = client.player.getMainHandStack();
-        if (stack.isEmpty()) { ClientSceneAccess.status("主手没有可用物品"); return; }
-        selected.icon = Registries.ITEM.getId(stack.getItem()).toString();
-        ClientSceneAccess.status("已选择图标 " + selected.icon + "，请点击保存设置");
-        client.setScreen(new SceneEditScreen(selected));
+    private void chooseIcon() {
+        MinecraftClient.getInstance().setScreen(new ItemPickerScreen(this, stack -> {
+            selected.icon = net.minecraft.registry.Registries.ITEM.getId(stack.getItem()).toString();
+            ClientSceneAccess.status("已选择图标 " + selected.icon + "，请点击保存设置");
+            MinecraftClient.getInstance().setScreen(new SceneEditScreen(selected));
+        }));
     }
 
     private void save() {

@@ -29,7 +29,7 @@ final class ItemPickerScreen extends RhythmcScreen {
         int innerWidth = pageWidth - 38;
 
         FlowLayout page = layout(UIContainers.verticalFlow(Sizing.fixed(pageWidth), Sizing.fixed(pageHeight)), 12, 8, 0xF00E1620, 0xFF344A63);
-        page.child(menuHeader("选择曲绘物品", "只读取物品外观，不会移动或消耗物品", innerWidth));
+        page.child(menuHeader("选择物品图标", "只读取物品外观，不会移动或消耗物品", innerWidth));
         page.child(wrappedLabel("从玩家背包中选择一个非空物品。选择后只保存物品外观，不会移动或消耗物品。", innerWidth));
 
         FlowLayout entries = spaced(UIContainers.verticalFlow(Sizing.fixed(innerWidth), Sizing.content()), 3);

@@ -45,8 +45,10 @@ public final class ChartStorage {
         Path root = root(server);
         try (var entries = Files.list(root)) {
             entries.filter(Files::isDirectory)
-                    .filter(path -> !path.getFileName().toString().equals("imports")
-                            && !path.getFileName().toString().equals("exports"))
+                    .filter(path -> !java.util.Set.of("setting", "charts", "manifests", "audio", "imports", "exports", "scene-editors", "scenes")
+                            .contains(path.getFileName().toString().toLowerCase(java.util.Locale.ROOT)))
+                    .filter(path -> Files.isRegularFile(path.resolve("chart.rmcc"))
+                            || Files.isRegularFile(path.resolve("manifests.json")))
                     .forEach(path -> {
                         try { ChartManifest chart = find(server, path.getFileName().toString()); if (chart != null) charts.add(chart); }
                         catch (IOException ignored) { }
@@ -666,6 +668,10 @@ public final class ChartStorage {
     }
 
     public static ChartManifest find(MinecraftServer server, String chartId) throws IOException {
+        if (chartId != null && ("setting".equalsIgnoreCase(chartId) || "charts".equalsIgnoreCase(chartId)
+                || "manifests".equalsIgnoreCase(chartId) || "audio".equalsIgnoreCase(chartId)
+                || "imports".equalsIgnoreCase(chartId) || "exports".equalsIgnoreCase(chartId)
+                || "scene-editors".equalsIgnoreCase(chartId) || "scenes".equalsIgnoreCase(chartId))) return null;
         Path localManifest = localManifestPath(server, chartId);
         if (Files.isRegularFile(localManifest)) return parseLocalChart(server, chartId);
         migrateLegacyChart(server, chartId);

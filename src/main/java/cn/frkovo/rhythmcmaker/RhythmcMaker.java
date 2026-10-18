@@ -1314,6 +1314,7 @@ public final class RhythmcMaker implements ModInitializer {
         java.util.List<SceneEditStorage.Scene> scenes = SceneEditStorage.list(server, chartId);
         int index = scenes.stream().mapToInt(scene -> scene.index).max().orElse(0) + 1;
         SceneEditStorage.Scene scene = new SceneEditStorage.Scene(index);
+        scene.name = nextEffectArenaName(scenes);
         if (iconId != null && iconId.matches("[a-z0-9_.-]+:[a-z0-9_./-]+")) scene.icon = iconId;
         scenes.add(scene);
         SceneEditStorage.save(server, chartId, scenes);
@@ -1323,6 +1324,12 @@ public final class RhythmcMaker implements ModInitializer {
             queueSceneEditorArea(world, scene.x, laneCount(chart), chart.id, scene.index, operationPlayerId, "生成成功");
         }
         return scene;
+    }
+    private static String nextEffectArenaName(java.util.List<SceneEditStorage.Scene> scenes) {
+        java.util.Set<String> names = scenes.stream().map(scene -> scene.name).collect(java.util.stream.Collectors.toSet());
+        int suffix = 1;
+        while (names.contains("effect_arena_" + suffix)) suffix++;
+        return "effect_arena_" + suffix;
     }
     public static void saveSceneEditor(MinecraftServer server, String chartId, SceneEditStorage.Scene scene) throws IOException {
         java.util.List<SceneEditStorage.Scene> scenes = SceneEditStorage.list(server, chartId);
@@ -3574,6 +3581,17 @@ private static void showSceneBoundary(MinecraftServer server) {
             if (arena.isBlank()) return;
             String binding = effectString(effect, "arenaPath", "").trim();
             if (binding.isBlank()) binding = chart.arenaBindings.get(arena);
+            try {
+                Path sceneFile = SceneEditStorage.schematicPath(world.getServer(), chart.id, arena);
+                if (Files.isRegularFile(sceneFile)) {
+                    sceneChanged = true;
+                    SCENE_IMPORT_TASKS.offer(new SceneImportTask(chart, sceneFile, PLAYBACK_PLATFORM_X, PLAYBACK_PLATFORM_Y, PLAYBACK_PLATFORM_Z));
+                    IMPORTING_CHARTS.add(chart.id);
+                    return;
+                }
+            } catch (IOException exception) {
+                LOGGER.debug("Arena '{}' does not resolve by scene name for chart {}", arena, chart.id);
+            }
             if (binding == null || binding.isBlank()) {
                 LOGGER.warn("RhythMC arena effect has no binding: {}", arena);
                 return;

@@ -30,7 +30,7 @@ public final class SceneEditStorage {
 
     public static List<Scene> list(MinecraftServer server, String chartId) throws IOException {
         Path path = path(server, chartId).toAbsolutePath().normalize();
-        if (Files.isDirectory(localRoot(server, chartId)) && !Files.isRegularFile(path(server, chartId))) return listLocal(server, chartId);
+        if (!Files.isRegularFile(path) && Files.isDirectory(localRoot(server, chartId))) return listLocal(server, chartId);
         long modified = Files.exists(path) ? Files.getLastModifiedTime(path).toMillis() : -1L;
         long size = Files.exists(path) ? Files.size(path) : -1L;
         CacheEntry cached = CACHE.get(path);
@@ -59,10 +59,12 @@ public final class SceneEditStorage {
         normalize(scenes);
         migrateLegacyScenes(server, chartId, scenes);
         Path root = localRoot(server, chartId);
-        Files.createDirectories(root);
+        boolean hasPersistedScenes = scenes.stream().anyMatch(scene -> !scene.initial || scene.saved);
+        if (hasPersistedScenes) Files.createDirectories(root);
         for (Scene scene : scenes) {
             Path directory = root.resolve(sceneDirectoryName(scene)).normalize();
             if (!directory.startsWith(root)) throw new IOException("场景目录无效");
+            if (scene.initial && !scene.saved && !Files.isDirectory(directory)) continue;
             Files.createDirectories(directory);
             Files.writeString(directory.resolve("metadata.yml"), metadata(scene), StandardCharsets.UTF_8);
         }
@@ -211,6 +213,7 @@ public final class SceneEditStorage {
             else if (key.equals("index")) scene.index = Integer.parseInt(value);
 
             else if (key.equals("name")) scene.name = value;
+            else if (key.equals("display-name")) scene.name = value;
             else if (key.equals("type")) scene.initial = value.equals("initial");
             else if (key.equals("icon")) scene.icon = value;
         }
@@ -305,6 +308,15 @@ public final class SceneEditStorage {
         }
         if (!directory.startsWith(root)) throw new IOException("场景存储路径无效");
         return directory.resolve("arena.schem");
+    }
+
+    public static Path schematicPath(MinecraftServer server, String chartId, String sceneName) throws IOException {
+        if (sceneName == null || sceneName.isBlank()) throw new IOException("场景名称无效");
+        Scene scene = list(server, chartId).stream()
+                .filter(value -> sceneName.equals(value.name))
+                .findFirst()
+                .orElseThrow(() -> new IOException("谱面中不存在场景：" + sceneName));
+        return schematicPath(server, chartId, scene.index);
     }
 
     private static Path localSceneDirectory(Path root, int sceneIndex) throws IOException {
