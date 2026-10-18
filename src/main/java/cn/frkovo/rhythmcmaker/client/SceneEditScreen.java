@@ -47,6 +47,10 @@ final class SceneEditScreen extends RhythmcScreen {
             content.child(UIComponents.label(Text.literal("场景 " + selected.index + " 设置")).shadow(true));
             content.child(UIComponents.label(Text.literal("场景名称")));
             nameBox = UIComponents.textBox(Sizing.fill(), selected.name);
+            nameBox.onChanged().subscribe(value -> {
+                String filtered = value.replaceAll("[^a-zA-Z0-9_]", "");
+                if (!filtered.equals(value)) nameBox.text(filtered);
+            });
             content.child(nameBox);
             content.child(UIComponents.label(Text.literal("当前图标物品 ID：" + selected.icon)));
             content.child(UIComponents.button(Text.literal("使用主手物品作为图标"), button -> useHeldItemAsIcon()).horizontalSizing(Sizing.fill()));
@@ -81,7 +85,7 @@ final class SceneEditScreen extends RhythmcScreen {
 
     private void save() {
         String name = nameBox.getText().trim();
-        if (name.isBlank()) { ClientSceneAccess.status("场景名称不能为空"); return; }
+        if (name.isBlank() || !name.matches("[a-zA-Z0-9_]+")) { ClientSceneAccess.status("场景名称只能包含大小写字母、数字和下划线"); return; }
         if (selected.icon == null || !selected.icon.matches("[a-z0-9_.-]+:[a-z0-9_./-]+")) { ClientSceneAccess.status("图标必须是有效物品 ID"); return; }
         selected.name = name;
         try { ClientSceneAccess.save(selected); ClientSceneAccess.status("场景设置已保存"); MinecraftClient.getInstance().setScreen(new SceneEditScreen()); }

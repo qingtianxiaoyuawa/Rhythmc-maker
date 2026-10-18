@@ -75,7 +75,7 @@ public final class SceneEditStorage {
         Scene initial = scenes.stream().filter(scene -> scene.initial).findFirst().orElseGet(() -> {
             Scene scene = new Scene();
             scene.initial = true;
-            scene.name = "初始场景";
+            scene.name = "initial_arena";
             scene.icon = "minecraft:grass_block";
             return scene;
         });
@@ -85,7 +85,7 @@ public final class SceneEditStorage {
         if (initial.sceneId == null || initial.sceneId.isBlank()) initial.sceneId = UUID.randomUUID().toString();
         initial.index = 1;
         initial.x = 200;
-        if (initial.name == null || initial.name.isBlank()) initial.name = "初始场景";
+        if (!validName(initial.name)) initial.name = "initial_arena";
         if (initial.icon == null || initial.icon.isBlank()) initial.icon = "minecraft:grass_block";
         scenes.add(initial);
         for (int position = 0; position < customScenes.size(); position++) {
@@ -94,7 +94,7 @@ public final class SceneEditStorage {
             if (scene.sceneId == null || scene.sceneId.isBlank()) scene.sceneId = UUID.randomUUID().toString();
             scene.index = position + 2;
             scene.x = 600 + position * 200;
-            if (scene.name == null || scene.name.isBlank()) scene.name = "场景" + scene.index;
+            if (!validName(scene.name)) scene.name = "effect_arena";
             if (scene.icon == null || scene.icon.isBlank()) scene.icon = "minecraft:grass_block";
             scenes.add(scene);
         }
@@ -180,8 +180,22 @@ public final class SceneEditStorage {
     }
 
     private static String metadata(Scene scene) {
-        return "sceneId: " + scene.sceneId + "\nindex: " + scene.index + "\nname: \"" + yaml(scene.name) + "\"\ntype: "
-                + (scene.initial ? "initial" : "effect") + "\nschematic: arena.schem\nicon: " + scene.icon + "\n";
+        String arenaName = scene.initial ? "initial_arena" : scene.name.toLowerCase(java.util.Locale.ROOT);
+        return "name: \"" + yaml(arenaName) + "\"\ndisplay-name: \"" + yaml(scene.name) + "\"\nauthor: RhythMC Maker\n"
+                + "description: \"\"\nicon: " + material(scene.icon) + "\nborder: CYAN_CONCRETE\nsuccess: GREEN_CONCRETE\n"
+                + "schematic: arena.schem\nhide: false\nsceneId: " + scene.sceneId + "\nindex: " + scene.index
+                + "\ntype: " + (scene.initial ? "initial" : "effect") + "\n";
+    }
+
+    private static boolean validName(String value) {
+        return value != null && value.matches("[a-zA-Z0-9_]+");
+    }
+
+    private static String material(String icon) {
+        if (icon == null || icon.isBlank()) return "GRASS_BLOCK";
+        int separator = icon.indexOf(':');
+        String path = separator < 0 ? icon : icon.substring(separator + 1);
+        return path.toUpperCase(java.util.Locale.ROOT);
     }
 
     private static String yaml(String value) { return value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\""); }
@@ -386,7 +400,7 @@ public final class SceneEditStorage {
         public Scene(int index) {
             this.index = index;
             this.initial = index == 1;
-            this.name = "场景" + index;
+            this.name = index == 1 ? "initial_arena" : "effect_arena";
             this.icon = "minecraft:grass_block";
             this.x = index == 1 ? 200 : 600 + (index - 2) * 200;
             this.sceneId = UUID.randomUUID().toString();
