@@ -650,7 +650,7 @@ public final class RhythmcMaker implements ModInitializer {
             player.sendMessage(Text.literal("进入谱面制谱维度失败，请查看 latest.log"), false);
             return 0;
         }
-        player.sendMessage(Text.literal("正在进入谱面制谱维度：" + chartId), true);
+        player.sendMessage(Text.literal("正在进入谱面制谱维度：" + chart.title), true);
         return 1;
     }
     private static void processSceneImportTasks(MinecraftServer server) {
@@ -690,7 +690,7 @@ public final class RhythmcMaker implements ModInitializer {
                     continue;
                 }
                 prepareEditorPlayer(server, player, editor);
-                player.sendMessage(Text.literal("已进入谱面制谱维度：" + entry.getValue()), true);
+                player.sendMessage(Text.literal("成功进入谱面维度：" + chart.title), true);
             } catch (IOException | RuntimeException exception) {
                 ACTIVE_CHARTS.remove(player.getUuid());
                 SELECTED_START_BEATS.remove(player.getUuid());
@@ -1381,7 +1381,12 @@ public final class RhythmcMaker implements ModInitializer {
         if (names.isEmpty()) return;
         java.util.List<SceneEditStorage.Scene> scenes = SceneEditStorage.list(server, chart.id);
         int nextIndex = scenes.stream().mapToInt(scene -> scene.index).max().orElse(0) + 1;
+        SceneEditStorage.Scene initialScene = scenes.stream().filter(scene -> scene.initial).findFirst().orElseThrow();
+        if (chart.initialArena != null && !chart.initialArena.isBlank()) {
+            chart.arenaBindings.put(chart.initialArena, "scene-editor:" + initialScene.index);
+        }
         for (String arenaName : names) {
+            if (arenaName.equals(chart.initialArena)) continue;
             SceneEditStorage.Scene existing = scenes.stream().filter(scene -> arenaName.equals(scene.name)).findFirst().orElse(null);
             if (existing != null || chart.arenaBindings.containsKey(arenaName)) {
                 if (existing != null) chart.arenaBindings.put(arenaName, "scene-editor:" + existing.index);
