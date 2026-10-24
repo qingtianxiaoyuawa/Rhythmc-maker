@@ -28,6 +28,9 @@ public final class ChartManifest {
     public double totalBeats;
     public int beatCount;
     public int trackLength;
+    public int editorTrackBuiltLength;
+    public int editorTrackBuiltLaneCount;
+    public int editorTrackBuiltDivisionsPerBeat;
     /** Persisted stable dynamic editor-dimension path. */
     public String dimensionId;
     /** Persisted playback start beat for this chart. */

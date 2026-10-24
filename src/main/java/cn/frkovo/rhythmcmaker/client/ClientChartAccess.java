@@ -61,12 +61,27 @@ final class ClientChartAccess {
     static Path stageAudio(Path source) throws IOException {
         return ChartStorage.stageAudio(server(), source);
     }
+    static Path stageAudio(MinecraftServer server, Path source) throws IOException {
+        return ChartStorage.stageAudio(server, source);
+    }
 
     static void create(ChartManifest chart, Path stagedAudio) throws IOException {
         ChartStorage.create(server(), chart, stagedAudio);
     }
 
     static ChartManifest importRhythmc3(Path difficultyFile, Path manifestFile, Path stagedAudio) throws IOException { return ChartStorage.importRhythmc3(server(), difficultyFile, manifestFile, stagedAudio); }
+    static ChartManifest importRhythmc3(Path difficultyFile, Path manifestFile, Path layoutFile, Path stagedAudio) throws IOException {
+        return ChartStorage.importRhythmc3(server(), difficultyFile, manifestFile, layoutFile, stagedAudio);
+    }
+    static ChartManifest importRhythmc3(MinecraftServer server, Path difficultyFile, Path manifestFile, Path layoutFile, Path stagedAudio) throws IOException {
+        return ChartStorage.importRhythmc3(server, difficultyFile, manifestFile, layoutFile, stagedAudio);
+    }
+    static void installImportedScenes(ChartManifest chart, List<ImportedScene> scenes) throws IOException {
+        ChartStorage.installImportedScenes(server(), chart, scenes.stream().map(scene -> new ChartStorage.ImportedScene(scene.schem(), scene.info())).toList());
+    }
+    static void installImportedScenes(MinecraftServer server, ChartManifest chart, List<ImportedScene> scenes) throws IOException {
+        ChartStorage.installImportedScenes(server, chart, scenes.stream().map(scene -> new ChartStorage.ImportedScene(scene.schem(), scene.info())).toList());
+    }
     static ChartManifest importRhythmc2(Path difficultyFile, Path stagedAudio, double bpm, String difficulty, double level) throws IOException { return ChartStorage.importRhythmc2(server(), difficultyFile, stagedAudio, bpm, difficulty, level); }
     static ChartManifest importRhythmc3(Path difficultyFile, Path manifestFile, Path stagedAudio, List<ImportedScene> scenes) throws IOException {
         return importRhythmc3(difficultyFile, manifestFile, null, stagedAudio, scenes);
@@ -303,5 +318,3 @@ final class ClientChartAccess {
         if (client.player != null) client.player.sendMessage(Text.literal(message).formatted(net.minecraft.util.Formatting.RED), true);
     }
 }
-
-

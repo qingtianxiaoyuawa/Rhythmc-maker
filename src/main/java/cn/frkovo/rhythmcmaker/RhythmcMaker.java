@@ -256,7 +256,6 @@ public final class RhythmcMaker implements ModInitializer {
                 } else if (isEditorWorld(world)) {
                     ServerWorld hub = server.getOverworld();
                     if (isCharterWorld(server, hub)) prepareHubPlayer(server, player, hub);
-                    else configureEditorWorld(server, world);
                     PENDING_PLAYER_SETUP.remove(player.getUuid());
                     DIMENSION_TRAVEL_READY.add(player.getUuid());
                 } else {
@@ -349,18 +348,24 @@ public final class RhythmcMaker implements ModInitializer {
             return true;
         });
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
-            PENDING_PLAYER_SETUP.remove(handler.getPlayer().getUuid());
-            PENDING_EDITOR_ENTRIES.remove(handler.getPlayer().getUuid());
-            restoreSceneHotbar(handler.getPlayer());
-            queueSceneCaptureOnDisconnect(server, handler.getPlayer());
-            ACTIVE_SCENE_EDITORS.remove(handler.getPlayer().getUuid());
-            ACTIVE_SCENE_CHARTS.remove(handler.getPlayer().getUuid());
-            TRACK_SNAP_TASKS.remove(handler.getPlayer().getUuid());
-            TRACK_SNAP_UNDO_TASKS.remove(handler.getPlayer().getUuid());
-            SCENE_OPERATION_STATUS.remove(handler.getPlayer().getUuid());
-            DIMENSION_TRAVEL_READY.remove(handler.getPlayer().getUuid());
-            stopPlayback(server, handler.getPlayer(), false);
-            saveActiveChart(server, handler.getPlayer());
+            ServerPlayerEntity player = handler.getPlayer();
+            boolean returningFromChart = player.getEntityWorld() instanceof ServerWorld world && isEditorWorld(world);
+            PENDING_PLAYER_SETUP.remove(player.getUuid());
+            PENDING_EDITOR_ENTRIES.remove(player.getUuid());
+            restoreSceneHotbar(player);
+            queueSceneCaptureOnDisconnect(server, player);
+            ACTIVE_SCENE_EDITORS.remove(player.getUuid());
+            ACTIVE_SCENE_CHARTS.remove(player.getUuid());
+            TRACK_SNAP_TASKS.remove(player.getUuid());
+            TRACK_SNAP_UNDO_TASKS.remove(player.getUuid());
+            SCENE_OPERATION_STATUS.remove(player.getUuid());
+            DIMENSION_TRAVEL_READY.remove(player.getUuid());
+            stopPlayback(server, player, false);
+            if (returningFromChart && isCharterWorld(server, server.getOverworld())) {
+                player.teleport(server.getOverworld(), CHARTER_SPAWN.getX(), CHARTER_SPAWN.getY(), CHARTER_SPAWN.getZ(), Set.of(), 0.0f, 0.0f, false);
+                setPlayerSpawn(player, server.getOverworld(), CHARTER_SPAWN);
+            }
+            saveActiveChart(server, player);
         });
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
             ServerPlayerEntity player = handler.getPlayer();
@@ -604,6 +609,10 @@ public final class RhythmcMaker implements ModInitializer {
             ChartDimensionManager.key(chart);
             if (!chart.dimensionId.equals(previousDimensionId)) saveChart(source.getServer(), chart);
             ServerWorld editor = ChartDimensionManager.getOrCreate(source.getServer(), chart);
+            if (EDITOR_TRACK_REBUILD_TASKS.containsKey(editor.getRegistryKey())) {
+                player.sendMessage(Text.literal("该谱面的制谱器轨道仍在生成，请稍后进入"), true);
+                return 0;
+            }
             String validationError = validateEditorEntry(source.getServer(), player, chart, editor);
             if (validationError != null) {
                 player.sendMessage(Text.literal("进入谱面制谱维度已取消：" + validationError), false);
@@ -614,14 +623,13 @@ public final class RhythmcMaker implements ModInitializer {
                 ChartManifest previousChart = cachedChart(source.getServer(), previousChartId);
                 if (previousChart != null) clearChartNoteBlocks(editor, previousChart);
             }
-            EDITOR_AREA_TASKS.remove(editor.getRegistryKey());
             EDITOR_NOTE_REFRESH_TASKS.remove(editor.getRegistryKey());
             clearAllChartNoteDisplays(editor);
             ACTIVE_CHARTS.put(player.getUuid(), chartId);
             CHART_CACHE_BY_WORLD.put(editor.getRegistryKey(), chart);
             ACTIVE_CHART_LANES.put(player.getUuid(), laneCount(chart));
             SELECTED_START_BEATS.put(player.getUuid(), Math.max(1, Math.min(Math.max(1, chart.beatCount), chart.selectedStartBeat)));
-            if (!hasEditorTrack(editor, chart)) {
+            if (!hasEditorTrack(chart)) {
                 restoreEditorTrackFoundation(editor, 0, chart.trackLength, laneCount(chart));
                 extendEditorArea(editor, 0, chart.trackLength, chartBeats(source.getServer(), chartId), laneCount(chart));
             }
@@ -806,12 +814,15 @@ public final class RhythmcMaker implements ModInitializer {
         try { editor = source.getServer().getWorld(ChartDimensionManager.key(chart)); } catch (IOException ignored) { }
         try {
             if (editor != null) {
+                if (EDITOR_TRACK_REBUILD_TASKS.containsKey(editor.getRegistryKey())) {
+                    player.sendMessage(Text.literal("制谱器轨道正在生成，请等待当前任务完成"), true);
+                    return 0;
+                }
                 EDITOR_TRACK_ADJUSTMENTS.add(player.getUuid());
                 EDITOR_AREA_TASKS.remove(editor.getRegistryKey());
                 EDITOR_NOTE_REFRESH_TASKS.remove(editor.getRegistryKey());
                 EDITOR_NOTE_DISPLAY_SWEEP_TASKS.remove(editor.getRegistryKey());
                 clearNoteBlocks(editor, oldNotePositions);
-                EDITOR_TRACK_REBUILD_TASKS.remove(editor.getRegistryKey());
             }
             EditorTrackLayout.of(targetLaneCount, targetDivisions).applyTo(chart);
             ACTIVE_CHART_LANES.put(player.getUuid(), targetLaneCount);
@@ -1346,7 +1357,9 @@ public final class RhythmcMaker implements ModInitializer {
         int nextIndex = scenes.stream().mapToInt(scene -> scene.index).max().orElse(0) + 1;
         ImportedScene initial = imported.get(0);
         if (isCompleteImportedScene(initial)) {
-            scenes.stream().filter(scene -> scene.index == 1).findFirst().ifPresent(scene -> scene.name = readSceneName(initial.info(), chart.initialArena == null ? "初始场景" : chart.initialArena));
+            if (chart.initialArena != null && !chart.initialArena.isBlank()) {
+                scenes.stream().filter(scene -> scene.index == 1).findFirst().ifPresent(scene -> scene.name = chart.initialArena);
+            }
             SceneEditStorage.save(server, chart.id, scenes);
             SceneEditStorage.copySchematic(server, chart.id, 1, initial.schem());
             chart.sceneInitialized = true;
@@ -1366,7 +1379,7 @@ public final class RhythmcMaker implements ModInitializer {
             pending.add(new SceneImportTask(chart, importedScene.schem(), scene.x, PLAYBACK_PLATFORM_Y, PLAYBACK_PLATFORM_Z));
         }
         SceneEditStorage.save(server, chart.id, scenes);
-        saveChart(server, chart);
+        updateChart(server, chart);
         for (SceneImportTask task : pending) SCENE_IMPORT_TASKS.add(task);
         if (!pending.isEmpty()) {
             IMPORTING_CHARTS.add(chart.id);
@@ -1600,7 +1613,13 @@ public final class RhythmcMaker implements ModInitializer {
         ChartManifest chart = loadActiveChart(player, source.getServer());
         if (chart == null) { player.sendMessage(Text.literal("当前没有活动谱面"), true); return 0; }
         if (index <= 1) { player.sendMessage(Text.literal("初始场景不能删除"), true); return 0; }
-        deleteSceneEditor(source.getServer(), chart, index);
+        java.util.List<SceneEditStorage.Scene> scenes;
+        try { scenes = SceneEditStorage.list(source.getServer(), chart.id); }
+        catch (IOException exception) { player.sendMessage(Text.literal("读取场景列表失败：" + exception.getMessage()), true); return 0; }
+        SceneEditStorage.Scene target = scenes.stream().filter(scene -> scene.index == index).findFirst().orElse(null);
+        if (target == null) { player.sendMessage(Text.literal("场景不存在，未删除"), true); return 0; }
+        if (isSceneReferenced(chart, target)) { player.sendMessage(Text.literal("该场景仍被谱面初始场景或 ARENA 特效引用，请先解除引用"), true); return 0; }
+        if (!deleteSceneEditor(source.getServer(), chart, index)) { player.sendMessage(Text.literal("场景删除失败，请检查日志"), true); return 0; }
         source.sendFeedback(() -> Text.literal("场景已删除，后续场景已前移补位"), false);
         return 1;
     }
@@ -1710,29 +1729,68 @@ public final class RhythmcMaker implements ModInitializer {
         SCENE_OPERATION_STATUS.remove(playerId);
         SCENE_OPERATION_NOTICES.put(playerId, message);
     }
-    private static void deleteSceneEditor(MinecraftServer server, ChartManifest chart, int index) {
+    private static boolean isSceneReferenced(ChartManifest chart, SceneEditStorage.Scene scene) {
+        String targetBinding = "scene-editor:" + scene.index;
+        if (scene.name.equals(chart.initialArena) || targetBinding.equals(chart.arenaBindings.get(chart.initialArena))) return true;
+        for (com.google.gson.JsonObject effect : chart.effects) {
+            if (effect == null) continue;
+            String effectType = effect.has("effectType") ? effect.get("effectType").getAsString()
+                    : effect.has("eventType") ? effect.get("eventType").getAsString() : "";
+            if (!effectType.equalsIgnoreCase("ARENA") && !effectType.equalsIgnoreCase("CHANGE_ARENA")) continue;
+            com.google.gson.JsonObject properties = effect.has("properties") && effect.get("properties").isJsonObject()
+                    ? effect.getAsJsonObject("properties") : effect;
+            if (!properties.has("arena") || !properties.get("arena").isJsonPrimitive()) continue;
+            String arena = properties.get("arena").getAsString();
+            if (scene.name.equals(arena) || targetBinding.equals(chart.arenaBindings.get(arena))) return true;
+        }
+        return false;
+    }
+    private static boolean deleteSceneEditor(MinecraftServer server, ChartManifest chart, int index) {
         try {
             java.util.List<SceneEditStorage.Scene> scenes = SceneEditStorage.list(server, chart.id);
-            if (index <= 1 || index > scenes.size()) return;
+            int removedPosition = -1;
+            for (int position = 0; position < scenes.size(); position++) if (scenes.get(position).index == index) { removedPosition = position; break; }
+            if (index <= 1 || removedPosition < 0) return false;
             ServerWorld world = ChartDimensionManager.getOrCreate(server, chart);
-            int removedPosition = index - 1;
             SceneEditStorage.deleteSchematic(server, chart.id, index);
-            for (int sourceIndex = index + 1; sourceIndex <= scenes.size(); sourceIndex++) {
-                SceneEditStorage.moveSchematic(server, chart.id, sourceIndex, sourceIndex - 1);
+            for (int sourcePosition = removedPosition + 1; sourcePosition < scenes.size(); sourcePosition++) {
+                SceneEditStorage.moveSchematic(server, chart.id, scenes.get(sourcePosition).index, scenes.get(sourcePosition - 1).index);
             }
             for (int sourcePosition = removedPosition + 1; sourcePosition < scenes.size(); sourcePosition++) {
                 moveSceneArea(world, scenes.get(sourcePosition).x, scenes.get(sourcePosition - 1).x);
             }
             clearSceneEditorArea(world, scenes.get(scenes.size() - 1).x);
             scenes.remove(removedPosition);
+            chart.arenaBindings.entrySet().removeIf(entry -> ("scene-editor:" + index).equals(entry.getValue()));
             for (int position = 0; position < scenes.size(); position++) {
                 SceneEditStorage.Scene scene = scenes.get(position);
+                int previousIndex = scene.index;
                 scene.index = position + 1;
                 if (scene.initial) scene.x = PLAYBACK_PLATFORM_X;
                 else scene.x = SCENE_EDIT_BASE_X + (position - 1) * SCENE_EDIT_SPACING;
+                String previousBinding = "scene-editor:" + previousIndex;
+                String nextBinding = "scene-editor:" + scene.index;
+                chart.arenaBindings.replaceAll((name, binding) -> previousBinding.equals(binding) ? nextBinding : binding);
+            }
+            for (com.google.gson.JsonObject effect : chart.effects) {
+                if (effect == null) continue;
+                String effectType = effect.has("effectType") ? effect.get("effectType").getAsString()
+                        : effect.has("eventType") ? effect.get("eventType").getAsString() : "";
+                if (!effectType.equalsIgnoreCase("ARENA") && !effectType.equalsIgnoreCase("CHANGE_ARENA")) continue;
+                com.google.gson.JsonObject properties = effect.has("properties") && effect.get("properties").isJsonObject()
+                        ? effect.getAsJsonObject("properties") : effect;
+                if (!properties.has("arena") || !properties.get("arena").isJsonPrimitive()) continue;
+                String binding = chart.arenaBindings.get(properties.get("arena").getAsString());
+                if (binding == null) properties.remove("arenaPath");
+                else properties.addProperty("arenaPath", binding);
             }
             SceneEditStorage.save(server, chart.id, scenes);
-        } catch (IOException exception) { LOGGER.warn("Failed to delete scene editor {}", index, exception); }
+            saveChart(server, chart);
+            return true;
+        } catch (IOException exception) {
+            LOGGER.warn("Failed to delete scene editor {}", index, exception);
+            return false;
+        }
     }
     private static void moveSceneArea(ServerWorld world, int fromCenterX, int toCenterX) {
         BlockState[] states = new BlockState[SCENE_SIZE * SCENE_SIZE * SCENE_SIZE];
@@ -4177,14 +4235,19 @@ private static void showSceneBoundary(MinecraftServer server) {
         extendEditorArea(world, x, length, 4, 3);
     }
 
-    private static boolean hasEditorTrack(ServerWorld world, ChartManifest chart) {
-        int z = -3;
-        for (int x = laneWallLeftX(chart); x <= laneWallRightX(chart); x++) {
-            for (int y = 64; y <= 68; y++) {
-                if (!world.getBlockState(new BlockPos(x, y, z)).isAir()) return true;
-            }
-        }
-        return false;
+    private static boolean hasEditorTrack(ChartManifest chart) {
+        return chart.editorTrackBuiltLength == chart.trackLength
+                && chart.editorTrackBuiltLaneCount == laneCount(chart)
+                && chart.editorTrackBuiltDivisionsPerBeat == divisionsPerBeat(chart);
+    }
+    private static void markEditorTrackBuilt(MinecraftServer server, RegistryKey<World> worldKey, int length, int lanes, int divisions) {
+        ChartManifest chart = CHART_CACHE_BY_WORLD.get(worldKey);
+        if (chart == null) return;
+        chart.editorTrackBuiltLength = length;
+        chart.editorTrackBuiltLaneCount = lanes;
+        chart.editorTrackBuiltDivisionsPerBeat = divisions;
+        try { updateChart(server, chart); }
+        catch (IOException exception) { LOGGER.warn("Failed to persist completed editor track for chart {}", chart.id, exception); }
     }
 
     private static void extendEditorArea(ServerWorld world, int x, int length, int divisions, int laneCount) {
@@ -4220,8 +4283,19 @@ private static void showSceneBoundary(MinecraftServer server) {
                 copyDecorationColumn(world, task.x, targetZ, DECORATION_TEMPLATES.get(template), task.laneCount);
                 task.cursor++;
             }
+            int progressPercent = Math.min(100, task.cursor * 100 / task.totalBeats);
+            if (progressPercent != task.lastProgressPercent) {
+                task.lastProgressPercent = progressPercent;
+                ChartManifest chart = CHART_CACHE_BY_WORLD.get(world.getRegistryKey());
+                if (chart != null) for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+                    if (chart.id.equals(ACTIVE_CHARTS.get(player.getUuid()))) {
+                        player.sendMessage(Text.literal("制谱器轨道生成：" + progressPercent + "%（" + Math.min(task.cursor, task.totalBeats) + "/" + task.totalBeats + "）"), true);
+                    }
+                }
+            }
             if (task.cursor >= task.totalBeats) {
                 buildEditorTrackEndBarrier(world, task.x, task.totalBeats, task.laneCount);
+                markEditorTrackBuilt(server, world.getRegistryKey(), task.totalBeats, task.laneCount, task.divisions);
                 markPendingStartBeat(server, world);
                 EDITOR_AREA_TASKS.remove(entry.getKey(), task);
             }
@@ -4239,7 +4313,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 iterator.remove();
                 continue;
             }
-            int budget = Integer.MAX_VALUE;
+            int budget = 8;
             if (!task.foundationReady) {
                 restoreEditorTrackFoundation(world, task.x, task.newLength, task.laneCount);
                 task.foundationReady = true;
@@ -4280,6 +4354,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 continue;
             }
             ServerPlayerEntity completedPlayer = server.getPlayerManager().getPlayer(task.playerId);
+            markEditorTrackBuilt(server, world.getRegistryKey(), task.newLength, task.laneCount, task.divisions);
             if (completedPlayer != null) {
                 EDITOR_TRACK_ADJUSTMENTS.remove(completedPlayer.getUuid());
                 EDITOR_TRACK_ADJUSTMENT_NOTICES.remove(completedPlayer.getUuid());
@@ -4464,6 +4539,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final int laneCount;
         private int totalBeats;
         private int cursor;
+        private int lastProgressPercent = -1;
         private EditorAreaTask(int x, int totalBeats, int divisions, int laneCount) {
             this.x = x;
             this.totalBeats = totalBeats;

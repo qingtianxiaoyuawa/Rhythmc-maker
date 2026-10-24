@@ -121,6 +121,11 @@ public final class ChartStorage {
 
     public static ChartManifest importRhythmc3(MinecraftServer server, Path difficultyFile, Path manifestFile, Path layoutFile, Path stagedAudio, List<ImportedScene> scenes) throws IOException {
         ChartManifest chart = importRhythmc3(server, difficultyFile, manifestFile, layoutFile, stagedAudio);
+        installImportedScenes(server, chart, scenes);
+        return chart;
+    }
+
+    public static void installImportedScenes(MinecraftServer server, ChartManifest chart, List<ImportedScene> scenes) throws IOException {
         List<ImportedScene> orderedScenes = new ArrayList<>();
         if (scenes != null) {
             ImportedScene initialScene = scenes.stream().filter(scene -> scene != null && scene.info() != null
@@ -147,15 +152,13 @@ public final class ChartStorage {
             if (path != null) properties.addProperty("arenaPath", path);
         }
         RhythmcMaker.installImportedScenes(server, chart, orderedScenes);
-        writeLocalChart(server, chart);
-        return chart;
     }
 
     public static ChartManifest importRhythmc3(MinecraftServer server, Path difficultyFile, Path manifestFile, Path stagedAudio) throws IOException {
         return importRhythmc3(server, difficultyFile, manifestFile, null, stagedAudio);
     }
 
-    private static ChartManifest importRhythmc3(MinecraftServer server, Path difficultyFile, Path manifestFile, Path layoutFile, Path stagedAudio) throws IOException {
+    public static ChartManifest importRhythmc3(MinecraftServer server, Path difficultyFile, Path manifestFile, Path layoutFile, Path stagedAudio) throws IOException {
         JsonObject root = JsonParser.parseString(readChartText(difficultyFile)).getAsJsonObject();
         JsonObject meta = root.getAsJsonObject("meta");
         if (meta == null) throw new IOException("3.0 难度文件缺少 meta");
@@ -164,7 +167,8 @@ public final class ChartStorage {
         chart.id = UUID.randomUUID().toString(); chart.title = yamlString(manifest, "name", "未命名谱面"); chart.artist = yamlString(manifest, "composer", "Unknown"); chart.charter = yamlString(manifest, "charter", yamlString(manifest, "author", "Unknown")); chart.coverItemId = coverItemId(yamlString(manifest, "icon", yamlString(manifest, "cover", "minecraft:note_block"))); chart.difficulty = difficultyFromFile(difficultyFile);
         readEditorTrackLayout(meta, difficultyFile, layoutFile).applyTo(chart);
         chart.offsetMillis = jsonNumber(meta, "offset", jsonNumber(meta, "offsetMillis", 0)).longValue(); chart.level = jsonNumber(meta, "level", 1).doubleValue();
-        if (meta.has("initialArena") && meta.get("initialArena").isJsonPrimitive()) chart.initialArena = meta.get("initialArena").getAsString();
+        if (meta.has("initial-arena") && meta.get("initial-arena").isJsonPrimitive()) chart.initialArena = meta.get("initial-arena").getAsString();
+        else if (meta.has("initialArena") && meta.get("initialArena").isJsonPrimitive()) chart.initialArena = meta.get("initialArena").getAsString();
          if ((chart.charter == null || chart.charter.equals("Unknown")) && meta.has("charters") && meta.get("charters").isJsonArray() && meta.getAsJsonArray("charters").size() > 0) chart.charter = meta.getAsJsonArray("charters").get(0).getAsString();
         if (meta.has("bpms") && meta.get("bpms").isJsonArray()) for (JsonElement valueElement : meta.getAsJsonArray("bpms")) {
             if (!valueElement.isJsonObject()) continue;
@@ -191,7 +195,8 @@ public final class ChartStorage {
         if (meta == null) throw new IOException("3.0 难度文件缺少 meta");
         if (meta.has("offset") || meta.has("offsetMillis")) chart.offsetMillis = jsonNumber(meta, "offset", jsonNumber(meta, "offsetMillis", chart.offsetMillis)).longValue();
         if (meta.has("level")) chart.level = jsonNumber(meta, "level", chart.level).doubleValue();
-        if (meta.has("initialArena") && meta.get("initialArena").isJsonPrimitive()) chart.initialArena = meta.get("initialArena").getAsString();
+        if (meta.has("initial-arena") && meta.get("initial-arena").isJsonPrimitive()) chart.initialArena = meta.get("initial-arena").getAsString();
+        else if (meta.has("initialArena") && meta.get("initialArena").isJsonPrimitive()) chart.initialArena = meta.get("initialArena").getAsString();
         if (meta.has("bpms") && meta.get("bpms").isJsonArray()) for (JsonElement valueElement : meta.getAsJsonArray("bpms")) {
             if (!valueElement.isJsonObject()) continue;
             JsonObject value = valueElement.getAsJsonObject();

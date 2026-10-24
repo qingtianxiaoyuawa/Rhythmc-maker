@@ -165,7 +165,8 @@ private void importLegacyMenu(FlowLayout page) {
             return;
         }
         MinecraftClient client = MinecraftClient.getInstance();
-        if (client.getServer() == null || importing) return;
+        net.minecraft.server.MinecraftServer server = client.getServer();
+        if (server == null || importing) return;
         importing = true;
         Path difficulty = draft.difficulty;
         Path manifest = draft.manifest;
@@ -175,9 +176,22 @@ private void importLegacyMenu(FlowLayout page) {
                 .map(scene -> new ClientChartAccess.ImportedScene(scene.schem, scene.info))
                 .toList();
         ClientChartAccess.status("正在导入 3.0 谱面，请稍候...");
-        client.getServer().execute(() -> {
+        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
             try {
-                ClientChartAccess.importRhythmc3(difficulty, manifest, layout, ClientChartAccess.stageAudio(song), importedScenes);
+                Path stagedAudio = ClientChartAccess.stageAudio(server, song);
+                return ClientChartAccess.importRhythmc3(server, difficulty, manifest, layout, stagedAudio);
+            } catch (Exception exception) {
+                throw new java.util.concurrent.CompletionException(exception);
+            }
+        }).whenComplete((chart, importFailure) -> server.execute(() -> {
+            if (importFailure != null) {
+                Throwable cause = importFailure.getCause() == null ? importFailure : importFailure.getCause();
+                importing = false;
+                ClientChartAccess.status("导入失败：" + cause.getMessage());
+                return;
+            }
+            try {
+                ClientChartAccess.installImportedScenes(server, chart, importedScenes);
                 client.execute(() -> {
                     importing = false;
                     long incompleteScenes = draft.scenes.stream().filter(scene -> !scene.complete()).count();
@@ -192,7 +206,7 @@ private void importLegacyMenu(FlowLayout page) {
                     ClientChartAccess.status("导入失败：" + exception.getMessage());
                 });
             }
-        });
+        }));
     }
 
     private void back(FlowLayout page) { page.child(UIComponents.button(Text.literal("返回"), button -> MinecraftClient.getInstance().setScreen(new ChartListScreen())).horizontalSizing(Sizing.fixed(100))); }
