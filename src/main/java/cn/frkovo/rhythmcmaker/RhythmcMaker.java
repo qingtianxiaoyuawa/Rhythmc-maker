@@ -3190,29 +3190,28 @@ private static void showSceneBoundary(MinecraftServer server) {
             if (effect == null) return;
             JsonObject properties = effectProperties(effect);
             com.google.gson.JsonElement hidden = effect.has("hidden") ? effect.get("hidden") : properties.get("hidden");
-            boolean hiddenState = hidden != null && hidden.isJsonPrimitive() && hidden.getAsBoolean();
             com.google.gson.JsonElement noteTypes = effect.has("noteTypes") ? effect.get("noteTypes") : properties.get("noteTypes");
             com.google.gson.JsonElement tracks = effect.has("tracks") ? effect.get("tracks") : properties.get("tracks");
             java.util.Set<Integer> selectedTypes = new java.util.HashSet<>();
             java.util.Set<Integer> selectedTracks = new java.util.HashSet<>();
-            if (noteTypes == null) {
-                for (ChartManifest.Note note : notes) selectedTypes.add(note.type);
-            } else if (noteTypes.isJsonArray()) for (com.google.gson.JsonElement value : noteTypes.getAsJsonArray()) {
+            if (noteTypes != null && noteTypes.isJsonArray()) for (com.google.gson.JsonElement value : noteTypes.getAsJsonArray()) {
                 if (value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber()) selectedTypes.add(value.getAsInt());
                 else {
                     String type = value.getAsString().toUpperCase(java.util.Locale.ROOT);
                     selectedTypes.add(switch (type) { case "LOOK" -> 1; case "HOLD" -> 2; case "DODGE" -> 3; default -> 0; });
                 }
             }
-            else if (noteTypes.isJsonPrimitive()) selectedTypes.add(noteTypes.getAsInt());
-            if (tracks == null) {
-                for (ChartManifest.Note note : notes) selectedTracks.add(note.trackId);
-            } else if (tracks.isJsonArray()) for (com.google.gson.JsonElement value : tracks.getAsJsonArray()) selectedTracks.add(value.getAsInt());
-            else if (tracks.isJsonPrimitive()) selectedTracks.add(tracks.getAsInt());
-            for (int track : selectedTracks) for (int type : selectedTypes) {
-                HiddenNoteKey key = new HiddenNoteKey(track, type);
-                if (hiddenState) hiddenNoteKeys.add(key);
-                else hiddenNoteKeys.remove(key);
+            else if (noteTypes != null && noteTypes.isJsonPrimitive()) selectedTypes.add(noteTypes.getAsInt());
+            if (tracks != null && tracks.isJsonArray()) for (com.google.gson.JsonElement value : tracks.getAsJsonArray()) selectedTracks.add(value.getAsInt());
+            else if (tracks != null && tracks.isJsonPrimitive()) selectedTracks.add(tracks.getAsInt());
+            hiddenNoteKeys.clear();
+            boolean legacyHiddenAction = hidden != null && hidden.isJsonPrimitive() && hidden.getAsJsonPrimitive().isBoolean();
+            if (legacyHiddenAction && !hidden.getAsBoolean()) return;
+            if (selectedTypes.isEmpty() && selectedTracks.isEmpty()) return;
+            if (selectedTypes.isEmpty()) for (ChartManifest.Note note : notes) selectedTypes.add(note.type);
+            if (selectedTracks.isEmpty()) for (ChartManifest.Note note : notes) selectedTracks.add(note.trackId);
+            for (ChartManifest.Note note : notes) {
+                if (selectedTypes.contains(note.type) && selectedTracks.contains(note.trackId)) hiddenNoteKeys.add(hiddenNoteKey(note));
             }
         }
         private HiddenNoteKey hiddenNoteKey(ChartManifest.Note note) { return new HiddenNoteKey(note.trackId, note.type); }

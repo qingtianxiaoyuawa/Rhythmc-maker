@@ -490,10 +490,10 @@ public final class EffectParameterEditor {
 
     private void renderNoteTypesMenu(EventForm form, FieldState state) {
         JsonElement value = state.value;
-        boolean restore = value == null || !value.isJsonArray() || value.getAsJsonArray().isEmpty();
-        String preview = restore ? "恢复显示" : selectedNoteTypesPreview(value.getAsJsonArray());
+        boolean unrestricted = value == null || !value.isJsonArray() || value.getAsJsonArray().isEmpty();
+        String preview = unrestricted ? "不限定类型" : selectedNoteTypesPreview(value.getAsJsonArray());
         if (ImGui.beginCombo("##note-types", preview)) {
-            if (ImGui.selectable("恢复显示##note-types-restore", restore)) commitValue(form, state, new JsonArray());
+            if (ImGui.selectable("不限定类型##note-types-unrestricted", unrestricted)) commitValue(form, state, new JsonArray());
             ImGui.separator();
             for (String type : state.definition.choices()) {
                 boolean selected = containsString(value, type);
@@ -511,7 +511,7 @@ public final class EffectParameterEditor {
     private String selectedNoteTypesPreview(JsonArray values) {
         List<String> names = new ArrayList<>();
         for (JsonElement value : values) if (value.isJsonPrimitive()) names.add(labels.choice(value.getAsString()));
-        return names.isEmpty() ? "恢复显示" : String.join("、", names);
+        return names.isEmpty() ? "不限定类型" : String.join("、", names);
     }
 
     private boolean containsString(JsonElement values, String expected) {
@@ -526,11 +526,11 @@ public final class EffectParameterEditor {
 
     private void renderTracksMenu(EventForm form, FieldState state) {
         JsonElement value = state.value;
-        boolean restore = value == null || !value.isJsonArray() || value.getAsJsonArray().isEmpty();
-        boolean all = !restore && selectedAllTracks(value.getAsJsonArray());
-        String preview = restore ? "恢复显示" : all ? "全部轨道" : selectedTracksPreview(value.getAsJsonArray());
+        boolean unrestricted = value == null || !value.isJsonArray() || value.getAsJsonArray().isEmpty();
+        boolean all = !unrestricted && selectedAllTracks(value.getAsJsonArray());
+        String preview = unrestricted ? "不限定轨道" : all ? "全部轨道" : selectedTracksPreview(value.getAsJsonArray());
         if (ImGui.beginCombo("##tracks", preview)) {
-            if (ImGui.selectable("恢复显示##tracks-restore", restore)) commitValue(form, state, new JsonArray());
+            if (ImGui.selectable("不限定轨道##tracks-unrestricted", unrestricted)) commitValue(form, state, new JsonArray());
             ImGui.separator();
             if (ImGui.selectable("全部轨道##tracks-all", all)) commitValue(form, state, all ? new JsonArray() : allTrackArray());
             ImGui.separator();
@@ -563,7 +563,7 @@ public final class EffectParameterEditor {
     private String selectedTracksPreview(JsonArray values) {
         List<String> names = new ArrayList<>();
         for (JsonElement value : values) if (value.isJsonPrimitive()) names.add("轨道 " + value.getAsInt());
-        return names.isEmpty() ? "恢复显示" : String.join("、", names);
+        return names.isEmpty() ? "不限定轨道" : String.join("、", names);
     }
 
     private boolean containsInteger(JsonElement values, int expected) {
