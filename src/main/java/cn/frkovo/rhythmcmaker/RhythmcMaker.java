@@ -2411,13 +2411,14 @@ private static void showSceneBoundary(MinecraftServer server) {
                     var entry = iterator.next();
                     ChartManifest.Note note = session.notesById.get(entry.getKey());
                     DisplayEntity.BlockDisplayEntity display = entry.getValue();
-                    if (note == null || session.shouldHide(note)) { session.recycle(display); iterator.remove(); continue; }
+                    if (note == null) { display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED); iterator.remove(); continue; }
+                    if (session.shouldHide(note)) { session.recycle(note, display); iterator.remove(); continue; }
                     display.setGlowing(true);
                     double noteTime = session.noteTimes.getOrDefault(note.id, Double.POSITIVE_INFINITY);
                     double relativeDistance = session.relativeDistance(note, songTime);
                     if (noteTime <= songTime && session.hitNotes.add(note.id)) playHitSound(session, player, note);
                     if (relativeDistance <= 0.0) {
-                        session.recycle(display); iterator.remove(); continue;
+                        session.recycle(note, display); iterator.remove(); continue;
                     }
                     double displayZ = PLAYBACK_FRAME_Z - relativeDistance;
                     if (updateDisplayPositions) {
@@ -2446,7 +2447,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                     if (session.shouldHide(note)) continue;
                     double displayZ = PLAYBACK_FRAME_Z - Math.max(0.0, relativeDistance);
                     double[] position = session.displayPosition(note, songTime, displayZ);
-                    DisplayEntity.BlockDisplayEntity display = session.acquire(blockStateForType(note.type), position[0], position[1], position[2]);
+                    DisplayEntity.BlockDisplayEntity display = session.acquire(note, blockStateForType(note.type), position[0], position[1], position[2]);
                     if (display == null) continue;
                     session.applyNotePose(display, note, songTime, displayZ);
                     display.addCommandTag("rhythmc_preview:" + player.getUuid());
@@ -2838,10 +2839,10 @@ private static void showSceneBoundary(MinecraftServer server) {
             session.resetClientTime(player);
             session.clearGlowTeam();
             for (DisplayEntity.BlockDisplayEntity display : session.displays.values()) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
-            for (DisplayEntity.BlockDisplayEntity display : session.displayPool) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+            session.clearDisplayPools();
             session.clearTextDisplays();
             session.displays.clear();
-            session.displayPool.clear();
+            session.hiddenNoteKeys.clear();
             String tag = "rhythmc_preview:" + player.getUuid();
             for (DisplayEntity.BlockDisplayEntity display : session.world.getEntitiesByType(EntityType.BLOCK_DISPLAY,
                     entity -> entity.getCommandTags().contains(tag))) {
@@ -2996,11 +2997,9 @@ private static void showSceneBoundary(MinecraftServer server) {
             for (DisplayEntity.BlockDisplayEntity display : effectSession.displays.values()) {
                 display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
             }
-            for (DisplayEntity.BlockDisplayEntity display : effectSession.displayPool) {
-                display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
-            }
+            effectSession.clearDisplayPools();
             effectSession.displays.clear();
-            effectSession.displayPool.clear();
+            effectSession.hiddenNoteKeys.clear();
             effectSession = null;
         }
     }
@@ -3008,10 +3007,11 @@ private static void showSceneBoundary(MinecraftServer server) {
         for (DisplayEntity.BlockDisplayEntity display : world.getEntitiesByType(EntityType.BLOCK_DISPLAY,
                 entity -> entity.getCommandTags().contains("rhythmc_preview"))) {
             boolean active = PLAYBACK_SESSIONS.values().stream().anyMatch(session -> session.world == world
-                    && (session.displays.containsValue(display) || session.displayPool.contains(display)));
+                    && (session.displays.containsValue(display) || session.displayPools.values().stream().anyMatch(pool -> pool.contains(display))));
             if (!active) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
         }
     }
+    private record HiddenNoteKey(int trackId, int noteType) {}
     private static final class PlaybackSession {
         private final ServerWorld world;
         private final double returnX, returnY, returnZ;
@@ -3028,9 +3028,8 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final java.util.List<ChartManifest.Note> notes;
         private final java.util.List<JsonObject> effects;
         private final java.util.List<Double> effectTimes;
-        private final Set<Integer> hiddenNoteTypes = new java.util.HashSet<>();
-        private final Set<Integer> hiddenTracks = new java.util.HashSet<>();
-        private boolean hiddenAllNotes;
+        private final Set<HiddenNoteKey> hiddenNoteKeys = new java.util.HashSet<>();
+        private final Map<HiddenNoteKey, java.util.ArrayDeque<DisplayEntity.BlockDisplayEntity>> displayPools = new java.util.HashMap<>();
         private final Map<Integer, Team> glowTeams = new java.util.HashMap<>();
         private Formatting observerGlowColor = Formatting.WHITE;
         private Long clientTime;
@@ -3048,7 +3047,6 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final Map<String, double[]> textDisplayLastPoses = new java.util.HashMap<>();
         private final Map<String, Integer> textDisplayTracks = new java.util.HashMap<>();
         private final Map<String, Long> textDisplayExpiresAtNanos = new java.util.HashMap<>();
-        private final java.util.ArrayDeque<DisplayEntity.BlockDisplayEntity> displayPool = new java.util.ArrayDeque<>();
         private final java.util.Set<String> hitNotes = new java.util.HashSet<>();
         private int nextEffectIndex;
         private long lastDisplayUpdateTick = Long.MIN_VALUE;
@@ -3080,9 +3078,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             resetClientTime(player);
             clearTextDisplays();
             clearGlowTeam();
-            hiddenNoteTypes.clear();
-            hiddenTracks.clear();
-            hiddenAllNotes = false;
+            hiddenNoteKeys.clear();
             observerGlowColor = Formatting.WHITE;
             player.clearStatusEffects();
             for (net.minecraft.entity.effect.StatusEffectInstance effect : originalStatusEffects) {
@@ -3159,7 +3155,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 var entry = iterator.next();
                 ChartManifest.Note note = notesById.get(entry.getKey());
                 if (note != null && shouldHide(note)) {
-                    recycle(entry.getValue());
+                    recycle(note, entry.getValue());
                     iterator.remove();
                 }
             }
@@ -3175,7 +3171,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 if (!Double.isFinite(relativeDistance) || relativeDistance < 0.0 || relativeDistance > PLAYBACK_APPROACH_DISTANCE) continue;
                 double displayZ = PLAYBACK_FRAME_Z - Math.max(0.0, relativeDistance);
                 double[] position = displayPosition(note, songTime, displayZ);
-                DisplayEntity.BlockDisplayEntity display = acquire(blockStateForType(note.type), position[0], position[1], position[2]);
+                DisplayEntity.BlockDisplayEntity display = acquire(note, blockStateForType(note.type), position[0], position[1], position[2]);
                 if (display == null) continue;
                 applyNotePose(display, note, songTime, displayZ);
                 display.addCommandTag("rhythmc_preview:" + player.getUuid());
@@ -3186,42 +3182,46 @@ private static void showSceneBoundary(MinecraftServer server) {
             if (restored > 0) updateGlowTeam();
         }
         private boolean shouldHide(ChartManifest.Note note) {
-            return hiddenAllNotes || hiddenNoteTypes.contains(note.type) || hiddenTracks.contains(note.trackId);
+            return hiddenNoteKeys.contains(new HiddenNoteKey(note.trackId, note.type));
         }
         private void updateHiddenNotes(JsonObject effect) {
-            hiddenNoteTypes.clear();
-            hiddenTracks.clear();
-            hiddenAllNotes = false;
             if (effect == null) return;
             JsonObject properties = effectProperties(effect);
             com.google.gson.JsonElement hidden = effect.has("hidden") ? effect.get("hidden") : properties.get("hidden");
-            if (hidden != null && hidden.isJsonPrimitive()) {
-                try { hiddenAllNotes = hidden.getAsBoolean(); } catch (RuntimeException ignored) { }
-            }
+            boolean hiddenState = hidden != null && hidden.isJsonPrimitive() && hidden.getAsBoolean();
             com.google.gson.JsonElement noteTypes = effect.has("noteTypes") ? effect.get("noteTypes") : properties.get("noteTypes");
-            if (noteTypes != null && noteTypes.isJsonArray()) {
-                for (var value : noteTypes.getAsJsonArray()) {
-                    try {
-                        if (value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber()) {
-                            hiddenNoteTypes.add(value.getAsInt());
-                        } else {
-                            String type = value.getAsString().toUpperCase(java.util.Locale.ROOT);
-                            hiddenNoteTypes.add(switch (type) {
-                                case "LOOK" -> 1;
-                                case "HOLD" -> 2;
-                                case "DODGE" -> 3;
-                                default -> 0;
-                            });
-                        }
-                    } catch (RuntimeException ignored) { }
-                }
-            }
             com.google.gson.JsonElement tracks = effect.has("tracks") ? effect.get("tracks") : properties.get("tracks");
-            if (tracks != null && tracks.isJsonArray()) {
-                for (var value : tracks.getAsJsonArray()) {
-                    try { hiddenTracks.add(value.getAsInt()); } catch (RuntimeException ignored) { }
+            java.util.Set<Integer> selectedTypes = new java.util.HashSet<>();
+            java.util.Set<Integer> selectedTracks = new java.util.HashSet<>();
+            if (noteTypes == null) {
+                for (ChartManifest.Note note : notes) selectedTypes.add(note.type);
+            } else if (noteTypes.isJsonArray()) for (com.google.gson.JsonElement value : noteTypes.getAsJsonArray()) {
+                if (value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber()) selectedTypes.add(value.getAsInt());
+                else {
+                    String type = value.getAsString().toUpperCase(java.util.Locale.ROOT);
+                    selectedTypes.add(switch (type) { case "LOOK" -> 1; case "HOLD" -> 2; case "DODGE" -> 3; default -> 0; });
                 }
             }
+            else if (noteTypes.isJsonPrimitive()) selectedTypes.add(noteTypes.getAsInt());
+            if (tracks == null) {
+                for (ChartManifest.Note note : notes) selectedTracks.add(note.trackId);
+            } else if (tracks.isJsonArray()) for (com.google.gson.JsonElement value : tracks.getAsJsonArray()) selectedTracks.add(value.getAsInt());
+            else if (tracks.isJsonPrimitive()) selectedTracks.add(tracks.getAsInt());
+            for (int track : selectedTracks) for (int type : selectedTypes) {
+                HiddenNoteKey key = new HiddenNoteKey(track, type);
+                if (hiddenState) hiddenNoteKeys.add(key);
+                else hiddenNoteKeys.remove(key);
+            }
+        }
+        private HiddenNoteKey hiddenNoteKey(ChartManifest.Note note) { return new HiddenNoteKey(note.trackId, note.type); }
+        private void clearDisplayPools() {
+            for (java.util.ArrayDeque<DisplayEntity.BlockDisplayEntity> pool : displayPools.values())
+                for (DisplayEntity.BlockDisplayEntity display : pool) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+            displayPools.clear();
+        }
+        private void clearHiddenNotesForArenaSwitch() {
+            hiddenNoteKeys.clear();
+            clearDisplayPools();
         }
         private void updateGlowTeam() {
             for (var entry : displays.entrySet()) {
@@ -3633,6 +3633,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 Path sceneFile = SceneEditStorage.schematicPath(world.getServer(), chart.id, arena);
                 if (Files.isRegularFile(sceneFile)) {
                     sceneChanged = true;
+                    clearHiddenNotesForArenaSwitch();
                     SCENE_IMPORT_TASKS.offer(new SceneImportTask(chart, sceneFile, PLAYBACK_PLATFORM_X, PLAYBACK_PLATFORM_Y, PLAYBACK_PLATFORM_Z));
                     IMPORTING_CHARTS.add(chart.id);
                     return;
@@ -3657,6 +3658,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                     return;
                 }
                 sceneChanged = true;
+                clearHiddenNotesForArenaSwitch();
                 SCENE_IMPORT_TASKS.offer(new SceneImportTask(chart, sceneFile, PLAYBACK_PLATFORM_X, PLAYBACK_PLATFORM_Y, PLAYBACK_PLATFORM_Z));
                 IMPORTING_CHARTS.add(chart.id);
             } catch (IOException | RuntimeException exception) {
@@ -3730,8 +3732,9 @@ private static void showSceneBoundary(MinecraftServer server) {
             lastDisplayUpdateTick = serverTick;
             return true;
         }
-        private DisplayEntity.BlockDisplayEntity acquire(BlockState state, double x, double y, double z) {
-            DisplayEntity.BlockDisplayEntity display = displayPool.pollFirst();
+        private DisplayEntity.BlockDisplayEntity acquire(ChartManifest.Note note, BlockState state, double x, double y, double z) {
+            java.util.ArrayDeque<DisplayEntity.BlockDisplayEntity> pool = displayPools.computeIfAbsent(hiddenNoteKey(note), ignored -> new java.util.ArrayDeque<>());
+            DisplayEntity.BlockDisplayEntity display = pool.pollFirst();
             boolean fresh = display == null || display.isRemoved();
             if (fresh) {
                 display = EntityType.BLOCK_DISPLAY.create(world, SpawnReason.COMMAND);
@@ -3755,13 +3758,13 @@ private static void showSceneBoundary(MinecraftServer server) {
             display.setTeleportDuration(1);
             return display;
         }
-        private void recycle(DisplayEntity.BlockDisplayEntity display) {
+        private void recycle(ChartManifest.Note note, DisplayEntity.BlockDisplayEntity display) {
             if (display.isRemoved()) return;
             display.setInvisible(true);
             display.setTeleportDuration(0);
             display.setInterpolationDuration(0);
             display.setPosition(PLAYBACK_PLATFORM_X, -64.0, PLAYBACK_PLATFORM_Z);
-            displayPool.addLast(display);
+            displayPools.computeIfAbsent(hiddenNoteKey(note), ignored -> new java.util.ArrayDeque<>()).addLast(display);
         }
     }
     private static double playbackEndTime(ChartManifest chart) {

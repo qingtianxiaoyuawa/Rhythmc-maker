@@ -103,7 +103,8 @@ public final class ChartStorage {
         if (chart.effects != null) for (JsonObject effect : chart.effects) {
             if (effect == null) continue;
             JsonObject properties = effect.has("properties") && effect.get("properties").isJsonObject() ? effect.getAsJsonObject("properties") : effect;
-            if ("ARENA".equals(effect.get("eventType").getAsString()) && properties.has("arena")) {
+            String eventType = firstJsonString(effect, "effectType", "eventType", "");
+            if ((eventType.equalsIgnoreCase("ARENA") || eventType.equalsIgnoreCase("CHANGE_ARENA")) && properties.has("arena")) {
                 String arena = properties.get("arena").getAsString();
                 if (!arena.isBlank() && !arenaNames.contains(arena)) arenaNames.add(arena);
             }
@@ -297,7 +298,6 @@ public final class ChartStorage {
         if (legacy.equals("SPEED") || legacy.equals("JUDGEDOT")) return null;
         String type = switch (legacy) { case "REMOVEHOLOGRAM" -> "REMOVE_HOLOGRAM"; case "INVERT", "POTION", "POTIONEFFECT", "STATUSEFFECT" -> "EFFECT"; case "CLREFFECT" -> "CLEAR_EFFECT"; case "COLOR" -> "GLOW_COLOR"; case "VISIBLE" -> "HIDE_NOTES"; case "TEXT" -> "TEXT_DISPLAY"; case "TRANSFORMATIONS" -> "TEXT_DISPLAY_EFFECT"; case "CLIENTTIME", "SETCLIENTTIME", "TIMECLIENT", "WORLDTIME", "SETWORLDTIME", "SETTIME" -> "TIME"; default -> legacy; };
         if (type.isBlank()) return null;
-        if (legacy.equals("VISIBLE") && old.has("visible") && old.get("visible").isJsonPrimitive() && old.get("visible").getAsBoolean()) return null;
         JsonObject converted = new JsonObject(); converted.addProperty("effectType", type);
         double tick = jsonNumber(old, "start-tick", jsonNumber(old, "beat", 0)).doubleValue(); converted.addProperty("beat", snapImportedBeat(Math.max(0.0, tick * bpm / 1200.0)));
         JsonObject properties = old.has("properties") && old.get("properties").isJsonObject()
@@ -353,22 +353,25 @@ public final class ChartStorage {
             properties.addProperty("time", time);
         }
         if (legacy.equals("VISIBLE")) {
-            JsonArray noteTypes = new JsonArray();
-            if (old.has("visible") && !old.get("visible").getAsBoolean()) {
-                JsonElement legacyTypes = firstJsonElement(old, properties, "note-types", "noteTypes");
-                if (legacyTypes != null && legacyTypes.isJsonArray()) for (JsonElement noteType : legacyTypes.getAsJsonArray()) {
+            JsonElement visible = firstJsonElement(old, properties, "visible");
+            properties.addProperty("hidden", visible == null || !visible.getAsBoolean());
+            properties.remove("visible");
+            JsonElement legacyTypes = firstJsonElement(old, properties, "note-types", "noteTypes");
+            if (legacyTypes != null) {
+                JsonArray noteTypes = new JsonArray();
+                if (legacyTypes.isJsonArray()) for (JsonElement noteType : legacyTypes.getAsJsonArray()) {
                     int value = noteType.isJsonPrimitive() && noteType.getAsJsonPrimitive().isNumber() ? noteType.getAsInt() : oldNoteType(noteType.getAsString());
                     noteTypes.add(switch (value) { case 1 -> "LOOK"; case 2 -> "HOLD"; case 3 -> "DODGE"; default -> "TAP"; });
-                } else for (String noteType : List.of("TAP", "LOOK", "HOLD", "DODGE")) noteTypes.add(noteType);
+                }
+                properties.add("noteTypes", noteTypes);
             }
-            properties.add("noteTypes", noteTypes);
-            JsonArray tracks = new JsonArray();
             JsonElement legacyTracks = firstJsonElement(old, properties, "tracks", "track-ids", "trackIds", "track");
             if (legacyTracks != null) {
+                JsonArray tracks = new JsonArray();
                 if (legacyTracks.isJsonArray()) for (JsonElement value : legacyTracks.getAsJsonArray()) if (value.isJsonPrimitive()) tracks.add(value.getAsInt());
                 else if (legacyTracks.isJsonPrimitive()) tracks.add(legacyTracks.getAsInt());
+                properties.add("tracks", tracks);
             }
-            properties.add("tracks", tracks);
         }
         converted.add("properties", properties); return converted;
     }
