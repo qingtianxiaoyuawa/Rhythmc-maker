@@ -723,8 +723,23 @@ public final class ChartStorage {
 
     public static ChartManifest findByDimensionId(MinecraftServer server, String dimensionId) throws IOException {
         if (dimensionId == null || dimensionId.isBlank()) return null;
-        for (ChartManifest chart : list(server)) {
-            if (cn.frkovo.rhythmcmaker.ChartDimensionManager.stableDimensionId(chart.id).equals(dimensionId)) return chart;
+        Path chartRoot = root(server);
+        try (var entries = Files.list(chartRoot)) {
+            Path chartDirectory = entries.filter(Files::isDirectory)
+                    .filter(path -> cn.frkovo.rhythmcmaker.ChartDimensionManager.stableDimensionId(
+                            path.getFileName().toString()).equals(dimensionId))
+                    .findFirst()
+                    .orElse(null);
+            if (chartDirectory != null) return find(server, chartDirectory.getFileName().toString());
+        }
+        Path manifests = chartRoot.resolve("manifests");
+        if (Files.isDirectory(manifests)) try (var entries = Files.list(manifests)) {
+            Path manifest = entries.filter(path -> path.getFileName().toString().endsWith(".json"))
+                    .filter(path -> cn.frkovo.rhythmcmaker.ChartDimensionManager.stableDimensionId(
+                            stripExtension(path.getFileName().toString())).equals(dimensionId))
+                    .findFirst()
+                    .orElse(null);
+            if (manifest != null) return parseManifest(manifest);
         }
         return null;
     }

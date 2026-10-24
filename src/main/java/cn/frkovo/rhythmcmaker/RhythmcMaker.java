@@ -281,7 +281,6 @@ public final class RhythmcMaker implements ModInitializer {
             processTrackSnapUndoTasks(server);
             processScrollJudgementSessions(server);
             processPlaybackSessions(server);
-            for (ServerWorld world : server.getWorlds()) if (isEditorWorld(world)) ensurePlaybackChunksLoaded(world);
             long tick = server.getTicks();
             if (tick % SCENE_BORDER_INTERVAL_TICKS == 0) showSceneBoundary(server);
             if (tick - lastAutosaveTick < ticksForSeconds(config.autosaveIntervalSeconds)) return;
@@ -511,6 +510,7 @@ public final class RhythmcMaker implements ModInitializer {
         server.getPlayerManager().setCheatsAllowed(true);
         world.getGameRules().setValue(GameRules.KEEP_INVENTORY, true, server);
         world.getGameRules().setValue(GameRules.RESPAWN_RADIUS, 0, server);
+        releasePlaybackChunks(world);
         cleanupOrphanedPlaybackDisplays(world);
         world.getGameRules().setValue(GameRules.TNT_EXPLODES, false, server);
         world.getGameRules().setValue(GameRules.ADVANCE_TIME, true, server);
@@ -2425,10 +2425,18 @@ private static void showSceneBoundary(MinecraftServer server) {
             }
         }
     }
+    private static void releasePlaybackChunks(ServerWorld world) {
+        int centerChunkX = Math.floorDiv(PLAYBACK_PLATFORM_X, 16);
+        int centerChunkZ = Math.floorDiv(PLAYBACK_PLATFORM_Z, 16);
+        for (int chunkX = centerChunkX - 4; chunkX <= centerChunkX + 4; chunkX++) {
+            for (int chunkZ = centerChunkZ - 4; chunkZ <= centerChunkZ + 4; chunkZ++) {
+                world.setChunkForced(chunkX, chunkZ, false);
+            }
+        }
+    }
     private static void ensurePlaybackChunkLoaded(ServerWorld world, ChunkPos chunkPos) {
         BlockPos probe = new BlockPos(chunkPos.getStartX(), PLAYBACK_PLATFORM_Y, chunkPos.getStartZ());
         if (world.isChunkLoaded(probe)) return;
-        world.setChunkForced(chunkPos.x, chunkPos.z, true);
         world.getChunk(chunkPos.x, chunkPos.z);
     }
     private static void cleanupPlaybackDisplayEntities(ServerWorld world, UUID playerId, String chartId) {
@@ -2453,7 +2461,6 @@ private static void showSceneBoundary(MinecraftServer server) {
         for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
             PlaybackSession session = PLAYBACK_SESSIONS.get(player.getUuid());
             if (session == null) continue;
-            ensurePlaybackChunksLoaded(session.world);
             try {
             if (System.nanoTime() < session.startNanos) continue;
             double songTime = session.startSeconds + (System.nanoTime() - session.startNanos) / 1_000_000_000.0 * session.rate;
