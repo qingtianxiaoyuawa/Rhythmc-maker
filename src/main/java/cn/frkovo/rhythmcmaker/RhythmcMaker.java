@@ -3045,6 +3045,8 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final java.util.ArrayDeque<DisplayEntity.TextDisplayEntity> textDisplayPool = new java.util.ArrayDeque<>();
         private final Map<String, double[]> textDisplayAnchors = new java.util.HashMap<>();
         private final Map<String, double[]> textDisplayLastPoses = new java.util.HashMap<>();
+        private final Map<Integer, TrackPlayback.PoseBuffer> textDisplayPoseBuffers = new java.util.HashMap<>();
+        private long textDisplayPoseUpdateId;
         private final Map<String, Integer> textDisplayTracks = new java.util.HashMap<>();
         private final Map<String, Long> textDisplayExpiresAtNanos = new java.util.HashMap<>();
         private final java.util.Set<String> hitNotes = new java.util.HashSet<>();
@@ -3432,7 +3434,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private void updateTextDisplays(double songTime) {
             long now = System.nanoTime();
             double beat = timing.secondsToBeat(songTime - chart.offsetMillis / 1000.0);
-            Map<Integer, TrackPlayback.Pose> poses = new java.util.HashMap<>();
+            long poseUpdateId = ++textDisplayPoseUpdateId;
             for (var iterator = textDisplays.entrySet().iterator(); iterator.hasNext();) {
                 var entry = iterator.next();
                 String id = entry.getKey();
@@ -3451,15 +3453,21 @@ private static void showSceneBoundary(MinecraftServer server) {
                 double[] anchor = textDisplayAnchors.get(id);
                 if (track != null && anchor != null) {
                     TrackPlayback.Prepared profile = trackProfiles.getOrDefault(track, trackProfiles.get(0));
-                    TrackPlayback.Pose pose = poses.computeIfAbsent(track, ignored -> profile.poseAt(beat));
-                    double[] nextPose = {pose.x(), pose.y(), pose.z(), pose.rotationX(), pose.rotationY(), pose.rotationZ(), pose.scaleX(), pose.scaleY(), pose.scaleZ()};
+                    TrackPlayback.PoseBuffer pose = textDisplayPoseBuffers.computeIfAbsent(track, ignored -> new TrackPlayback.PoseBuffer());
+                    if (!pose.isEvaluated(poseUpdateId)) {
+                        profile.fillPoseAt(beat, pose);
+                        pose.markEvaluated(poseUpdateId);
+                    }
                     double[] previousPose = textDisplayLastPoses.get(id);
-                    if (previousPose == null || !sameTextDisplayPose(previousPose, nextPose)) {
-                        setTextDisplayPose(display,
-                                new double[]{pose.x(), pose.y(), pose.z()},
-                                new double[]{pose.rotationX(), pose.rotationY(), pose.rotationZ()},
-                                new double[]{pose.scaleX(), pose.scaleY(), pose.scaleZ()});
-                        textDisplayLastPoses.put(id, nextPose);
+                    if (previousPose == null) {
+                        previousPose = new double[9];
+                        textDisplayLastPoses.put(id, previousPose);
+                    }
+                    if (!sameTextDisplayPose(previousPose, pose)) {
+                        setBufferedTextDisplayPose(display, pose);
+                        previousPose[0] = pose.x(); previousPose[1] = pose.y(); previousPose[2] = pose.z();
+                        previousPose[3] = pose.rotationX(); previousPose[4] = pose.rotationY(); previousPose[5] = pose.rotationZ();
+                        previousPose[6] = pose.scaleX(); previousPose[7] = pose.scaleY(); previousPose[8] = pose.scaleZ();
                     }
                 }
             }
@@ -3572,10 +3580,20 @@ private static void showSceneBoundary(MinecraftServer server) {
             display.setInterpolationDuration(0);
             textDisplayPool.addLast(display);
         }
-        private static boolean sameTextDisplayPose(double[] left, double[] right) {
-            if (left == null || right == null || left.length != right.length) return false;
-            for (int index = 0; index < left.length; index++) if (Math.abs(left[index] - right[index]) > 1.0E-5) return false;
-            return true;
+        private static boolean sameTextDisplayPose(double[] left, TrackPlayback.PoseBuffer right) {
+            return left != null && left.length == 9
+                    && Math.abs(left[0] - right.x()) <= 1.0E-5 && Math.abs(left[1] - right.y()) <= 1.0E-5
+                    && Math.abs(left[2] - right.z()) <= 1.0E-5 && Math.abs(left[3] - right.rotationX()) <= 1.0E-5
+                    && Math.abs(left[4] - right.rotationY()) <= 1.0E-5 && Math.abs(left[5] - right.rotationZ()) <= 1.0E-5
+                    && Math.abs(left[6] - right.scaleX()) <= 1.0E-5 && Math.abs(left[7] - right.scaleY()) <= 1.0E-5
+                    && Math.abs(left[8] - right.scaleZ()) <= 1.0E-5;
+        }
+
+        private static void setBufferedTextDisplayPose(DisplayEntity.TextDisplayEntity display, TrackPlayback.PoseBuffer pose) {
+            display.setPosition(TEXT_DISPLAY_CENTER_X + pose.x(), TEXT_DISPLAY_CENTER_Y + pose.y(), TEXT_DISPLAY_CENTER_Z + pose.z());
+            display.setTransformation(new AffineTransformation(new Vector3f(),
+                    new Quaternionf().rotationXYZ((float) Math.toRadians(pose.rotationX()), (float) Math.toRadians(pose.rotationY()), (float) Math.toRadians(pose.rotationZ())),
+                    new Vector3f((float) pose.scaleX(), (float) pose.scaleY(), (float) pose.scaleZ()), new Quaternionf()));
         }
         private void applyTextDisplayTransformation(String id, JsonObject effect, boolean bootstrap) {
             DisplayEntity.TextDisplayEntity display = textDisplays.get(id);

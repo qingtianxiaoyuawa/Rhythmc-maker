@@ -74,6 +74,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     private static boolean effectEditorPlaybackRequested;
     private static boolean effectEditorCameraLocked;
     private static double effectEditorPlayheadBeat;
+    private static boolean pendingEffectEditorSeek;
     private static float effectEditorFov = -1.0f;
     private static double effectEditorCameraX;
     private static double effectEditorCameraHeight = 74.0;
@@ -159,6 +160,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             return ActionResult.FAIL;
         });
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            processEffectEditorSeek(client);
             if (effectEditorPreviewPrepared) applyEffectEditorPerspective();
             if (client.player != null && client.world != null && client.world.getTime() % 5L == 0L
                     && ClientChartAccess.refreshActiveChartIfChanged()) {
@@ -323,6 +325,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         playbackTrackProfile = PlaybackCoordinates.prepareDefaultTrack(chart);
         sendCommand(client, "rhythmc_effect_preview_prepare");
         sendCommand(client, "rhythmc_effect_preview_seek " + String.format(Locale.ROOT, "%.6f", effectEditorPlayheadBeat));
+        pendingEffectEditorSeek = false;
     }
 
     static void toggleEffectEditorPlayback() {
@@ -384,15 +387,26 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     }
 
     static void seekEffectEditorPreview(double beat) {
-        MinecraftClient client = MinecraftClient.getInstance();
         ChartManifest chart = ClientChartAccess.resolveActiveChart();
         if (chart == null) return;
         effectEditorPlayheadBeat = Math.max(0.0, Math.min(Math.max(0.0, chart.totalBeats), beat));
         playbackStartBeat = effectEditorPlayheadBeat;
+        pendingEffectEditorSeek = true;
+    }
+
+    public static void flushEffectEditorPreviewSeek() {
+        if (pendingEffectEditorSeek) processEffectEditorSeek(MinecraftClient.getInstance());
+    }
+
+    private static void processEffectEditorSeek(MinecraftClient client) {
+        if (!pendingEffectEditorSeek || !effectEditorPreviewPrepared) return;
+        pendingEffectEditorSeek = false;
+        ChartManifest chart = ClientChartAccess.resolveActiveChart();
+        if (chart == null) return;
         playbackTimingProfile = ChartTiming.prepare(chart);
         playbackStartSeconds = PlaybackCoordinates.songTimeAtBeat(chart, playbackTimingProfile, playbackStartBeat);
         if (!effectEditorPlaybackRequested || !playbackAudioRequested) {
-            if (effectEditorPreviewPrepared) sendCommand(client, "rhythmc_effect_preview_seek " + String.format(Locale.ROOT, "%.6f", effectEditorPlayheadBeat));
+            sendCommand(client, "rhythmc_effect_preview_seek " + String.format(Locale.ROOT, "%.6f", effectEditorPlayheadBeat));
             return;
         }
         // Seek the server-side preview session before restarting local audio so the

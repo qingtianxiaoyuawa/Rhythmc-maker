@@ -1047,6 +1047,7 @@ public final class EffectEditorImGuiView {
             timelineDraggingRange = false;
             timelineDraggingScrollBar = false;
             timelineDraggingPlayhead = false;
+            RhythmcMakerClient.flushEffectEditorPreviewSeek();
             timelineControlSelection = false;
             timelineDraggedEvent = -1;
             timelineDraggedChannel = -1;

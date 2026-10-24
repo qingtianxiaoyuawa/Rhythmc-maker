@@ -15,6 +15,39 @@ public final class TrackPlayback {
                        double rotationX, double rotationY, double rotationZ,
                        double scaleX, double scaleY, double scaleZ) {}
 
+    public static final class PoseBuffer {
+        private double x;
+        private double y;
+        private double z;
+        private double rotationX;
+        private double rotationY;
+        private double rotationZ;
+        private double scaleX;
+        private double scaleY;
+        private double scaleZ;
+        private long evaluationId = Long.MIN_VALUE;
+
+        public boolean isEvaluated(long evaluationId) { return this.evaluationId == evaluationId; }
+        public void markEvaluated(long evaluationId) { this.evaluationId = evaluationId; }
+
+        public void set(double x, double y, double z, double rotationX, double rotationY, double rotationZ,
+                        double scaleX, double scaleY, double scaleZ) {
+            this.x = x; this.y = y; this.z = z;
+            this.rotationX = rotationX; this.rotationY = rotationY; this.rotationZ = rotationZ;
+            this.scaleX = scaleX; this.scaleY = scaleY; this.scaleZ = scaleZ;
+        }
+
+        public double x() { return x; }
+        public double y() { return y; }
+        public double z() { return z; }
+        public double rotationX() { return rotationX; }
+        public double rotationY() { return rotationY; }
+        public double rotationZ() { return rotationZ; }
+        public double scaleX() { return scaleX; }
+        public double scaleY() { return scaleY; }
+        public double scaleZ() { return scaleZ; }
+    }
+
     public static final class Prepared {
         private final List<ChartManifest.NumEvent> speed;
         private final List<ChartManifest.NumEvent> xTransform;
@@ -53,6 +86,12 @@ public final class TrackPlayback {
         public Pose poseAt(double beat) {
             return new Pose(distanceAt(beat),
                     valueAt(xTransform, beat, 0.0), valueAt(yTransform, beat, 0.0), valueAt(zTransform, beat, 0.0),
+                    valueAt(xRotate, beat, 0.0), valueAt(yRotate, beat, 0.0), valueAt(zRotate, beat, 0.0),
+                    valueAt(xScale, beat, 1.0), valueAt(yScale, beat, 1.0), valueAt(zScale, beat, 1.0));
+        }
+
+        public void fillPoseAt(double beat, PoseBuffer target) {
+            target.set(valueAt(xTransform, beat, 0.0), valueAt(yTransform, beat, 0.0), valueAt(zTransform, beat, 0.0),
                     valueAt(xRotate, beat, 0.0), valueAt(yRotate, beat, 0.0), valueAt(zRotate, beat, 0.0),
                     valueAt(xScale, beat, 1.0), valueAt(yScale, beat, 1.0), valueAt(zScale, beat, 1.0));
         }
