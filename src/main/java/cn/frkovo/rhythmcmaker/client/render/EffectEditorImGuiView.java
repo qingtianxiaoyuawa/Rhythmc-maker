@@ -37,11 +37,13 @@ import java.util.ArrayList;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.Comparator;
 import java.util.function.Consumer;
 
 /**
@@ -151,6 +153,7 @@ public final class EffectEditorImGuiView {
     }
 
     private final List<DragOrigin> timelineDragOrigins = new ArrayList<>();
+    private final Set<Integer> timelineDraggedEventIndices = new HashSet<>();
     private EditorSnapshot timelineDragSnapshot;
     private boolean timelineDragWasDirty;
     private float timelinePressX;
@@ -857,28 +860,27 @@ public final class EffectEditorImGuiView {
             int labelColour = row.eventIndex() == selectedIndex ? 0xFFFFFFFF : 0xFFB5BFCC;
             drawList.addText(left + 20.0f, rowY + 5.0f, labelColour, displayText(row.label()));
             float markerY = rowY + 12.0f;
-            for (TimelineMarker marker : row.markers()) {
+            List<TimelineMarker> rowMarkers = row.markers();
+            for (int markerIndex = firstMarkerAtOrAfter(rowMarkers, minBeat); markerIndex < rowMarkers.size(); markerIndex++) {
+                TimelineMarker marker = rowMarkers.get(markerIndex);
+                if (marker.beat() > maxVisibleBeat) break;
+                if (marker.kind() == TimelineMarkerKind.EVENT && timelineDraggedEventIndices.contains(marker.eventIndex())) continue;
                 float markerX = timelineBeatToX(marker.beat(), minBeat, maxVisibleBeat, timelineLeft, timelineWidth);
-                if (marker.beat() < minBeat || marker.beat() > maxVisibleBeat) continue;
-                boolean selected = selectedIndices.contains(marker.eventIndex());
-                int colour = marker.kind() == TimelineMarkerKind.EVENT ? 0xFF4DB7FF : 0xFFE9B96E;
-                if (selected && marker.kind() == TimelineMarkerKind.EVENT) {
-                    drawList.addCircleFilled(markerX, markerY, 8.0f, 0xFFFFFFFF, 16);
-                }
-                if (marker.kind() == TimelineMarkerKind.EVENT) {
-                    drawList.addTriangleFilled(markerX, markerY - 7.0f, markerX + 7.0f, markerY,
-                            markerX, markerY + 7.0f, colour);
-                    drawList.addTriangleFilled(markerX, markerY - 7.0f, markerX - 7.0f, markerY,
-                            markerX, markerY + 7.0f, colour);
-                } else {
-                    drawList.addCircleFilled(markerX, markerY, 4.5f, colour, 12);
-                }
+                drawTimelineMarker(drawList, marker, markerX, markerY);
                 hits.add(new TimelineHit(markerX, markerY, marker));
                 if (Math.abs(ImGui.getMousePosX() - markerX) < 9 && Math.abs(ImGui.getMousePosY() - markerY) < 9) {
                     int denominator = marker.kind() == TimelineMarkerKind.EVENT
                             ? layoutModel.position(marker.eventIndex()).denominator : keyframePosition(marker).denominator;
                     ImGui.setTooltip(new EffectEditorLayout.Position("", marker.beat(), denominator).label());
                 }
+            }
+            for (DragOrigin origin : timelineDragOrigins) {
+                EffectEditorLayout.Position position = layoutModel.position(origin.eventIndex());
+                if (!row.groupLabel().equals(position.trackId) || position.beat < minBeat || position.beat > maxVisibleBeat) continue;
+                TimelineMarker marker = new TimelineMarker(origin.eventIndex(), -1, -1, position.beat, TimelineMarkerKind.EVENT);
+                float markerX = timelineBeatToX(position.beat, minBeat, maxVisibleBeat, timelineLeft, timelineWidth);
+                drawTimelineMarker(drawList, marker, markerX, markerY);
+                hits.add(new TimelineHit(markerX, markerY, marker));
             }
             rowY = rowBottom;
         }
@@ -1056,6 +1058,22 @@ public final class EffectEditorImGuiView {
         }
     }
 
+    private void drawTimelineMarker(ImDrawList drawList, TimelineMarker marker, float markerX, float markerY) {
+        boolean selected = selectedIndices.contains(marker.eventIndex());
+        int colour = marker.kind() == TimelineMarkerKind.EVENT ? 0xFF4DB7FF : 0xFFE9B96E;
+        if (selected && marker.kind() == TimelineMarkerKind.EVENT) {
+            drawList.addCircleFilled(markerX, markerY, 8.0f, 0xFFFFFFFF, 16);
+        }
+        if (marker.kind() == TimelineMarkerKind.EVENT) {
+            drawList.addTriangleFilled(markerX, markerY - 7.0f, markerX + 7.0f, markerY,
+                    markerX, markerY + 7.0f, colour);
+            drawList.addTriangleFilled(markerX, markerY - 7.0f, markerX - 7.0f, markerY,
+                    markerX, markerY + 7.0f, colour);
+        } else {
+            drawList.addCircleFilled(markerX, markerY, 4.5f, colour, 12);
+        }
+    }
+
     private void clearEffectSelection() {
         if (selectedIndex < 0 && selectedIndices.isEmpty()) return;
         selectedIndex = -1;
@@ -1068,10 +1086,12 @@ public final class EffectEditorImGuiView {
         timelineDragSnapshot = snapshot();
         timelineDragWasDirty = dirty;
         timelineDragOrigins.clear();
+        timelineDraggedEventIndices.clear();
         if (timelineDraggedChannel >= 0) return;
         for (int index : selectedIndices) {
             EffectEditorLayout.Position position = layoutModel.position(index);
             timelineDragOrigins.add(new DragOrigin(index, eventBeat(workingEffects.get(index)), position.trackId));
+            timelineDraggedEventIndices.add(index);
         }
     }
 
@@ -1084,23 +1104,27 @@ public final class EffectEditorImGuiView {
             if (rowIndex >= 0 && rowIndex < rows.size() && !rows.get(rowIndex).groupHeader()) {
                 String candidate = rows.get(rowIndex).groupLabel();
                 String type = eventType(workingEffects.get(timelineDraggedEvent));
-                if (layoutModel.tracks().stream().anyMatch(track -> track.id.equals(candidate) && track.type.equals(type))) {
+                if (layoutModel.hasTrack(candidate, type)) {
                     targetTrack = candidate;
                     timelineTrackAnchorY = mouseY;
                 }
             }
         }
         double delta = target - timelineDragStartBeat;
+        boolean trackAssignmentChanged = false;
         for (DragOrigin origin : timelineDragOrigins) {
             double beat = origin.beat() + delta;
             JsonObject event = workingEffects.get(origin.eventIndex());
             event.addProperty("beat", beat);
+            String previousTrack = layoutModel.position(origin.eventIndex()).trackId;
+            String nextTrack = timelineDragOrigins.size() == 1 ? targetTrack : origin.trackId();
             layoutModel.previewMove(origin.eventIndex(), eventType(event), beat,
-                    timelineDragOrigins.size() == 1 ? targetTrack : origin.trackId(), denominator);
+                    nextTrack, denominator);
+            trackAssignmentChanged |= !previousTrack.equals(nextTrack);
             if (origin.eventIndex() == selectedIndex) beatField.set(beat);
         }
         dirty = true;
-        cachedTimelineRows = null;
+        if (trackAssignmentChanged) cachedTimelineRows = null;
     }
 
     private void finishTimelineDrag() {
@@ -1117,19 +1141,14 @@ public final class EffectEditorImGuiView {
         }
         timelineDragSnapshot = null;
         timelineDragOrigins.clear();
+        timelineDraggedEventIndices.clear();
     }
 
     private String eventDragFailure() {
         for (DragOrigin origin : timelineDragOrigins) {
             EffectEditorLayout.Position position = layoutModel.position(origin.eventIndex());
             if (position.beat < 0.0 || position.beat > timelineDragMaximumBeat) return "特效不能移出时间轴范围";
-            String type = eventType(workingEffects.get(origin.eventIndex()));
-            for (int index = 0; index < workingEffects.size(); index++) {
-                if (index == origin.eventIndex()) continue;
-                EffectEditorLayout.Position other = layoutModel.position(index);
-                if (position.trackId.equals(other.trackId) && position.beat == eventBeat(workingEffects.get(index))
-                        && type.equals(eventType(workingEffects.get(index)))) return "特效不能重叠";
-            }
+            if (layoutModel.hasOverlappingEventsAtPosition(origin.eventIndex())) return "特效不能重叠";
         }
         return null;
     }
@@ -1271,6 +1290,14 @@ public final class EffectEditorImGuiView {
         List<EffectEditorLayout.Track> orderedTracks = new ArrayList<>(layoutModel.tracks());
         List<EffectTypeDefinition> definitions = registry.definitions();
         orderedTracks.sort((left, right) -> Integer.compare(definitionOrder(definitions, left.type), definitionOrder(definitions, right.type)));
+        Map<String, List<TimelineMarker>> markersByTrack = new HashMap<>();
+        Map<String, Integer> firstEventByTrack = new HashMap<>();
+        for (int eventIndex = 0; eventIndex < workingEffects.size(); eventIndex++) {
+            String trackId = layoutModel.position(eventIndex).trackId;
+            firstEventByTrack.putIfAbsent(trackId, eventIndex);
+            appendTimelineMarkers(markersByTrack.computeIfAbsent(trackId, ignored -> new ArrayList<>()),
+                    eventIndex, workingEffects.get(eventIndex));
+        }
         int trackNumber = 0;
         String previousType = "";
         for (EffectEditorLayout.Track track : orderedTracks) {
@@ -1280,15 +1307,12 @@ public final class EffectEditorImGuiView {
                 rows.add(new TimelineRow(groupLabel, groupLabel, -1, List.of(), true));
                 previousType = track.type;
             }
-            List<TimelineMarker> markers = new ArrayList<>();
-            int firstEvent = -1;
-            for (int eventIndex = 0; eventIndex < workingEffects.size(); eventIndex++) {
-                if (!track.id.equals(layoutModel.position(eventIndex).trackId)) continue;
-                if (firstEvent < 0) firstEvent = eventIndex;
-                markers.addAll(timelineMarkers(eventIndex, workingEffects.get(eventIndex)));
-            }
+            List<TimelineMarker> markers = markersByTrack.get(track.id);
+            if (markers == null) markers = List.of();
+            else markers.sort(Comparator.comparingDouble(TimelineMarker::beat));
+            int firstEvent = firstEventByTrack.getOrDefault(track.id, -1);
             String label = ++trackNumber + " · " + (definition == null ? track.type : definition.displayName());
-            rows.add(new TimelineRow(track.id, label, firstEvent, markers, false));
+            rows.add(new TimelineRow(track.id, label, firstEvent, List.copyOf(markers), false));
             for (TimelineMarker marker : markers) cachedTimelineMaxBeat = Math.max(cachedTimelineMaxBeat, marker.beat());
         }
         if (timelineDragSnapshot != null) cachedTimelineMaxBeat = timelineDragMaximumBeat;
@@ -1311,12 +1335,11 @@ public final class EffectEditorImGuiView {
         }
         return -1;
     }
-    private List<TimelineMarker> timelineMarkers(int eventIndex, JsonObject event) {
-        List<TimelineMarker> markers = new ArrayList<>();
+    private void appendTimelineMarkers(List<TimelineMarker> markers, int eventIndex, JsonObject event) {
         markers.add(new TimelineMarker(eventIndex, -1, -1, readJsonDouble(event, "beat", 0.0), TimelineMarkerKind.EVENT));
-        if (!event.has("animation") || !event.get("animation").isJsonObject()) return markers;
+        if (!event.has("animation") || !event.get("animation").isJsonObject()) return;
         JsonObject animation = event.getAsJsonObject("animation");
-        if (!animation.has("channels") || !animation.get("channels").isJsonArray()) return markers;
+        if (!animation.has("channels") || !animation.get("channels").isJsonArray()) return;
         JsonArray channels = animation.getAsJsonArray("channels");
         for (int channelIndex = 0; channelIndex < channels.size(); channelIndex++) {
             JsonElement channelElement = channels.get(channelIndex);
@@ -1334,7 +1357,6 @@ public final class EffectEditorImGuiView {
                 keyframePosition(markers.get(markers.size() - 1));
             }
         }
-        return markers;
     }
 
     private double timelineMaxBeat() {
@@ -1493,11 +1515,8 @@ public final class EffectEditorImGuiView {
 
     private int maxTimelineRowOffset() {
         int totalRows = totalTimelineRows();
-        int maxOffset = 0;
-        for (int offset = 0; offset < totalRows; offset++) {
-            if (timelineRowsHeight(offset, totalRows) <= timelineAvailableRowsHeight + 0.01f) maxOffset = offset;
-        }
-        return maxOffset;
+        if (totalRows == 0 || timelineRowHeight(cachedTimelineRows.get(totalRows - 1)) > timelineAvailableRowsHeight + 0.01f) return 0;
+        return totalRows - 1;
     }
 
     private float timelineScrollBarTop(float top, float bottom) {
@@ -1696,6 +1715,17 @@ public final class EffectEditorImGuiView {
         playhead[0] = (float) eventBeat(workingEffects.get(index));
         seekAction.accept((double) playhead[0]);
         syncBuffers();
+    }
+
+    private static int firstMarkerAtOrAfter(List<TimelineMarker> markers, double beat) {
+        int low = 0;
+        int high = markers.size();
+        while (low < high) {
+            int middle = (low + high) >>> 1;
+            if (markers.get(middle).beat() < beat) low = middle + 1;
+            else high = middle;
+        }
+        return low;
     }
 
     private void toggleSelection(int index) {
