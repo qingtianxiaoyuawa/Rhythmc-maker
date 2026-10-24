@@ -6,6 +6,11 @@ import cn.frkovo.rhythmcmaker.chart.ChartTiming;
 import cn.frkovo.rhythmcmaker.chart.EditorTrackLayout;
 import cn.frkovo.rhythmcmaker.chart.PlaybackCoordinates;
 import cn.frkovo.rhythmcmaker.chart.TrackPlayback;
+import cn.frkovo.rhythmcmaker.client.playback.PotionEffectClearPolicy;
+import cn.frkovo.rhythmcmaker.client.playback.PotionDurationAtSeek;
+import cn.frkovo.rhythmcmaker.client.playback.PlaybackTimelineClock;
+import cn.frkovo.rhythmcmaker.client.playback.PersistentEffectStateFold;
+import cn.frkovo.rhythmcmaker.client.playback.TextDisplayEventFold;
 import cn.frkovo.rhythmcmaker.common.effect.EffectPayload;
 import cn.frkovo.rhythmcmaker.config.RhythmcMakerConfig;
 import cn.frkovo.rhythmcmaker.scene.SceneEditStorage;
@@ -660,6 +665,12 @@ public final class RhythmcMaker implements ModInitializer {
         }
         player.sendMessage(Text.literal("正在进入谱面制谱维度：" + chart.title), true);
         return 1;
+    }
+    private static void cancelPlaybackSceneImports(PlaybackSession session) {
+        SCENE_IMPORT_TASKS.removeIf(task -> session.sessionId.equals(task.playbackSessionId));
+        if (SCENE_IMPORT_TASKS.stream().noneMatch(task -> task.chart.id.equals(session.chart.id))) {
+            IMPORTING_CHARTS.remove(session.chart.id);
+        }
     }
     private static void processSceneImportTasks(MinecraftServer server) {
         SceneImportTask task = SCENE_IMPORT_TASKS.peek();
@@ -1483,6 +1494,7 @@ public final class RhythmcMaker implements ModInitializer {
         private final int centerX;
         private final int centerY;
         private final int centerZ;
+        private final UUID playbackSessionId;
         private ServerWorld world;
         private int width;
         private int height;
@@ -1503,11 +1515,15 @@ public final class RhythmcMaker implements ModInitializer {
         private BlockState[] states;
         private boolean loaded;
         private SceneImportTask(ChartManifest chart, Path file, int centerX, int centerY, int centerZ) {
+            this(chart, file, centerX, centerY, centerZ, null);
+        }
+        private SceneImportTask(ChartManifest chart, Path file, int centerX, int centerY, int centerZ, UUID playbackSessionId) {
             this.chart = chart;
             this.file = file;
             this.centerX = centerX;
             this.centerY = centerY;
             this.centerZ = centerZ;
+            this.playbackSessionId = playbackSessionId;
         }
         private boolean process(MinecraftServer server, int budget) throws IOException {
             if (!loaded) load();
@@ -2306,8 +2322,9 @@ private static void showSceneBoundary(MinecraftServer server) {
             for (net.minecraft.entity.effect.StatusEffectInstance effect : player.getStatusEffects()) {
                 originalEffects.add(new net.minecraft.entity.effect.StatusEffectInstance(effect));
             }
-            PlaybackSession session = new PlaybackSession(world, player.getX(), player.getY(), player.getZ(), player.getYaw(), player.getPitch(), chart, startSeconds, startNanos, mode, rate, originalEffects);
+            PlaybackSession session = new PlaybackSession(player.getUuid(), world, player.getX(), player.getY(), player.getZ(), player.getYaw(), player.getPitch(), chart, startSeconds, startNanos, mode, rate, originalEffects);
             PLAYBACK_SESSIONS.put(player.getUuid(), session);
+            session.rebuildPersistentEffectState(player, Math.nextDown(startSeconds));
             player.teleport(world, PLAYBACK_PLATFORM_X + 0.5, PLAYBACK_PLATFORM_Y + 1.0, PLAYBACK_PLATFORM_Z + 0.5, Set.of(), 180.0f, 0.0f, false);
         }
         player.sendMessage(Text.literal("开始" + ("scroll".equals(mode) ? "滚动" : "正式") + "播放：Beat " + startBeatIndex + "，" + rate + "x"), true);
@@ -2416,11 +2433,13 @@ private static void showSceneBoundary(MinecraftServer server) {
     }
     private static void cleanupPlaybackDisplayEntities(ServerWorld world, UUID playerId, String chartId) {
         String playerTag = "rhythmc_preview:" + playerId;
-        String effectTag = "rhythmc_effect:" + chartId;
+        String effectTag = "rhythmc_effect:" + playerId + ":" + chartId;
+        String legacyEffectTag = "rhythmc_effect:" + chartId;
         for (DisplayEntity.BlockDisplayEntity display : world.getEntitiesByType(EntityType.BLOCK_DISPLAY, entity -> entity.getCommandTags().contains(playerTag))) {
             display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
         }
-        for (DisplayEntity.TextDisplayEntity display : world.getEntitiesByType(EntityType.TEXT_DISPLAY, entity -> entity.getCommandTags().contains(effectTag))) {
+        for (DisplayEntity.TextDisplayEntity display : world.getEntitiesByType(EntityType.TEXT_DISPLAY,
+                entity -> entity.getCommandTags().contains(effectTag) || entity.getCommandTags().contains(legacyEffectTag))) {
             display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
         }
     }
@@ -2891,6 +2910,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
         PlaybackSession session = PLAYBACK_SESSIONS.remove(player.getUuid());
         if (session == null) return;
+        cancelPlaybackSceneImports(session);
         cleanupPlaybackDisplayEntities(session.world, player.getUuid(), session.chart.id);
         try {
             sendPlayerWeather(player, false, false);
@@ -2910,10 +2930,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             LOGGER.error("Failed to clean playback displays for {}", player.getUuid(), exception);
         } finally {
             if (session.formal) {
-                player.clearStatusEffects();
-                for (net.minecraft.entity.effect.StatusEffectInstance effect : session.originalStatusEffects) {
-                    player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(effect));
-                }
+                session.resetChartPotionEffects(player);
                 player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.ClearTitleS2CPacket(true));
             }
             if (session.formal && session.sceneChanged) {
@@ -3068,9 +3085,39 @@ private static void showSceneBoundary(MinecraftServer server) {
                     && (session.displays.containsValue(display) || session.displayPools.values().stream().anyMatch(pool -> pool.contains(display))));
             if (!active) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
         }
+        for (DisplayEntity.TextDisplayEntity display : world.getEntitiesByType(EntityType.TEXT_DISPLAY,
+                entity -> entity.getCommandTags().stream().anyMatch(tag -> tag.startsWith("rhythmc_effect:")))) {
+            boolean active = PLAYBACK_SESSIONS.values().stream().anyMatch(session -> session.world == world
+                    && (session.textDisplays.containsValue(display) || session.textDisplayPool.contains(display)));
+            if (!active) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+        }
     }
     private record HiddenNoteKey(int trackId, int noteType) {}
+    private static final class PlaybackTextDisplayEntity extends DisplayEntity.TextDisplayEntity {
+        private PlaybackTextDisplayEntity(ServerWorld world) {
+            super(EntityType.TEXT_DISPLAY, world);
+        }
+
+        @Override
+        public boolean shouldSave() {
+            return false;
+        }
+    }
+
+    private static final class PlaybackBlockDisplayEntity extends DisplayEntity.BlockDisplayEntity {
+        private PlaybackBlockDisplayEntity(ServerWorld world) {
+            super(EntityType.BLOCK_DISPLAY, world);
+        }
+
+        @Override
+        public boolean shouldSave() {
+            return false;
+        }
+    }
+
     private static final class PlaybackSession {
+        private final UUID ownerId;
+        private final UUID sessionId = UUID.randomUUID();
         private final ServerWorld world;
         private final double returnX, returnY, returnZ;
         private final float returnYaw, returnPitch;
@@ -3086,6 +3133,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final java.util.List<ChartManifest.Note> notes;
         private final java.util.List<JsonObject> effects;
         private final java.util.List<Double> effectTimes;
+        private final java.util.List<String> effectTypes;
         private final Set<HiddenNoteKey> hiddenNoteKeys = new java.util.HashSet<>();
         private final Map<HiddenNoteKey, java.util.ArrayDeque<DisplayEntity.BlockDisplayEntity>> displayPools = new java.util.HashMap<>();
         private final Map<Integer, Team> glowTeams = new java.util.HashMap<>();
@@ -3097,6 +3145,8 @@ private static void showSceneBoundary(MinecraftServer server) {
 
         private final double endSeconds;
         private final java.util.List<net.minecraft.entity.effect.StatusEffectInstance> originalStatusEffects;
+        private final Map<net.minecraft.util.Identifier, net.minecraft.entity.effect.StatusEffectInstance> originalStatusEffectsById = new java.util.HashMap<>();
+        private final long originalStatusEffectsCapturedAtTick;
         private int nextNoteIndex;
         private final Map<String, DisplayEntity.BlockDisplayEntity> displays = new java.util.HashMap<>();
         private final Map<String, DisplayEntity.TextDisplayEntity> textDisplays = new java.util.HashMap<>();
@@ -3106,7 +3156,9 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final Map<Integer, TrackPlayback.PoseBuffer> textDisplayPoseBuffers = new java.util.HashMap<>();
         private long textDisplayPoseUpdateId;
         private final Map<String, Integer> textDisplayTracks = new java.util.HashMap<>();
-        private final Map<String, Long> textDisplayExpiresAtNanos = new java.util.HashMap<>();
+        private final Map<String, Double> textDisplayExpiresAtSeconds = new java.util.HashMap<>();
+        private final Map<String, Double> textDisplaySyncUntilSeconds = new java.util.HashMap<>();
+        private final Set<String> activeChartPotionEffects = new java.util.HashSet<>();
         private final java.util.Set<String> hitNotes = new java.util.HashSet<>();
         private int nextEffectIndex;
         private long lastDisplayUpdateTick = Long.MIN_VALUE;
@@ -3128,8 +3180,21 @@ private static void showSceneBoundary(MinecraftServer server) {
             double corrected = Math.max(0.0, songSeconds);
             startSeconds = corrected;
             startNanos = now;
+            cancelPlaybackSceneImports(this);
+            for (DisplayEntity.BlockDisplayEntity display : displays.values()) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+            displays.clear();
+            clearDisplayPools();
+            String ownerDisplayTag = "rhythmc_preview:" + ownerId;
+            for (DisplayEntity.BlockDisplayEntity display : world.getEntitiesByType(EntityType.BLOCK_DISPLAY,
+                    entity -> entity.getCommandTags().contains(ownerDisplayTag))) {
+                display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+            }
+            hitNotes.clear();
             nextNoteIndex = 0;
-            while (nextNoteIndex < notes.size() && noteTimes.getOrDefault(notes.get(nextNoteIndex).id, Double.POSITIVE_INFINITY) < corrected) nextNoteIndex++;
+            while (nextNoteIndex < notes.size() && noteTimes.getOrDefault(notes.get(nextNoteIndex).id, Double.POSITIVE_INFINITY) < corrected) {
+                hitNotes.add(notes.get(nextNoteIndex).id);
+                nextNoteIndex++;
+            }
             rebuildPersistentEffectState(player, corrected);
             nextEffectIndex = 0;
             while (nextEffectIndex < effects.size() && effectSeconds(effects.get(nextEffectIndex)) <= corrected) nextEffectIndex++;
@@ -3140,29 +3205,30 @@ private static void showSceneBoundary(MinecraftServer server) {
             clearGlowTeam();
             hiddenNoteKeys.clear();
             observerGlowColor = Formatting.WHITE;
-            player.clearStatusEffects();
-            for (net.minecraft.entity.effect.StatusEffectInstance effect : originalStatusEffects) {
-                player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(effect));
-            }
-            int latestTimeEffect = -1;
+            resetChartPotionEffects(player);
             for (int index = 0; index < effects.size(); index++) {
                 JsonObject effect = effects.get(index);
                 double effectTime = effectSeconds(effect);
                 if (!Double.isFinite(effectTime) || effectTime > targetSeconds) break;
                 String type = effectType(effect);
-                if (type.equals("TIME")) {
-                    latestTimeEffect = index;
-                    continue;
+                if (type.equals("EFFECT") || type.equals("CLEAR_EFFECT")) {
+                    if (type.equals("EFFECT")) applyPotionProxy(player, effect, targetSeconds);
+                    else clearPotionEffect(player, effect);
                 }
-                if (type.equals("TITLE") || type.equals("MESSAGE") || type.equals("FIREWORK")) continue;
-                if (type.equals("EFFECT")) applyPotionProxy(player, effect, targetSeconds);
-                else playTrackEffectSafely(this, player, effect);
             }
-            if (latestTimeEffect >= 0) playTrackEffectSafely(this, player, effects.get(latestTimeEffect));
+            java.util.List<Integer> persistentIndexes = PersistentEffectStateFold.latestEventIndexes(effectTypes, effectTimes, targetSeconds);
+            boolean restoresArena = false;
+            for (int index : persistentIndexes) {
+                if (PersistentEffectStateFold.isArenaType(effectTypes.get(index))) restoresArena = true;
+                playTrackEffectSafely(this, player, effects.get(index));
+            }
+            if (sceneChanged && !restoresArena) restoreInitialPlaybackScene(world.getServer(), this);
+            initializeTextDisplays(targetSeconds);
             applyVisualState();
             updateTextDisplays(targetSeconds);
         }
-        private PlaybackSession(ServerWorld world, double returnX, double returnY, double returnZ, float returnYaw, float returnPitch, ChartManifest chart, double startSeconds, long startNanos, String mode, double rate, java.util.List<net.minecraft.entity.effect.StatusEffectInstance> originalStatusEffects) {
+        private PlaybackSession(UUID ownerId, ServerWorld world, double returnX, double returnY, double returnZ, float returnYaw, float returnPitch, ChartManifest chart, double startSeconds, long startNanos, String mode, double rate, java.util.List<net.minecraft.entity.effect.StatusEffectInstance> originalStatusEffects) {
+            this.ownerId = ownerId;
             this.world = world;
             this.returnX = returnX;
             this.returnY = returnY;
@@ -3179,12 +3245,20 @@ private static void showSceneBoundary(MinecraftServer server) {
             this.formal = !"scroll".equalsIgnoreCase(mode);
             this.rate = rate;
             this.originalStatusEffects = new java.util.ArrayList<>(originalStatusEffects);
+            this.originalStatusEffectsCapturedAtTick = world.getTime();
+            for (net.minecraft.entity.effect.StatusEffectInstance effect : originalStatusEffects) {
+                net.minecraft.util.Identifier id = net.minecraft.registry.Registries.STATUS_EFFECT.getId(effect.getEffectType().value());
+                if (id != null) originalStatusEffectsById.put(id, new net.minecraft.entity.effect.StatusEffectInstance(effect));
+            }
             this.notes = new java.util.ArrayList<>(chart.notes == null ? java.util.List.of() : chart.notes);
             this.effects = new java.util.ArrayList<>(chart.effects == null ? java.util.List.of() : chart.effects);
             this.effects.sort(java.util.Comparator.comparingDouble(this::effectSeconds));
             this.effectTimes = new java.util.ArrayList<>(this.effects.size());
-            for (JsonObject effect : this.effects) this.effectTimes.add(effectSeconds(effect));
-            initializeTextDisplays(startSeconds);
+            this.effectTypes = new java.util.ArrayList<>(this.effects.size());
+            for (JsonObject effect : this.effects) {
+                this.effectTimes.add(effectSeconds(effect));
+                this.effectTypes.add(effectType(effect));
+            }
             this.notes.removeIf(note -> note == null || note.id == null);
             this.notes.sort(java.util.Comparator.comparingDouble(note -> note.time));
             for (ChartManifest.Note note : this.notes) {
@@ -3320,11 +3394,12 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
         private void applyPotionProxy(ServerPlayerEntity player, JsonObject effect, double targetSeconds) {
             double elapsedSeconds = Math.max(0.0, targetSeconds - effectSeconds(effect));
-            int duration = potionDurationTicks(effect, rate) - (int) Math.ceil(elapsedSeconds * 20.0);
+            int duration = PotionDurationAtSeek.remainingTicks(potionDurationTicks(effect, 1.0), elapsedSeconds, rate);
             if (duration <= 0) return;
             applyPotionProxy(player, effect, duration);
         }
         private void applyPotionProxy(ServerPlayerEntity player, JsonObject effect, int duration) {
+            if (duration <= 0) return;
             String type = effectString(effect, "effectId", effectString(effect, "type", effectString(effect, "effect", effectString(effect, "potion", "UNKNOWN"))));
             if (type.isBlank() || type.equalsIgnoreCase("UNKNOWN")) {
                 LOGGER.warn("Skipping RhythMC potion effect without a type: {}", effect);
@@ -3338,8 +3413,9 @@ private static void showSceneBoundary(MinecraftServer server) {
                     return;
                 }
                 int amplifier = Math.max(0, Math.min(255, effectInt(effect, "amplifier", effectInt(effect, "level", 0))));
-                player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(entry, duration, amplifier,
+                boolean applied = player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(entry, duration, amplifier,
                         effectBoolean(effect, "ambient", false), false, true));
+                if (applied) activeChartPotionEffects.add(id.toString());
             } catch (RuntimeException exception) {
                 LOGGER.warn("Failed to apply RhythMC potion effect '{}': {}", type, exception);
             }
@@ -3348,27 +3424,73 @@ private static void showSceneBoundary(MinecraftServer server) {
             JsonObject properties = effectProperties(effect);
             com.google.gson.JsonElement effects = effect != null && effect.has("effects") ? effect.get("effects") : properties.get("effects");
             if (effects != null && effects.isJsonArray()) {
+                Set<String> requestedEffects = new java.util.HashSet<>();
                 for (com.google.gson.JsonElement value : effects.getAsJsonArray()) {
                     if (value == null || !value.isJsonPrimitive()) continue;
-                    clearPotionEffectValue(player, value.getAsString());
+                    try {
+                        requestedEffects.add(potionIdentifier(value.getAsString()).toString());
+                    } catch (RuntimeException ignored) {
+                    }
+                }
+                for (String id : PotionEffectClearPolicy.matchingActiveEffects(activeChartPotionEffects, requestedEffects, false, true)) {
+                    clearPotionEffectValue(player, id);
                 }
                 return;
             }
-            String type = effectString(effect, "type", effectString(effect, "effect", effectString(effect, "potion", effectString(effect, "effect-id", ""))));
-            if (type.isBlank()) {
-                player.clearStatusEffects();
+            com.google.gson.JsonElement effectValue = effect == null ? null : effect.get("effects");
+            if (effectValue == null) effectValue = properties.get("effects");
+            boolean explicitList = effectValue != null;
+            if (explicitList && effectValue.isJsonPrimitive()) {
+                Set<String> requestedEffects;
+                try {
+                    requestedEffects = Set.of(potionIdentifier(effectValue.getAsString()).toString());
+                } catch (RuntimeException ignored) {
+                    requestedEffects = Set.of();
+                }
+                for (String id : PotionEffectClearPolicy.matchingActiveEffects(activeChartPotionEffects, requestedEffects, false, true)) {
+                    clearPotionEffectValue(player, id);
+                }
                 return;
             }
-            clearPotionEffectValue(player, type);
+            for (String id : PotionEffectClearPolicy.matchingActiveEffects(activeChartPotionEffects, Set.of(), true, !explicitList)) {
+                clearPotionEffectValue(player, id);
+            }
         }
         private void clearPotionEffectValue(ServerPlayerEntity player, String type) {
             try {
-                var entry = net.minecraft.registry.Registries.STATUS_EFFECT.getEntry(potionIdentifier(type)).orElse(null);
+                net.minecraft.util.Identifier id = potionIdentifier(type);
+                if (!activeChartPotionEffects.remove(id.toString())) return;
+                var entry = net.minecraft.registry.Registries.STATUS_EFFECT.getEntry(id).orElse(null);
                 if (entry == null) LOGGER.warn("Unknown RhythMC potion effect to clear '{}': {}", type, type);
-                else player.removeStatusEffect(entry);
+                else {
+                    if (player.hasStatusEffect(entry)) player.removeStatusEffect(entry);
+                    restoreOriginalPotionEffect(player, id);
+                }
             } catch (RuntimeException exception) {
                 LOGGER.warn("Failed to clear RhythMC potion effect '{}': {}", type, exception);
             }
+        }
+        private void resetChartPotionEffects(ServerPlayerEntity player) {
+            for (String effectId : PotionEffectClearPolicy.matchingActiveEffects(activeChartPotionEffects, Set.of(), true, false)) {
+                net.minecraft.util.Identifier id = potionIdentifier(effectId);
+                var entry = net.minecraft.registry.Registries.STATUS_EFFECT.getEntry(id).orElse(null);
+                if (entry != null && player.hasStatusEffect(entry)) player.removeStatusEffect(entry);
+                restoreOriginalPotionEffect(player, id);
+            }
+            activeChartPotionEffects.clear();
+        }
+        private void restoreOriginalPotionEffect(ServerPlayerEntity player, net.minecraft.util.Identifier id) {
+            net.minecraft.entity.effect.StatusEffectInstance original = originalStatusEffectsById.get(id);
+            if (original == null) return;
+            if (original.isInfinite()) {
+                player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(original));
+                return;
+            }
+            long elapsedTicks = Math.max(0L, world.getTime() - originalStatusEffectsCapturedAtTick);
+            int remainingTicks = (int) Math.max(0L, original.getDuration() - elapsedTicks);
+            if (remainingTicks == 0) return;
+            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(original.getEffectType(), remainingTicks,
+                    original.getAmplifier(), original.isAmbient(), original.shouldShowParticles(), original.shouldShowIcon()));
         }
         private void applyTime(ServerPlayerEntity player, JsonObject effect) {
             long time = Math.max(0L, (long) effectDouble(effect, "time", effectDouble(effect, "timeOfDay", effectDouble(effect, "worldTime", effectDouble(effect, "value", world.getTimeOfDay())))));
@@ -3425,15 +3547,39 @@ private static void showSceneBoundary(MinecraftServer server) {
             }
         }
         private void initializeTextDisplays(double songTime) {
+            java.util.List<TextDisplayEventFold.Event> eventsToFold = new java.util.ArrayList<>();
             for (int index = 0; index < effects.size(); index++) {
                 JsonObject effect = effects.get(index);
                 double effectTime = effectTimes.get(index);
-                if (effectTime >= songTime) break;
+                if (effectTime > songTime) break;
                 String type = effectType(effect);
-                if (type.equals("TEXT_DISPLAY") || type.equals("TEXT_DISPLAY_EFFECT")
-                        || type.equals("TEXT_DISPLAY_SYNC_TRACK") || type.equals("TEXT_DISPLAY_DESYNC_TRACK")
-                        || type.equals("TEXT_DISPLAY_REMOVE") || type.equals("HOLOGRAM") || type.equals("REMOVE_HOLOGRAM")) {
-                    applyTextEffect(effect, true, effectTime, songTime);
+                TextDisplayEventFold.Kind kind = TextDisplayEventFold.Kind.from(type);
+                if (kind == null) continue;
+                if (kind == TextDisplayEventFold.Kind.DISPLAY) {
+                    String text = effectString(effect, "text", effectString(effect, "content", ""));
+                    if (text.isBlank()) text = textDisplayContents(effect);
+                    if (text.isBlank()) kind = TextDisplayEventFold.Kind.CLEAR_DISPLAY;
+                }
+                String id = effectString(effect, "id", effectString(effect, "displayId", "rhythmc_effect_" + index));
+                eventsToFold.add(new TextDisplayEventFold.Event(id, kind, index));
+            }
+            Map<String, TextDisplayEventFold.State> states = TextDisplayEventFold.fold(eventsToFold);
+            for (var entry : states.entrySet()) {
+                TextDisplayEventFold.State state = entry.getValue();
+                int baseIndex = state.displayIndex();
+                JsonObject base = effects.get(baseIndex);
+                long baseDuration = (long) effectDouble(base, "duration", 0.0);
+                double baseExpiresAt = PlaybackTimelineClock.songTimeAfterWallMillis(effectTimes.get(baseIndex), baseDuration, rate);
+                if (baseDuration > 0 && baseExpiresAt <= songTime) continue;
+                applyTextEffect(base, true, effectTimes.get(baseIndex), songTime, entry.getKey());
+                for (int transformIndex : state.transformIndexes()) {
+                    JsonObject transform = effects.get(transformIndex);
+                    applyTextEffect(transform, true, effectTimes.get(transformIndex), songTime, entry.getKey());
+                }
+                if (state.synchronizationIndex() > state.visualStartIndex()) {
+                    int synchronizationIndex = state.synchronizationIndex();
+                    JsonObject synchronization = effects.get(synchronizationIndex);
+                    applyTextEffect(synchronization, true, effectTimes.get(synchronizationIndex), songTime, entry.getKey());
                 }
             }
         }
@@ -3486,25 +3632,31 @@ private static void showSceneBoundary(MinecraftServer server) {
             textDisplayAnchors.clear();
             textDisplayLastPoses.clear();
             textDisplayTracks.clear();
-            textDisplayExpiresAtNanos.clear();
+            textDisplayExpiresAtSeconds.clear();
+            textDisplaySyncUntilSeconds.clear();
         }
         private void updateTextDisplays(double songTime) {
-            long now = System.nanoTime();
             double beat = timing.secondsToBeat(songTime - chart.offsetMillis / 1000.0);
             long poseUpdateId = ++textDisplayPoseUpdateId;
             for (var iterator = textDisplays.entrySet().iterator(); iterator.hasNext();) {
                 var entry = iterator.next();
                 String id = entry.getKey();
                 DisplayEntity.TextDisplayEntity display = entry.getValue();
-                Long expires = textDisplayExpiresAtNanos.get(id);
-                if (expires != null && now >= expires) {
-                    releaseTextDisplay(id, display);
+                Double expires = textDisplayExpiresAtSeconds.get(id);
+                if (expires != null && songTime >= expires) {
                     iterator.remove();
+                    releaseTextDisplay(id, display);
                     textDisplayAnchors.remove(id);
                     textDisplayLastPoses.remove(id);
                     textDisplayTracks.remove(id);
-                    textDisplayExpiresAtNanos.remove(id);
+                    textDisplayExpiresAtSeconds.remove(id);
+                    textDisplaySyncUntilSeconds.remove(id);
                     continue;
+                }
+                Double syncUntil = textDisplaySyncUntilSeconds.get(id);
+                if (syncUntil != null && songTime >= syncUntil) {
+                    textDisplaySyncUntilSeconds.remove(id);
+                    textDisplayTracks.remove(id);
                 }
                 Integer track = textDisplayTracks.get(id);
                 double[] anchor = textDisplayAnchors.get(id);
@@ -3530,11 +3682,17 @@ private static void showSceneBoundary(MinecraftServer server) {
             }
         }
         private void applyTextEffect(JsonObject effect) {
-            applyTextEffect(effect, false, 0.0, 0.0);
+            double now = System.nanoTime();
+            double currentSongTime = startSeconds + Math.max(0.0, now - startNanos) / 1_000_000_000.0 * rate;
+            applyTextEffect(effect, false, effectSeconds(effect), currentSongTime);
         }
         private void applyTextEffect(JsonObject effect, boolean bootstrap, double effectTime, double targetTime) {
             String type = effectType(effect);
             String id = effectString(effect, "id", effectString(effect, "displayId", "rhythmc_effect_" + textDisplays.size()));
+            applyTextEffect(effect, bootstrap, effectTime, targetTime, id);
+        }
+        private void applyTextEffect(JsonObject effect, boolean bootstrap, double effectTime, double targetTime, String id) {
+            String type = effectType(effect);
             try {
                 if (type.equals("TEXT_DISPLAY_REMOVE") || type.equals("REMOVE_HOLOGRAM")) {
                     DisplayEntity.TextDisplayEntity display = textDisplays.remove(id);
@@ -3542,7 +3700,8 @@ private static void showSceneBoundary(MinecraftServer server) {
                     textDisplayAnchors.remove(id);
                     textDisplayLastPoses.remove(id);
                     textDisplayTracks.remove(id);
-                    textDisplayExpiresAtNanos.remove(id);
+                    textDisplayExpiresAtSeconds.remove(id);
+                    textDisplaySyncUntilSeconds.remove(id);
                     return;
                 }
                 if (type.equals("TEXT_DISPLAY_EFFECT")) {
@@ -3551,28 +3710,46 @@ private static void showSceneBoundary(MinecraftServer server) {
                 }
                 if (type.equals("TEXT_DISPLAY_DESYNC_TRACK")) {
                     textDisplayTracks.remove(id);
+                    textDisplaySyncUntilSeconds.remove(id);
                     return;
                 }
                 if (type.equals("TEXT_DISPLAY_SYNC_TRACK")) {
                     int track = effectInt(effect, "track", 0);
                     textDisplayTracks.put(id, track);
                     long duration = Math.max(0L, (long) effectDouble(effect, "duration", 31_536_000_000L));
-                    long remaining = bootstrap ? Math.max(0L, Math.round(effectTime * 1000.0 + duration - targetTime * 1000.0)) : duration;
-                    if (remaining > 0) textDisplayExpiresAtNanos.put(id, System.nanoTime() + remaining * 1_000_000L);
-                    else textDisplayExpiresAtNanos.remove(id);
+                    double expiresAt = PlaybackTimelineClock.songTimeAfterWallMillis(bootstrap ? effectTime : targetTime, duration, rate);
+                    if (duration == 0) textDisplaySyncUntilSeconds.remove(id);
+                    else if (expiresAt > targetTime) textDisplaySyncUntilSeconds.put(id, expiresAt);
+                    else {
+                        textDisplaySyncUntilSeconds.remove(id);
+                        textDisplayTracks.remove(id);
+                    }
                     return;
                 }
                 String value = effectString(effect, "text", effectString(effect, "content", ""));
                 if (value.isBlank()) value = textDisplayContents(effect);
+                long duration = (long) effectDouble(effect, "duration", 0.0);
                 String positionKey = type.equals("HOLOGRAM") ? "location" : "position";
                 double[] position = relativeTextDisplayPosition(effect, positionKey);
                 textDisplayAnchors.put(id, position.clone());
+                double expiresAt = PlaybackTimelineClock.songTimeAfterWallMillis(bootstrap ? effectTime : targetTime, duration, rate);
+                if (duration > 0 && expiresAt <= targetTime) {
+                    DisplayEntity.TextDisplayEntity display = textDisplays.remove(id);
+                    if (display != null) releaseTextDisplay(id, display);
+                    textDisplayAnchors.remove(id);
+                    textDisplayLastPoses.remove(id);
+                    textDisplayTracks.remove(id);
+                    textDisplayExpiresAtSeconds.remove(id);
+                    textDisplaySyncUntilSeconds.remove(id);
+                    return;
+                }
                 if (value.isBlank()) {
                     DisplayEntity.TextDisplayEntity display = textDisplays.remove(id);
                     if (display != null) releaseTextDisplay(id, display);
                     textDisplayLastPoses.remove(id);
                     textDisplayTracks.remove(id);
-                    textDisplayExpiresAtNanos.remove(id);
+                    textDisplayExpiresAtSeconds.remove(id);
+                    textDisplaySyncUntilSeconds.remove(id);
                     return;
                 }
                 double[] rotation = effectVector(effect, "rotation", new double[]{0.0, 0.0, 0.0});
@@ -3590,10 +3767,8 @@ private static void showSceneBoundary(MinecraftServer server) {
                 textDisplayLastPoses.put(id, new double[]{position[0], position[1], position[2], rotation[0], rotation[1], rotation[2], scale[0], scale[1], scale[2]});
                 setTextDisplayShadow(display, effectBoolean(effect, "shadowed", false));
                 display.setGlowing(effectBoolean(effect, "glowing", false));
-                long duration = (long) effectDouble(effect, "duration", 0.0);
-                long remaining = bootstrap ? Math.max(0L, Math.round(effectTime * 1000.0 + duration - targetTime * 1000.0)) : duration;
-                if (remaining > 0) textDisplayExpiresAtNanos.put(id, System.nanoTime() + remaining * 1_000_000L);
-                else textDisplayExpiresAtNanos.remove(id);
+                if (duration > 0 && expiresAt > targetTime) textDisplayExpiresAtSeconds.put(id, expiresAt);
+                else textDisplayExpiresAtSeconds.remove(id);
                 display.setInterpolationDuration(bootstrap ? 0 : 1);
             } catch (RuntimeException exception) {
                 LOGGER.error("Failed to apply RhythMC text or hologram effect: type={}, id={}, beat={}", type, id, effectDouble(effect, "beat", -1.0), exception);
@@ -3602,7 +3777,8 @@ private static void showSceneBoundary(MinecraftServer server) {
                 textDisplayAnchors.remove(id);
                 textDisplayLastPoses.remove(id);
                 textDisplayTracks.remove(id);
-                textDisplayExpiresAtNanos.remove(id);
+                textDisplayExpiresAtSeconds.remove(id);
+                textDisplaySyncUntilSeconds.remove(id);
             }
         }
         private DisplayEntity.TextDisplayEntity acquireTextDisplay(String id, double[] initialPosition) {
@@ -3618,8 +3794,8 @@ private static void showSceneBoundary(MinecraftServer server) {
             return display;
         }
         private DisplayEntity.TextDisplayEntity createTextDisplay(double[] initialPosition) {
-            DisplayEntity.TextDisplayEntity display = new DisplayEntity.TextDisplayEntity(EntityType.TEXT_DISPLAY, world);
-            display.addCommandTag("rhythmc_effect:" + chart.id);
+            DisplayEntity.TextDisplayEntity display = new PlaybackTextDisplayEntity(world);
+            display.addCommandTag("rhythmc_effect:" + ownerId + ":" + chart.id);
             setTextDisplayTransform(display, initialPosition, new double[]{0.0, 0.0, 0.0}, new double[]{1.0, 1.0, 1.0});
             display.setText(Text.empty());
             display.setTextOpacity((byte) 0);
@@ -3709,7 +3885,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 if (Files.isRegularFile(sceneFile)) {
                     sceneChanged = true;
                     clearHiddenNotesForArenaSwitch();
-                    SCENE_IMPORT_TASKS.offer(new SceneImportTask(chart, sceneFile, PLAYBACK_PLATFORM_X, PLAYBACK_PLATFORM_Y, PLAYBACK_PLATFORM_Z));
+                    SCENE_IMPORT_TASKS.offer(new SceneImportTask(chart, sceneFile, PLAYBACK_PLATFORM_X, PLAYBACK_PLATFORM_Y, PLAYBACK_PLATFORM_Z, sessionId));
                     IMPORTING_CHARTS.add(chart.id);
                     return;
                 }
@@ -3734,7 +3910,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 }
                 sceneChanged = true;
                 clearHiddenNotesForArenaSwitch();
-                SCENE_IMPORT_TASKS.offer(new SceneImportTask(chart, sceneFile, PLAYBACK_PLATFORM_X, PLAYBACK_PLATFORM_Y, PLAYBACK_PLATFORM_Z));
+                SCENE_IMPORT_TASKS.offer(new SceneImportTask(chart, sceneFile, PLAYBACK_PLATFORM_X, PLAYBACK_PLATFORM_Y, PLAYBACK_PLATFORM_Z, sessionId));
                 IMPORTING_CHARTS.add(chart.id);
             } catch (IOException | RuntimeException exception) {
                 LOGGER.warn("Failed to queue RhythMC arena effect '{}'", arena, exception);
@@ -3812,8 +3988,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             DisplayEntity.BlockDisplayEntity display = pool.pollFirst();
             boolean fresh = display == null || display.isRemoved();
             if (fresh) {
-                display = EntityType.BLOCK_DISPLAY.create(world, SpawnReason.COMMAND);
-                if (display == null) return null;
+                display = new PlaybackBlockDisplayEntity(world);
             }
             display.setNoGravity(true);
             display.setInvulnerable(true);
