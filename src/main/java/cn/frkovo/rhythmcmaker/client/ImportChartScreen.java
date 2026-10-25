@@ -172,9 +172,11 @@ private void importLegacyMenu(FlowLayout page) {
         Path manifest = draft.manifest;
         Path layout = draft.layout;
         Path song = draft.song;
-        List<ClientChartAccess.ImportedScene> importedScenes = draft.scenes.stream()
-                .map(scene -> new ClientChartAccess.ImportedScene(scene.schem, scene.info))
-                .toList();
+        List<ClientChartAccess.ImportedScene> importedScenes = new ArrayList<>();
+        for (int sceneIndex = 0; sceneIndex < draft.scenes.size(); sceneIndex++) {
+            Scene scene = draft.scenes.get(sceneIndex);
+            importedScenes.add(new ClientChartAccess.ImportedScene(scene.schem, scene.info, sceneIndex == 0));
+        }
         ClientChartAccess.status("正在导入 3.0 谱面，请稍候...");
         java.util.concurrent.CompletableFuture.supplyAsync(() -> {
             try {

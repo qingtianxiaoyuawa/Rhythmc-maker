@@ -9,6 +9,9 @@ import io.wispforest.owo.ui.core.Surface;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ConfirmScreen;
 import net.minecraft.item.ItemStack;
+import net.minecraft.text.ClickEvent;
+import net.minecraft.text.HoverEvent;
+import net.minecraft.text.MutableText;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 
@@ -77,14 +80,14 @@ final class ExportChartScreen extends RhythmcScreen {
             if (client.getServer() == null) throw new IOException("当前版本仅支持单人制谱器世界");
             client.getServer().execute(() -> {
                 try {
-                    ClientChartAccess.exportRhythmc3(chart);
-                    client.execute(() -> exportSucceeded(chart.title, exportWarnings));
+                    java.nio.file.Path exportFolder = ClientChartAccess.exportRhythmc3(chart);
+                    client.execute(() -> exportSucceeded(exportFolder, exportWarnings));
                 } catch (IOException | RuntimeException exception) {
-                    client.execute(() -> ClientChartAccess.status("导出失败：" + exception.getMessage()));
+                    client.execute(() -> ClientChartAccess.status("导出失败，请查看 latest.log"));
                 }
             });
         } catch (IOException exception) {
-            ClientChartAccess.status("保存导出信息失败：" + exception.getMessage());
+            ClientChartAccess.status("保存导出信息失败，请查看 latest.log");
         }
     }
 
@@ -92,11 +95,14 @@ final class ExportChartScreen extends RhythmcScreen {
         return value == Math.rint(value) ? Integer.toString((int) value) : Double.toString(value);
     }
 
-    private void exportSucceeded(String chartTitle, boolean exportWarnings) {
+    private void exportSucceeded(java.nio.file.Path exportFolder, boolean exportWarnings) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player == null) return;
-        ClientChartAccess.status("RhythMC 3.0 导出成功：“" + chartTitle + "”");
-        if (exportWarnings) ClientChartAccess.statusWarning("RhythMC 3.0 导出：已忽略 Maker 本地预览属性");
+        MutableText message = Text.literal("导出成功（点击打开）").styled(style -> style
+                .withClickEvent(new ClickEvent.OpenFile(exportFolder.toAbsolutePath().normalize()))
+                .withHoverEvent(new HoverEvent.ShowText(Text.literal("点击打开导出文件夹"))));
+        if (exportWarnings) message.append(Text.literal("（已忽略 Maker 本地预览属性）").formatted(Formatting.YELLOW));
+        client.player.sendMessage(message, false);
     }
 
     @Override

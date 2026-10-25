@@ -77,19 +77,19 @@ final class ClientChartAccess {
         return ChartStorage.importRhythmc3(server, difficultyFile, manifestFile, layoutFile, stagedAudio);
     }
     static void installImportedScenes(ChartManifest chart, List<ImportedScene> scenes) throws IOException {
-        ChartStorage.installImportedScenes(server(), chart, scenes.stream().map(scene -> new ChartStorage.ImportedScene(scene.schem(), scene.info())).toList());
+        ChartStorage.installImportedScenes(server(), chart, scenes.stream().map(scene -> new ChartStorage.ImportedScene(scene.schem(), scene.info(), scene.initial())).toList());
     }
     static void installImportedScenes(MinecraftServer server, ChartManifest chart, List<ImportedScene> scenes) throws IOException {
-        ChartStorage.installImportedScenes(server, chart, scenes.stream().map(scene -> new ChartStorage.ImportedScene(scene.schem(), scene.info())).toList());
+        ChartStorage.installImportedScenes(server, chart, scenes.stream().map(scene -> new ChartStorage.ImportedScene(scene.schem(), scene.info(), scene.initial())).toList());
     }
     static ChartManifest importRhythmc2(Path difficultyFile, Path stagedAudio, double bpm, String difficulty, double level) throws IOException { return ChartStorage.importRhythmc2(server(), difficultyFile, stagedAudio, bpm, difficulty, level); }
     static ChartManifest importRhythmc3(Path difficultyFile, Path manifestFile, Path stagedAudio, List<ImportedScene> scenes) throws IOException {
         return importRhythmc3(difficultyFile, manifestFile, null, stagedAudio, scenes);
     }
     static ChartManifest importRhythmc3(Path difficultyFile, Path manifestFile, Path layoutFile, Path stagedAudio, List<ImportedScene> scenes) throws IOException {
-        return ChartStorage.importRhythmc3(server(), difficultyFile, manifestFile, layoutFile, stagedAudio, scenes.stream().map(scene -> new ChartStorage.ImportedScene(scene.schem(), scene.info())).toList());
+        return ChartStorage.importRhythmc3(server(), difficultyFile, manifestFile, layoutFile, stagedAudio, scenes.stream().map(scene -> new ChartStorage.ImportedScene(scene.schem(), scene.info(), scene.initial())).toList());
     }
-    record ImportedScene(Path schem, Path info) {}
+    record ImportedScene(Path schem, Path info, boolean initial) {}
 
     static void setActiveChart(ChartManifest chart) {
         refreshGeneration++;

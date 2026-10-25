@@ -179,12 +179,6 @@ public final class RhythmcMakerClient implements ClientModInitializer {
                 }
             }
             if (ClientSceneAccess.operationBusy() && client.currentScreen != null && isRhythmcScreen(client.currentScreen)) client.setScreen(null);
-            if (ClientSceneAccess.operationBusy()) {
-                RhythmcMaker.EditorOperationProgress progress = client.player == null ? null : RhythmcMaker.editorOperationProgress(client.player.getUuid());
-                if (progress != null && client.player != null && client.world != null && client.world.getTime() % 20L == 0L) {
-                    client.player.sendMessage(Text.literal(progress.label() + "：" + progress.percent() + "%"), true);
-                }
-            }
             updateEditorSidebarSnapshot(client);
             while (settingsKey.wasPressed()) if (!ClientSceneAccess.operationBusy()) client.setScreen(new PlaceholderScreen("设置"));
             boolean inPlaybackArea = client.player != null && isEditorDimension(client) && Math.abs(client.player.getX() - 200.5) < 2.0 && Math.abs(client.player.getY() - 66.0) < 2.0 && Math.abs(client.player.getZ() - 0.0) < 2.0;

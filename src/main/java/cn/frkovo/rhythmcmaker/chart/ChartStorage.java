@@ -78,7 +78,7 @@ public final class ChartStorage {
         return destination;
     }
 
-    public record ImportedScene(Path schem, Path info) {}
+    public record ImportedScene(Path schem, Path info, boolean initial) {}
 
     public static ChartManifest importRhythmc2(MinecraftServer server, Path difficultyFile, Path stagedAudio, double bpm, String difficulty, double level) throws IOException {
         JsonObject legacyRoot = JsonParser.parseString(readChartText(difficultyFile)).getAsJsonObject();
@@ -126,23 +126,22 @@ public final class ChartStorage {
     }
 
     public static void installImportedScenes(MinecraftServer server, ChartManifest chart, List<ImportedScene> scenes) throws IOException {
-        List<ImportedScene> orderedScenes = new ArrayList<>();
-        if (scenes != null) {
-            ImportedScene initialScene = scenes.stream().filter(scene -> scene != null && scene.info() != null
-                    && (sceneKey(scene.info(), "").equals(chart.initialArena) || sceneIsInitial(scene.info()))).findFirst().orElse(null);
-            if (initialScene != null) orderedScenes.add(initialScene);
-            for (ImportedScene scene : scenes) if (scene != initialScene) orderedScenes.add(scene);
-        }
-        int sceneIndex = 1;
-        for (ImportedScene importedScene : orderedScenes) {
+        List<ImportedScene> importedScenes = scenes == null ? List.of() : scenes;
+        long initialSceneCount = importedScenes.stream().filter(scene -> scene != null && scene.initial()).count();
+        if (initialSceneCount > 1) throw new IOException("只能导入一个初始场景");
+        int sceneIndex = 2;
+        for (ImportedScene importedScene : importedScenes) {
             if (importedScene == null || importedScene.schem() == null || importedScene.info() == null
                     || !Files.isRegularFile(importedScene.schem()) || !Files.isRegularFile(importedScene.info())) continue;
-            String sceneName = sceneKey(importedScene.info(), sceneIndex == 1 ? "initial" : "scene" + sceneIndex);
-            String binding = "scene-editor:" + sceneIndex;
-            chart.arenaBindings.put(sceneName, binding);
-            if (sceneIndex == 1 && chart.initialArena != null && !chart.initialArena.isBlank()) chart.arenaBindings.put(chart.initialArena, binding);
+            String sceneName = sceneKey(importedScene.info(), importedScene.initial() ? "initial" : "scene" + sceneIndex);
+            if (importedScene.initial()) {
+                chart.arenaBindings.put(sceneName, "scene-editor:1");
+                continue;
+            }
+            chart.arenaBindings.put(sceneName, "scene-editor:" + sceneIndex);
             sceneIndex++;
         }
+        if (chart.initialArena != null && !chart.initialArena.isBlank()) chart.arenaBindings.put(chart.initialArena, "scene-editor:1");
         if (chart.effects != null) for (JsonObject effect : chart.effects) {
             if (effect == null) continue;
             JsonObject properties = effect.has("properties") && effect.get("properties").isJsonObject() ? effect.getAsJsonObject("properties") : effect;
@@ -151,7 +150,7 @@ public final class ChartStorage {
             String path = chart.arenaBindings.get(arena);
             if (path != null) properties.addProperty("arenaPath", path);
         }
-        RhythmcMaker.installImportedScenes(server, chart, orderedScenes);
+        RhythmcMaker.installImportedScenes(server, chart, importedScenes);
     }
 
     public static ChartManifest importRhythmc3(MinecraftServer server, Path difficultyFile, Path manifestFile, Path stagedAudio) throws IOException {
@@ -515,9 +514,6 @@ public final class ChartStorage {
         } catch (RuntimeException exception) { throw new IOException("无法解析 YAML：" + file.getFileName(), exception); }
     }
     private static String yamlString(Map<String, Object> values, String key, String fallback) { Object value = values.get(key); return value == null || value.toString().isBlank() ? fallback : value.toString(); }
-    private static boolean sceneIsInitial(Path file) {
-        try { return "initial".equalsIgnoreCase(yamlString(readYaml(file), "type", "")); } catch (IOException ignored) { return false; }
-    }
     private static String sceneKey(Path file, String fallback) {
         try { return yamlString(readYaml(file), "name", fallback); } catch (IOException ignored) { return fallback; }
     }

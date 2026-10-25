@@ -62,7 +62,7 @@ final class ChartDetailScreen extends RhythmcScreen {
             }
             client.player.networkHandler.sendChatCommand("rhythmc_enter " + chart.id);
         } catch (IOException | NumberFormatException exception) {
-            ClientChartAccess.status("进入制谱器失败：" + exception.getMessage());
+            ClientChartAccess.status("进入制谱器失败，请查看 latest.log");
         }
     }
 

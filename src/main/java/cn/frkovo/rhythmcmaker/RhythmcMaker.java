@@ -641,7 +641,7 @@ public final class RhythmcMaker implements ModInitializer {
             SELECTED_START_BEATS.put(player.getUuid(), Math.max(1, Math.min(Math.max(1, chart.beatCount), chart.selectedStartBeat)));
             if (!hasEditorTrack(chart)) {
                 restoreEditorTrackFoundation(editor, 0, chart.trackLength, laneCount(chart));
-                extendEditorArea(editor, 0, chart.trackLength, chartBeats(source.getServer(), chartId), laneCount(chart));
+                extendEditorArea(editor, 0, chart.trackLength, chartBeats(source.getServer(), chartId), laneCount(chart), player.getUuid());
             }
             if (!chart.sceneInitialized) {
                 Path initialScene = SceneEditStorage.schematicPath(source.getServer(), chart.id, 1);
@@ -850,7 +850,6 @@ public final class RhythmcMaker implements ModInitializer {
             if (editor != null) {
                 EditorTrackRebuildTask rebuildTask = new EditorTrackRebuildTask(editor.getRegistryKey(), 0, previousTrackLength, chart.trackLength, targetDivisions, targetLaneCount, previousLaneCount, player.getUuid(), previousBeat);
                 EDITOR_TRACK_REBUILD_TASKS.put(editor.getRegistryKey(), rebuildTask);
-                player.sendMessage(Text.literal("正在调整制谱器轨道：0%（0/" + rebuildTask.totalWork + "）"), true);
             }
             if (editor == null) {
                 player.sendMessage(Text.literal("制谱器轨道已更新为 " + laneCount(chart) + " × " + divisionsPerBeat(chart)), true);
@@ -886,7 +885,6 @@ public final class RhythmcMaker implements ModInitializer {
         TrackSnapTask task = new TrackSnapTask(player, chart, world, original);
         TRACK_SNAP_TASKS.put(player.getUuid(), task);
         beginSceneOperation(player.getUuid(), "正在吸附中：0%（0/" + task.total + "）");
-        player.sendMessage(Text.literal("正在吸附中"), true);
         return 1;
     }
 
@@ -1371,7 +1369,7 @@ public final class RhythmcMaker implements ModInitializer {
         SceneEditStorage.save(server, chart.id, scenes);
         java.util.List<SceneImportTask> pending = new java.util.ArrayList<>();
         int nextIndex = scenes.stream().mapToInt(scene -> scene.index).max().orElse(0) + 1;
-        ImportedScene initial = imported.get(0);
+        ImportedScene initial = imported.stream().filter(scene -> scene != null && scene.initial()).findFirst().orElse(null);
         if (isCompleteImportedScene(initial)) {
             String importedInitialName = readSceneName(initial.info(), "");
             String initialSceneName = importedInitialName.isBlank() ? chart.initialArena : importedInitialName;
@@ -1382,9 +1380,8 @@ public final class RhythmcMaker implements ModInitializer {
             chart.sceneInitialized = true;
             pending.add(new SceneImportTask(chart, initial.schem(), PLAYBACK_PLATFORM_X, PLAYBACK_PLATFORM_Y, PLAYBACK_PLATFORM_Z));
         }
-        for (int sourceIndex = 1; sourceIndex < imported.size(); sourceIndex++) {
-            ImportedScene importedScene = imported.get(sourceIndex);
-            if (!isCompleteImportedScene(importedScene)) continue;
+        for (ImportedScene importedScene : imported) {
+            if (importedScene == null || importedScene.initial() || !isCompleteImportedScene(importedScene)) continue;
             int sceneIndex = nextIndex++;
             SceneEditStorage.Scene scene = new SceneEditStorage.Scene(sceneIndex);
             scene.name = readSceneName(importedScene.info(), "场景" + sceneIndex);
@@ -1678,7 +1675,6 @@ public final class RhythmcMaker implements ModInitializer {
             }
             if (!(player.getEntityWorld() instanceof ServerWorld world)) return 0;
             queueSceneCapture(world, chart.id, scene.index, scene.x, player.getUuid(), true);
-            player.sendMessage(Text.literal("正在保存场景结构…"), true);
             return 1;
         } catch (IOException exception) {
             ACTIVE_SCENE_EDITORS.remove(player.getUuid());
@@ -1744,6 +1740,9 @@ public final class RhythmcMaker implements ModInitializer {
         for (SceneEditorAreaTask task : SCENE_EDITOR_AREA_TASKS.values()) {
             if (playerId.equals(task.operationPlayerId)) return true;
         }
+        for (EditorAreaTask task : EDITOR_AREA_TASKS.values()) {
+            if (playerId.equals(task.operationPlayerId)) return true;
+        }
         return false;
     }
 
@@ -1754,6 +1753,11 @@ public final class RhythmcMaker implements ModInitializer {
             int completed = Math.min(rebuild.newLength, rebuild.cursor)
                     + Math.max(0, Math.min(rebuild.oldLength - rebuild.newLength, rebuild.clearCursor - rebuild.newLength));
             return new EditorOperationProgress("正在调整制谱器轨道", completed, Math.max(1, rebuild.totalWork));
+        }
+        for (EditorAreaTask editorArea : EDITOR_AREA_TASKS.values()) {
+            if (playerId.equals(editorArea.operationPlayerId)) {
+                return new EditorOperationProgress("正在生成制谱器轨道", editorArea.cursor, editorArea.totalBeats);
+            }
         }
         TrackSnapTask snap = TRACK_SNAP_TASKS.get(playerId);
         if (snap != null) return new EditorOperationProgress("正在吸附音符", snap.cursor, Math.max(1, snap.total));
@@ -4543,6 +4547,10 @@ private static void showSceneBoundary(MinecraftServer server) {
     }
 
     private static void extendEditorArea(ServerWorld world, int x, int length, int divisions, int laneCount) {
+        extendEditorArea(world, x, length, divisions, laneCount, null);
+    }
+
+    private static void extendEditorArea(ServerWorld world, int x, int length, int divisions, int laneCount, UUID operationPlayerId) {
         int totalBeats = Math.max(8, length);
         divisions = EditorTrackLayout.boundedDivisionsPerBeat(divisions);
         laneCount = EditorTrackLayout.supportedLaneCount(laneCount);
@@ -4550,12 +4558,13 @@ private static void showSceneBoundary(MinecraftServer server) {
         final int targetLaneCount = laneCount;
         EDITOR_AREA_TASKS.compute(world.getRegistryKey(), (key, existing) -> {
             if (existing == null || existing.x != x || existing.divisions != targetDivisions || existing.laneCount != targetLaneCount) {
-                EditorAreaTask task = new EditorAreaTask(x, totalBeats, targetDivisions, targetLaneCount);
+                EditorAreaTask task = new EditorAreaTask(x, totalBeats, targetDivisions, targetLaneCount, operationPlayerId);
                 copyDecorationColumn(world, x, -3, DECORATION_TEMPLATES.get("start"), targetLaneCount);
                 task.cursor = 1;
                 return task;
             }
             existing.totalBeats = Math.max(existing.totalBeats, totalBeats);
+            if (operationPlayerId != null) existing.operationPlayerId = operationPlayerId;
             return existing;
         });
     }
@@ -4575,24 +4584,19 @@ private static void showSceneBoundary(MinecraftServer server) {
                 copyDecorationColumn(world, task.x, targetZ, DECORATION_TEMPLATES.get(template), task.laneCount);
                 task.cursor++;
             }
-            int progressPercent = Math.min(100, task.cursor * 100 / task.totalBeats);
-            if (progressPercent != task.lastProgressPercent) {
-                task.lastProgressPercent = progressPercent;
-                ChartManifest chart = CHART_CACHE_BY_WORLD.get(world.getRegistryKey());
-                if (chart != null) for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
-                    if (chart.id.equals(ACTIVE_CHARTS.get(player.getUuid()))) {
-                        player.sendMessage(Text.literal("制谱器轨道生成：" + progressPercent + "%（" + Math.min(task.cursor, task.totalBeats) + "/" + task.totalBeats + "）"), true);
-                    }
-                }
-            }
             if (task.cursor >= task.totalBeats) {
                 buildEditorTrackEndBarrier(world, task.x, task.totalBeats, task.laneCount);
                 markEditorTrackBuilt(server, world.getRegistryKey(), task.totalBeats, task.laneCount, task.divisions);
                 markPendingStartBeat(server, world);
                 EDITOR_AREA_TASKS.remove(entry.getKey(), task);
-                ChartManifest chart = CHART_CACHE_BY_WORLD.get(world.getRegistryKey());
-                if (chart != null) for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
-                    if (chart.id.equals(ACTIVE_CHARTS.get(player.getUuid()))) player.sendMessage(Text.literal("制谱器轨道生成完成"), true);
+                if (task.operationPlayerId != null) {
+                    ServerPlayerEntity player = server.getPlayerManager().getPlayer(task.operationPlayerId);
+                    if (player != null) player.sendMessage(Text.literal("制谱器轨道生成完成"), true);
+                } else {
+                    ChartManifest chart = CHART_CACHE_BY_WORLD.get(world.getRegistryKey());
+                    if (chart != null) for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+                        if (chart.id.equals(ACTIVE_CHARTS.get(player.getUuid()))) player.sendMessage(Text.literal("制谱器轨道生成完成"), true);
+                    }
                 }
             }
         }
@@ -4646,7 +4650,6 @@ private static void showSceneBoundary(MinecraftServer server) {
                 continue;
             }
             if (hasPendingEditorTrackDisplayWork(world.getRegistryKey())) {
-                sendEditorTrackAdjustmentProgress(server, task);
                 continue;
             }
             ServerPlayerEntity completedPlayer = server.getPlayerManager().getPlayer(task.playerId);
@@ -4654,24 +4657,11 @@ private static void showSceneBoundary(MinecraftServer server) {
             if (completedPlayer != null) {
                 EDITOR_TRACK_ADJUSTMENTS.remove(completedPlayer.getUuid());
                 EDITOR_TRACK_ADJUSTMENT_NOTICES.remove(completedPlayer.getUuid());
-                completedPlayer.sendMessage(Text.literal("正在调整制谱器轨道：100%（" + task.totalWork + "/" + task.totalWork + "）"), true);
                 completedPlayer.sendMessage(Text.literal("制谱器轨道调整完成：" + task.laneCount + " × " + task.divisions), true);
             }
             iterator.remove();
         }
     }
-    private static void sendEditorTrackAdjustmentProgress(MinecraftServer server, EditorTrackRebuildTask task) {
-        long tick = server.getTicks();
-        if (task.lastProgressTick >= 0L && tick - task.lastProgressTick < 20L) return;
-        task.lastProgressTick = tick;
-        ServerPlayerEntity player = server.getPlayerManager().getPlayer(task.playerId);
-        if (player == null) return;
-        int completedWork = Math.min(task.newLength, task.cursor)
-                + Math.max(0, Math.min(task.oldLength - task.newLength, task.clearCursor - task.newLength));
-        int percent = task.totalWork == 0 ? 99 : Math.min(99, completedWork * 100 / task.totalWork);
-        player.sendMessage(Text.literal("正在调整制谱器轨道：" + percent + "%（" + completedWork + "/" + task.totalWork + "）"), true);
-    }
-
     private static boolean hasPendingEditorTrackDisplayWork(RegistryKey<World> worldKey) {
         return EDITOR_NOTE_REFRESH_TASKS.containsKey(worldKey)
                 || EDITOR_NOTE_DISPLAY_SWEEP_TASKS.containsKey(worldKey)
@@ -4812,7 +4802,6 @@ private static void showSceneBoundary(MinecraftServer server) {
         private int cursor;
         private int clearCursor;
         private final int totalWork;
-        private long lastProgressTick = -1L;
         private boolean foundationReady;
         private boolean displaysScheduled;
         private EditorTrackRebuildTask(RegistryKey<World> worldKey, int x, int oldLength, int newLength,
@@ -4835,12 +4824,13 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final int laneCount;
         private int totalBeats;
         private int cursor;
-        private int lastProgressPercent = -1;
-        private EditorAreaTask(int x, int totalBeats, int divisions, int laneCount) {
+        private UUID operationPlayerId;
+        private EditorAreaTask(int x, int totalBeats, int divisions, int laneCount, UUID operationPlayerId) {
             this.x = x;
             this.totalBeats = totalBeats;
             this.divisions = divisions;
             this.laneCount = laneCount;
+            this.operationPlayerId = operationPlayerId;
         }
     }
     private static Map<Integer, BlockState> loadDecorationTemplate(String name) {
