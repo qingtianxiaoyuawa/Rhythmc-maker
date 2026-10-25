@@ -108,10 +108,12 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         });
         HudElementRegistry.attachElementBefore(VanillaHudElements.CHAT, Identifier.of(RhythmcMaker.MOD_ID, "editor_sidebar"),
                 (drawContext, tickCounter) -> renderEditorSidebar(drawContext));
+        HudElementRegistry.attachElementBefore(VanillaHudElements.CHAT, Identifier.of(RhythmcMaker.MOD_ID, "operation_progress"),
+                (drawContext, tickCounter) -> renderOperationProgress(drawContext));
         UseItemCallback.EVENT.register((player, world, hand) -> {
             if (!world.isClient()) return ActionResult.PASS;
-            if (ClientSceneAccess.operationBusy()) return ActionResult.SUCCESS;
             Item item = player.getStackInHand(hand).getItem();
+            if (ClientSceneAccess.operationBusy() && isRhythmcMenuItem(item)) return ActionResult.SUCCESS;
             MinecraftClient client = MinecraftClient.getInstance();
             if (item == RhythmcMaker.START_CHART_ITEM) client.setScreen(new ChartListScreen());
             else if (item == RhythmcMaker.AWA_ITEM) client.setScreen(new PlaceholderScreen("awa~", "awa-menu"));
@@ -148,8 +150,8 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
             if (!world.isClient()) return ActionResult.PASS;
             MinecraftClient client = MinecraftClient.getInstance();
-            if (ClientSceneAccess.operationBusy()) return ActionResult.FAIL;
             if (client.player != player || client.currentScreen != null || !isEditorDimension(client) || !isAltPressed(client)) return ActionResult.PASS;
+            if (ClientSceneAccess.operationBusy()) return ActionResult.FAIL;
             ChartManifest chart = ClientChartAccess.resolveActiveChart();
             if (chart == null) return ActionResult.PASS;
             int divisions = Math.max(1, chart.divisionsPerBeat > 0 ? chart.divisionsPerBeat : chart.beatsPerMeasure);
@@ -176,13 +178,15 @@ public final class RhythmcMakerClient implements ClientModInitializer {
                     PlaceholderScreen.setTrackSnapUndoAvailable(client.player.getUuid(), ClientChartAccess.activeChart());
                 }
             }
-            if (ClientSceneAccess.operationBusy() && client.currentScreen != null) client.setScreen(null);
+            if (ClientSceneAccess.operationBusy() && client.currentScreen != null && isRhythmcScreen(client.currentScreen)) client.setScreen(null);
             if (ClientSceneAccess.operationBusy()) {
-                String operationStatus = ClientSceneAccess.operationStatus();
-                if (operationStatus != null && client.player != null && client.world != null && client.world.getTime() % 20L == 0L) client.player.sendMessage(Text.literal(operationStatus), true);
+                RhythmcMaker.EditorOperationProgress progress = client.player == null ? null : RhythmcMaker.editorOperationProgress(client.player.getUuid());
+                if (progress != null && client.player != null && client.world != null && client.world.getTime() % 20L == 0L) {
+                    client.player.sendMessage(Text.literal(progress.label() + "：" + progress.percent() + "%"), true);
+                }
             }
             updateEditorSidebarSnapshot(client);
-            while (settingsKey.wasPressed()) client.setScreen(new PlaceholderScreen("设置"));
+            while (settingsKey.wasPressed()) if (!ClientSceneAccess.operationBusy()) client.setScreen(new PlaceholderScreen("设置"));
             boolean inPlaybackArea = client.player != null && isEditorDimension(client) && Math.abs(client.player.getX() - 200.5) < 2.0 && Math.abs(client.player.getY() - 66.0) < 2.0 && Math.abs(client.player.getZ() - 0.0) < 2.0;
             boolean inChartDimension = client.player != null && isEditorDimension(client);
             if (playbackToggleCooldownTicks > 0) playbackToggleCooldownTicks--;
@@ -908,6 +912,34 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         context.matrices().pop();
     }
     public static boolean isSceneOperationBusy() { return ClientSceneAccess.operationBusy(); }
+    private static boolean isRhythmcScreen(net.minecraft.client.gui.screen.Screen screen) {
+        return screen instanceof RhythmcScreen || screen instanceof EffectTrackScreen;
+    }
+    private static boolean isRhythmcMenuItem(Item item) {
+        return item == RhythmcMaker.START_CHART_ITEM || item == RhythmcMaker.AWA_ITEM
+                || item == RhythmcMaker.SETTINGS_ITEM || item == RhythmcMaker.CHART_SETTINGS_ITEM
+                || item == RhythmcMaker.MORE_SETTINGS_ITEM || item == RhythmcMaker.QUICK_FUNCTIONS_ITEM
+                || item == RhythmcMaker.MORE_OPTIONS_RETURN_ITEM || item == RhythmcMaker.EXPORT_ITEM
+                || item == RhythmcMaker.CHART_INFO_ITEM || item == RhythmcMaker.SCENE_EDIT_ITEM
+                || item == RhythmcMaker.EFFECT_TRACK_ITEM || item == RhythmcMaker.SAVE_SCENE_ITEM
+                || item == RhythmcMaker.PLAY_ITEM || item == RhythmcMaker.BEAT_SCORE_ITEM
+                || item == RhythmcMaker.INCREASE_BEATS_ITEM || item == RhythmcMaker.DECREASE_BEATS_ITEM;
+    }
+    private static void renderOperationProgress(DrawContext drawContext) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.player == null || client.getServer() == null) return;
+        RhythmcMaker.EditorOperationProgress progress = RhythmcMaker.editorOperationProgress(client.player.getUuid());
+        if (progress == null) return;
+        int width = drawContext.getScaledWindowWidth();
+        int barWidth = Math.min(360, Math.max(180, width / 3));
+        int left = (width - barWidth) / 2;
+        int top = drawContext.getScaledWindowHeight() - 38;
+        int filled = barWidth * progress.percent() / 100;
+        drawContext.fill(left, top, left + barWidth, top + 8, 0xB0000000);
+        drawContext.fill(left, top, left + filled, top + 8, 0xFF55CCFF);
+        Text label = Text.literal(progress.label() + " " + progress.percent() + "%");
+        drawContext.drawTextWithShadow(client.textRenderer, label, left, top - 12, 0xFFFFFFFF);
+    }
     static void sendChartCommand(String command) { sendCommand(MinecraftClient.getInstance(), command); }
     private static void sendCommand(MinecraftClient client, String command) { if (client.player != null) client.player.networkHandler.sendChatCommand(command); }
 }

@@ -9,13 +9,10 @@ import io.wispforest.owo.ui.core.Surface;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ConfirmScreen;
 import net.minecraft.item.ItemStack;
-import net.minecraft.text.ClickEvent;
-import net.minecraft.text.Style;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 
 import java.io.IOException;
-import java.nio.file.Path;
 
 /** Editor-side export form for the active chart. */
 final class ExportChartScreen extends RhythmcScreen {
@@ -80,8 +77,8 @@ final class ExportChartScreen extends RhythmcScreen {
             if (client.getServer() == null) throw new IOException("当前版本仅支持单人制谱器世界");
             client.getServer().execute(() -> {
                 try {
-                    Path folder = ClientChartAccess.exportRhythmc3(chart);
-                    client.execute(() -> exportSucceeded(folder, exportWarnings));
+                    ClientChartAccess.exportRhythmc3(chart);
+                    client.execute(() -> exportSucceeded(chart.title, exportWarnings));
                 } catch (IOException | RuntimeException exception) {
                     client.execute(() -> ClientChartAccess.status("导出失败：" + exception.getMessage()));
                 }
@@ -95,14 +92,10 @@ final class ExportChartScreen extends RhythmcScreen {
         return value == Math.rint(value) ? Integer.toString((int) value) : Double.toString(value);
     }
 
-    private void exportSucceeded(Path folder, boolean exportWarnings) {
+    private void exportSucceeded(String chartTitle, boolean exportWarnings) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player == null) return;
-        Text open = Text.literal("[点击打开文件夹]").setStyle(Style.EMPTY
-            .withColor(Formatting.AQUA)
-            .withUnderline(true)
-            .withClickEvent(new ClickEvent.OpenFile(folder.toString())));
-        client.player.sendMessage(Text.literal("RhythMC 3.0 导出成功：").formatted(Formatting.GREEN).append(open), false);
+        ClientChartAccess.status("RhythMC 3.0 导出成功：“" + chartTitle + "”");
         if (exportWarnings) ClientChartAccess.statusWarning("RhythMC 3.0 导出：已忽略 Maker 本地预览属性");
     }
 

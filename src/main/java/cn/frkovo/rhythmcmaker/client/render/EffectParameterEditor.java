@@ -23,26 +23,41 @@ import imgui.type.ImInt;
 import imgui.type.ImString;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.IdentityHashMap;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Collections;
 import java.util.Set;
 import java.util.HashSet;
 
 public final class EffectParameterEditor {
     private final EffectParameterCodec codec = EffectParameterCodec.getInstance();
     private final EffectParameterLabels labels = EffectParameterLabels.getInstance();
-    private final List<EventForm> forms = new ArrayList<>();
+    private final Map<JsonObject, EventForm> forms = new IdentityHashMap<>();
     private boolean changed;
     private List<JsonObject> availableEvents = List.of();
     private List<String> availableSceneNames = List.of();
     private String sceneReadError = "";
     private List<Integer> availableTrackIds = List.of();
     private ChartManifest currentChart;
+    private List<JsonObject> availableEventsSource;
+    private ChartManifest availableTrackIdsSource;
+    private ChartManifest availableSceneNamesSource;
 
     public boolean render(JsonObject event, List<JsonObject> events, ChartManifest chart) {
         changed = false;
-        availableEvents = events == null ? List.of(event) : List.copyOf(events);
-        availableSceneNames = sceneNames(chart);
-        availableTrackIds = trackIds(chart);
+        if (availableEventsSource != events) {
+            availableEventsSource = events;
+            availableEvents = events == null ? List.of(event) : events;
+        }
+        if (availableSceneNamesSource != chart) {
+            availableSceneNamesSource = chart;
+            availableSceneNames = sceneNames(chart);
+        }
+        if (availableTrackIdsSource != chart) {
+            availableTrackIdsSource = chart;
+            availableTrackIds = trackIds(chart);
+        }
         currentChart = chart;
         EffectParameterType type = EffectParameterSchema.getInstance().find(codec.type(event));
         if (type == null) return false;
@@ -67,13 +82,15 @@ public final class EffectParameterEditor {
     }
 
     public List<String> errors(List<JsonObject> events) {
-        forms.removeIf(form -> events.stream().noneMatch(event -> event == form.event));
+        Set<JsonObject> currentEvents = Collections.newSetFromMap(new IdentityHashMap<>());
+        currentEvents.addAll(events);
+        forms.keySet().removeIf(event -> !currentEvents.contains(event));
         List<String> errors = new ArrayList<>();
         for (int index = 0; index < events.size(); index++) {
             JsonObject event = events.get(index);
             for (String error : codec.validateEvent(event)) errors.add("特效 #" + (index + 1) + "：" + error);
-            for (EventForm form : forms) {
-                if (form.event != event) continue;
+            EventForm form = forms.get(event);
+            if (form != null) {
                 JsonElement branchValue = codec.read(event, "type");
                 String branch = branchValue != null && branchValue.isJsonPrimitive() && branchValue.getAsJsonPrimitive().isString()
                         ? branchValue.getAsString() : "";
@@ -91,12 +108,19 @@ public final class EffectParameterEditor {
 
     public void clear() {
         forms.clear();
+        availableEventsSource = null;
+        availableTrackIdsSource = null;
+        availableSceneNamesSource = null;
+        availableEvents = List.of();
+        availableTrackIds = List.of();
+        availableSceneNames = List.of();
     }
 
     private EventForm form(JsonObject event) {
-        for (EventForm form : forms) if (form.event == event) return form;
+        EventForm existing = forms.get(event);
+        if (existing != null) return existing;
         EventForm form = new EventForm(event);
-        forms.add(form);
+        forms.put(event, form);
         return form;
     }
 

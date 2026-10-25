@@ -97,11 +97,15 @@ public final class EffectTrackScreen extends Screen {
 
     @Override
     public boolean keyPressed(KeyInput input) {
-        if (editor.isInputLocked()) return true;
         if (input.isEscape()) {
+            if (ClientSceneAccess.operationBusy()) {
+                MinecraftClient.getInstance().setScreen(null);
+                return true;
+            }
             closeEditor();
             return true;
         }
+        if (editor.isInputLocked()) return true;
         editor.handlePlaybackKey(input);
         return true;
     }

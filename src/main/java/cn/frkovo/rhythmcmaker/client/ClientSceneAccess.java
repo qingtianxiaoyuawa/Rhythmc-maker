@@ -33,7 +33,7 @@ public final class ClientSceneAccess {
     static void status(String message) { ClientChartAccess.status(message); }
     static boolean operationBusy() {
         var player = MinecraftClient.getInstance().player;
-        return player != null && RhythmcMaker.isSceneOperationBusy(player.getUuid());
+        return player != null && RhythmcMaker.isEditorOperationBusy(player.getUuid());
     }
     static String operationStatus() {
         var player = MinecraftClient.getInstance().player;

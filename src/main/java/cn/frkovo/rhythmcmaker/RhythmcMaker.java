@@ -709,7 +709,7 @@ public final class RhythmcMaker implements ModInitializer {
                     continue;
                 }
                 prepareEditorPlayer(server, player, editor);
-                player.sendMessage(Text.literal("成功进入谱面维度：" + chart.title), true);
+                player.sendMessage(Text.literal("进入谱面：“" + chart.title + "”"), true);
             } catch (IOException | RuntimeException exception) {
                 ACTIVE_CHARTS.remove(player.getUuid());
                 SELECTED_START_BEATS.remove(player.getUuid());
@@ -1709,11 +1709,71 @@ public final class RhythmcMaker implements ModInitializer {
             SceneEditStorage.deleteSchematic(server, chart.id, index);
             if (operationPlayerId != null) beginSceneOperation(operationPlayerId, "场景正在生成或重置中，期间请勿进行其他操作");
             queueSceneEditorArea(world, scene.x, laneCount(chart), chart.id, index, operationPlayerId, "重置成功");
-        } catch (IOException exception) { LOGGER.warn("Failed to reset scene editor {}", index, exception); }
+        } catch (IOException exception) {
+            if (operationPlayerId != null) completeSceneOperation(operationPlayerId, "重置场景失败：" + exception.getMessage());
+            LOGGER.warn("Failed to reset scene editor {}", index, exception);
+        }
     }
 
     public static boolean isSceneOperationBusy(UUID playerId) {
         return playerId != null && SCENE_OPERATION_STATUS.containsKey(playerId);
+    }
+
+    public record EditorOperationProgress(String label, int completed, int total) {
+        public int percent() {
+            return total <= 0 ? 0 : (int) Math.max(0L, Math.min(99L, (long) completed * 100L / total));
+        }
+    }
+
+    public static boolean isEditorOperationBusy(UUID playerId) {
+        if (playerId == null) return false;
+        if (SCENE_OPERATION_STATUS.containsKey(playerId) || EDITOR_TRACK_ADJUSTMENTS.contains(playerId)
+                || TRACK_SNAP_TASKS.containsKey(playerId) || TRACK_SNAP_UNDO_TASKS.containsKey(playerId)
+                || SCENE_CAPTURE_PENDING.contains(playerId)) return true;
+        for (SceneEditorAreaTask task : SCENE_EDITOR_AREA_TASKS.values()) {
+            if (playerId.equals(task.operationPlayerId)) return true;
+        }
+        return false;
+    }
+
+    public static EditorOperationProgress editorOperationProgress(UUID playerId) {
+        if (playerId == null) return null;
+        for (EditorTrackRebuildTask rebuild : EDITOR_TRACK_REBUILD_TASKS.values()) {
+            if (!playerId.equals(rebuild.playerId)) continue;
+            int completed = Math.min(rebuild.newLength, rebuild.cursor)
+                    + Math.max(0, Math.min(rebuild.oldLength - rebuild.newLength, rebuild.clearCursor - rebuild.newLength));
+            return new EditorOperationProgress("正在调整制谱器轨道", completed, Math.max(1, rebuild.totalWork));
+        }
+        TrackSnapTask snap = TRACK_SNAP_TASKS.get(playerId);
+        if (snap != null) return new EditorOperationProgress("正在吸附音符", snap.cursor, Math.max(1, snap.total));
+        TrackSnapUndoTask undo = TRACK_SNAP_UNDO_TASKS.get(playerId);
+        if (undo != null) return new EditorOperationProgress("正在撤销吸附", undo.cursor, Math.max(1, undo.total));
+        for (SceneCaptureTask capture : SCENE_CAPTURE_TASKS) {
+            if (playerId.equals(capture.playerId)) {
+                return new EditorOperationProgress("正在保存场景", capture.cursor, SCENE_SIZE * SCENE_SIZE * SCENE_SIZE);
+            }
+        }
+        for (SceneEditorAreaTask sceneArea : SCENE_EDITOR_AREA_TASKS.values()) {
+            if (playerId.equals(sceneArea.operationPlayerId)) {
+                return new EditorOperationProgress("正在生成场景", sceneArea.clearCursor, SCENE_SIZE * SCENE_SIZE * SCENE_SIZE);
+            }
+        }
+        String status = SCENE_OPERATION_STATUS.get(playerId);
+        if (status != null) {
+            int percent = operationPercent(status);
+            return new EditorOperationProgress(status.replaceFirst("：.*$", ""), percent, 100);
+        }
+        if (SCENE_CAPTURE_PENDING.contains(playerId)) return new EditorOperationProgress("正在保存场景", 0, 1);
+        return null;
+    }
+
+    private static int operationPercent(String status) {
+        int percentIndex = status.indexOf('%');
+        if (percentIndex < 1) return 0;
+        int start = percentIndex - 1;
+        while (start > 0 && Character.isDigit(status.charAt(start - 1))) start--;
+        try { return Math.max(0, Math.min(100, Integer.parseInt(status.substring(start, percentIndex)))); }
+        catch (NumberFormatException ignored) { return 0; }
     }
 
     public static String sceneOperationStatus(UUID playerId) {
@@ -1954,7 +2014,11 @@ public final class RhythmcMaker implements ModInitializer {
         for (var iterator = SCENE_EDITOR_AREA_TASKS.entrySet().iterator(); iterator.hasNext();) {
             var entry = iterator.next();
             ServerWorld world = server.getWorld(entry.getKey().worldKey());
-            if (world == null) { iterator.remove(); continue; }
+            if (world == null) {
+                completeSceneOperation(entry.getValue().operationPlayerId, "场景生成失败：目标维度不可用");
+                iterator.remove();
+                continue;
+            }
             SceneEditorAreaTask task = entry.getValue();
             int budget = 4096;
             int total = SCENE_SIZE * SCENE_SIZE * SCENE_SIZE;
@@ -3575,15 +3639,12 @@ private static void showSceneBoundary(MinecraftServer server) {
                 TextDisplayEventFold.State state = entry.getValue();
                 int baseIndex = state.displayIndex();
                 JsonObject base = effects.get(baseIndex);
-                long baseDuration = (long) effectDouble(base, "duration", 0.0);
-                double baseExpiresAt = PlaybackTimelineClock.songTimeAfterWallMillis(effectTimes.get(baseIndex), baseDuration, rate);
-                if (baseDuration > 0 && baseExpiresAt <= songTime) continue;
                 applyTextEffect(base, true, effectTimes.get(baseIndex), songTime, entry.getKey());
                 for (int transformIndex : state.transformIndexes()) {
                     JsonObject transform = effects.get(transformIndex);
                     applyTextEffect(transform, true, effectTimes.get(transformIndex), songTime, entry.getKey());
                 }
-                if (state.synchronizationIndex() > state.visualStartIndex()) {
+                if (state.synchronizationIndex() >= 0) {
                     int synchronizationIndex = state.synchronizationIndex();
                     JsonObject synchronization = effects.get(synchronizationIndex);
                     applyTextEffect(synchronization, true, effectTimes.get(synchronizationIndex), songTime, entry.getKey());
@@ -3740,7 +3801,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 double[] position = relativeTextDisplayPosition(effect, positionKey);
                 textDisplayAnchors.put(id, position.clone());
                 double expiresAt = PlaybackTimelineClock.songTimeAfterWallMillis(bootstrap ? effectTime : targetTime, duration, rate);
-                if (duration > 0 && expiresAt <= targetTime) {
+                if (!bootstrap && duration > 0 && expiresAt <= targetTime) {
                     DisplayEntity.TextDisplayEntity display = textDisplays.remove(id);
                     if (display != null) releaseTextDisplay(id, display);
                     textDisplayAnchors.remove(id);
@@ -4480,6 +4541,10 @@ private static void showSceneBoundary(MinecraftServer server) {
                 markEditorTrackBuilt(server, world.getRegistryKey(), task.totalBeats, task.laneCount, task.divisions);
                 markPendingStartBeat(server, world);
                 EDITOR_AREA_TASKS.remove(entry.getKey(), task);
+                ChartManifest chart = CHART_CACHE_BY_WORLD.get(world.getRegistryKey());
+                if (chart != null) for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+                    if (chart.id.equals(ACTIVE_CHARTS.get(player.getUuid()))) player.sendMessage(Text.literal("制谱器轨道生成完成"), true);
+                }
             }
         }
     }
@@ -4797,6 +4862,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final java.util.List<ChartManifest.Note> current;
         private final int total;
         private int cursor;
+        private long lastProgressTick = -1L;
         private TrackSnapUndoTask(ChartManifest chart, ServerWorld world, TrackSnapUndo undo, java.util.List<ChartManifest.Note> current) {
             this.chart = chart; this.world = world; this.undo = undo; this.current = current;
             this.total = Math.max(1, current.size() + undo.originalNotes.size());

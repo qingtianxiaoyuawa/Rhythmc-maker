@@ -1712,8 +1712,6 @@ public final class EffectEditorImGuiView {
         selectedIndex = index;
         selectedIndices.clear();
         selectedIndices.add(index);
-        playhead[0] = (float) eventBeat(workingEffects.get(index));
-        seekAction.accept((double) playhead[0]);
         syncBuffers();
     }
 
@@ -1738,10 +1736,6 @@ public final class EffectEditorImGuiView {
         } else {
             selectedIndices.add(index);
             selectedIndex = index;
-        }
-        if (selectedIndex >= 0) {
-            playhead[0] = (float) eventBeat(workingEffects.get(selectedIndex));
-            seekAction.accept((double) playhead[0]);
         }
         bufferIndex = Integer.MIN_VALUE;
         syncBuffers();
