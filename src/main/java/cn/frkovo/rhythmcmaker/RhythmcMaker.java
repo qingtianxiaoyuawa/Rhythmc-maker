@@ -58,6 +58,7 @@ import net.minecraft.scoreboard.Team;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.server.world.ChunkTicketType;
 import net.minecraft.state.property.Property;
 import net.minecraft.text.Style;
 import net.minecraft.text.Text;
@@ -128,6 +129,8 @@ public final class RhythmcMaker implements ModInitializer {
     private static final Map<UUID, TrackSnapUndoTask> TRACK_SNAP_UNDO_TASKS = new ConcurrentHashMap<>();
     private static final Map<UUID, PlaybackSession> PLAYBACK_SESSIONS = new ConcurrentHashMap<>();
     private static final Map<UUID, ScrollJudgementSession> SCROLL_JUDGEMENT_SESSIONS = new ConcurrentHashMap<>();
+    private static final Map<UUID, Set<PlaybackChunkTicketKey>> PLAYBACK_CHUNK_TICKETS_BY_PLAYER = new ConcurrentHashMap<>();
+    private static final Map<PlaybackChunkTicketKey, Integer> PLAYBACK_CHUNK_TICKET_REFERENCES = new ConcurrentHashMap<>();
     /** Original player transform for the effect-editor preview. The player entity follows the
      * judgment line for chunk tracking while CameraMixin owns the rendered view. */
     private static final Map<UUID, EffectPreviewPlayerState> EFFECT_PREVIEW_PLAYERS = new ConcurrentHashMap<>();
@@ -226,6 +229,9 @@ public final class RhythmcMaker implements ModInitializer {
         });
         ServerLifecycleEvents.SERVER_STARTED.register(server -> {
             LOGGER.info("Rhythmc maker dynamic chart dimensions are loaded on demand");
+        });
+        ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+            for (UUID playerId : Set.copyOf(PLAYBACK_CHUNK_TICKETS_BY_PLAYER.keySet())) releasePlaybackChunkTickets(server, playerId);
         });
         registerOptionalWorldEditIntegration();
         ServerChunkEvents.CHUNK_LOAD.register((world, chunk) -> {
@@ -510,7 +516,6 @@ public final class RhythmcMaker implements ModInitializer {
         server.getPlayerManager().setCheatsAllowed(true);
         world.getGameRules().setValue(GameRules.KEEP_INVENTORY, true, server);
         world.getGameRules().setValue(GameRules.RESPAWN_RADIUS, 0, server);
-        releasePlaybackChunks(world);
         cleanupOrphanedPlaybackDisplays(world);
         world.getGameRules().setValue(GameRules.TNT_EXPLODES, false, server);
         world.getGameRules().setValue(GameRules.ADVANCE_TIME, true, server);
@@ -1368,9 +1373,10 @@ public final class RhythmcMaker implements ModInitializer {
         int nextIndex = scenes.stream().mapToInt(scene -> scene.index).max().orElse(0) + 1;
         ImportedScene initial = imported.get(0);
         if (isCompleteImportedScene(initial)) {
-            if (chart.initialArena != null && !chart.initialArena.isBlank()) {
-                scenes.stream().filter(scene -> scene.index == 1).findFirst().ifPresent(scene -> scene.name = chart.initialArena);
-            }
+            String importedInitialName = readSceneName(initial.info(), "");
+            String initialSceneName = importedInitialName.isBlank() ? chart.initialArena : importedInitialName;
+            if (initialSceneName != null && !initialSceneName.isBlank())
+                scenes.stream().filter(scene -> scene.index == 1).findFirst().ifPresent(scene -> scene.name = initialSceneName);
             SceneEditStorage.save(server, chart.id, scenes);
             SceneEditStorage.copySchematic(server, chart.id, 1, initial.schem());
             chart.sceneInitialized = true;
@@ -1435,13 +1441,18 @@ public final class RhythmcMaker implements ModInitializer {
     private static String readSceneName(Path info, String fallback) {
         if (info == null || !Files.isRegularFile(info)) return fallback;
         try {
+            String arenaName = fallback;
             for (String line : Files.readAllLines(info)) {
                 String trimmed = line.trim();
                 if (trimmed.startsWith("name:")) {
                     String value = trimmed.substring(5).trim().replace("\"", "");
+                    if (!value.isBlank()) arenaName = value;
+                } else if (trimmed.startsWith("display-name:")) {
+                    String value = trimmed.substring("display-name:".length()).trim().replace("\"", "");
                     if (!value.isBlank()) return value;
                 }
             }
+            return arenaName;
         } catch (IOException ignored) { }
         return fallback;
     }
@@ -2372,6 +2383,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         ChartManifest chart = loadActiveChart(player, source.getServer());
         if (chart == null || !(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world) || chart.bpm <= 0) return 0;
         cleanupPlaybackDisplayEntities(world, player.getUuid(), chart.id);
+        acquirePlaybackChunkTickets(player.getUuid(), world, BlockPos.ofFloored(player.getX(), player.getY(), player.getZ()));
         ensurePlaybackChunksLoaded(world);
         int startBeatIndex = requestedStartBeat > 0 ? Math.max(1, Math.min(Math.max(1, chart.beatCount), requestedStartBeat)) : selectedStartBeat(player, chart);
         double startBeat = PlaybackCoordinates.beatAtIndex(startBeatIndex);
@@ -2489,12 +2501,39 @@ private static void showSceneBoundary(MinecraftServer server) {
             }
         }
     }
-    private static void releasePlaybackChunks(ServerWorld world) {
+    private static void acquirePlaybackChunkTickets(UUID playerId, ServerWorld world, BlockPos returnPosition) {
+        releasePlaybackChunkTickets(world.getServer(), playerId);
+        Set<PlaybackChunkTicketKey> tickets = new java.util.HashSet<>();
         int centerChunkX = Math.floorDiv(PLAYBACK_PLATFORM_X, 16);
         int centerChunkZ = Math.floorDiv(PLAYBACK_PLATFORM_Z, 16);
-        for (int chunkX = centerChunkX - 4; chunkX <= centerChunkX + 4; chunkX++) {
-            for (int chunkZ = centerChunkZ - 4; chunkZ <= centerChunkZ + 4; chunkZ++) {
-                world.setChunkForced(chunkX, chunkZ, false);
+        addPlaybackChunkTicketArea(world, centerChunkX, centerChunkZ, 4, tickets);
+        addPlaybackChunkTicketArea(world, Math.floorDiv(returnPosition.getX(), 16), Math.floorDiv(returnPosition.getZ(), 16), 2, tickets);
+        PLAYBACK_CHUNK_TICKETS_BY_PLAYER.put(playerId, tickets);
+    }
+    private static void addPlaybackChunkTicketArea(ServerWorld world, int centerChunkX, int centerChunkZ, int radius,
+                                                  Set<PlaybackChunkTicketKey> tickets) {
+        for (int chunkX = centerChunkX - radius; chunkX <= centerChunkX + radius; chunkX++) {
+            for (int chunkZ = centerChunkZ - radius; chunkZ <= centerChunkZ + radius; chunkZ++) {
+                ChunkPos chunkPos = new ChunkPos(chunkX, chunkZ);
+                PlaybackChunkTicketKey key = new PlaybackChunkTicketKey(world.getRegistryKey(), chunkPos.toLong());
+                if (!tickets.add(key)) continue;
+                int references = PLAYBACK_CHUNK_TICKET_REFERENCES.merge(key, 1, Integer::sum);
+                if (references == 1) world.getChunkManager().addTicket(ChunkTicketType.PLAYER_LOADING, chunkPos, 0);
+            }
+        }
+    }
+    private static void releasePlaybackChunkTickets(MinecraftServer server, UUID playerId) {
+        Set<PlaybackChunkTicketKey> tickets = PLAYBACK_CHUNK_TICKETS_BY_PLAYER.remove(playerId);
+        if (tickets == null) return;
+        for (PlaybackChunkTicketKey key : tickets) {
+            int references = PLAYBACK_CHUNK_TICKET_REFERENCES.getOrDefault(key, 0);
+            if (references <= 1) {
+                PLAYBACK_CHUNK_TICKET_REFERENCES.remove(key);
+                ServerWorld world = server.getWorld(key.worldKey());
+                if (world != null) world.getChunkManager().removeTicket(ChunkTicketType.PLAYER_LOADING,
+                        new ChunkPos(key.packedChunkPos()), 0);
+            } else {
+                PLAYBACK_CHUNK_TICKET_REFERENCES.put(key, references - 1);
             }
         }
     }
@@ -2525,6 +2564,10 @@ private static void showSceneBoundary(MinecraftServer server) {
         for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
             PlaybackSession session = PLAYBACK_SESSIONS.get(player.getUuid());
             if (session == null) continue;
+            if (player.getEntityWorld() != session.world) {
+                stopPlayback(server, player, false);
+                continue;
+            }
             try {
             if (System.nanoTime() < session.startNanos) continue;
             double songTime = session.startSeconds + (System.nanoTime() - session.startNanos) / 1_000_000_000.0 * session.rate;
@@ -2617,6 +2660,10 @@ private static void showSceneBoundary(MinecraftServer server) {
         for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
             ScrollJudgementSession session = SCROLL_JUDGEMENT_SESSIONS.get(player.getUuid());
             if (session == null) continue;
+            if (player.getEntityWorld() != session.world) {
+                stopPlayback(server, player, false);
+                continue;
+            }
             if (session.effectPreview) {
                 // Keep the real entity on the judgment line so vanilla chunk tracking follows it.
                 // Rendering still uses the independent virtual Camera state on the client.
@@ -2967,6 +3014,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket.THUNDER_GRADIENT_CHANGED, thunder ? 1.0F : 0.0F));
     }
     private static void stopPlayback(MinecraftServer server, ServerPlayerEntity player, boolean returnPlayer) {
+        releasePlaybackChunkTickets(server, player.getUuid());
         restoreEffectPreviewPlayer(player);
         ScrollJudgementSession scrollSession = SCROLL_JUDGEMENT_SESSIONS.remove(player.getUuid());
         if (scrollSession != null) {
@@ -3033,6 +3081,7 @@ private static void showSceneBoundary(MinecraftServer server) {
     private static boolean hasPlaybackSession(UUID playerId) {
         return PLAYBACK_SESSIONS.containsKey(playerId) || SCROLL_JUDGEMENT_SESSIONS.containsKey(playerId);
     }
+    private record PlaybackChunkTicketKey(RegistryKey<World> worldKey, long packedChunkPos) { }
     private static final class EffectPreviewPlayerState {
         private final ServerWorld world;
         private final double returnX, returnY, returnZ;

@@ -204,6 +204,8 @@ public final class SceneEditStorage {
 
     private static Scene parseMetadata(Path file, String fallbackName) throws IOException {
         Scene scene = new Scene();
+        String importedDisplayName = null;
+        String importedName = null;
         for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
             int separator = line.indexOf(':');
             if (separator < 0) continue;
@@ -212,11 +214,12 @@ public final class SceneEditStorage {
             if (key.equals("sceneId") && !value.isBlank()) scene.sceneId = value;
             else if (key.equals("index")) scene.index = Integer.parseInt(value);
 
-            else if (key.equals("name")) scene.name = value;
-            else if (key.equals("display-name")) scene.name = value;
+            else if (key.equals("name")) importedName = value;
+            else if (key.equals("display-name")) importedDisplayName = value;
             else if (key.equals("type")) scene.initial = value.equals("initial");
             else if (key.equals("icon")) scene.icon = value;
         }
+        scene.name = importedDisplayName == null || importedDisplayName.isBlank() ? importedName : importedDisplayName;
         if (scene.name == null || scene.name.isBlank()) scene.name = fallbackName;
         return scene;
     }

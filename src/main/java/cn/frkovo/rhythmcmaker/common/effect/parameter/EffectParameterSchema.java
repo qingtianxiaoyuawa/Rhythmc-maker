@@ -38,7 +38,7 @@ public final class EffectParameterSchema {
         add("ARENA", "切换场景", true, field("arena", "场景名称", TEXT, "\"arena\"", "使用已导入或保存的场景名称。"));
         add("HIDE_NOTES", "隐藏音符", true,
                 choices(field("noteTypes", "隐藏的音符类型", NOTE_TYPES, "[]", ""), List.of("TAP", "LOOK", "HOLD", "DODGE")),
-                field("tracks", "隐藏的轨道 ID", INTEGER_LIST, "[]", ""));
+                optional(field("tracks", "隐藏的轨道 ID", INTEGER_LIST, "[]", "空列表表示不限定轨道。")));
         add("GLOW_COLOR", "发光颜色", true, enumeration("color", "Minecraft 颜色枚举", "WHITE", List.of(
                 "BLACK", "DARK_BLUE", "DARK_GREEN", "DARK_AQUA", "DARK_RED", "DARK_PURPLE", "GOLD", "GRAY",
                 "DARK_GRAY", "BLUE", "GREEN", "AQUA", "RED", "LIGHT_PURPLE", "YELLOW", "WHITE")));

@@ -273,7 +273,6 @@ public final class EffectParameterEditor {
         if (isArenaField(form, field)) { renderArena(form, state); return; }
         if (isNoteTypesField(form, field)) { renderNoteTypesMenu(form, state); return; }
         if (isTextDisplayTrackField(form, field)) { renderTextDisplayTrack(form, state); return; }
-        if (isTracksField(form, field)) { renderTracksMenu(form, state); return; }
         if (isClearEffectsField(form, field)) {
             renderClearEffects(form, state, actual == null);
             return;
@@ -399,7 +398,7 @@ public final class EffectParameterEditor {
         if (type.equals("CLEAR_EFFECT") && field.name().equals("effects")) return false;
         if (type.equals("WEATHER") && field.name().equals("weather")) return false;
         if (type.equals("ARENA") && field.name().equals("arena")) return false;
-        if (type.equals("HIDE_NOTES") && (field.name().equals("noteTypes") || field.name().equals("tracks"))) return false;
+        if (type.equals("HIDE_NOTES") && field.name().equals("noteTypes")) return false;
         if (type.equals("GLOW_COLOR") && field.name().equals("color")) return false;
         return !isVectorListWithItemReset(field);
     }
@@ -454,10 +453,6 @@ public final class EffectParameterEditor {
 
     private boolean isNoteTypesField(EventForm form, EffectParameterField field) {
         return codec.type(form.event).equals("HIDE_NOTES") && field.name().equals("noteTypes");
-    }
-
-    private boolean isTracksField(EventForm form, EffectParameterField field) {
-        return codec.type(form.event).equals("HIDE_NOTES") && field.name().equals("tracks");
     }
 
     private List<String> sceneNames(ChartManifest chart) {

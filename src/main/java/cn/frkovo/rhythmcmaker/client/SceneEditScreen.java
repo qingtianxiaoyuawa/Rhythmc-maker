@@ -46,8 +46,7 @@ final class SceneEditScreen extends RhythmcScreen {
             content.child(UIComponents.label(Text.literal("场景名称")));
             nameBox = UIComponents.textBox(Sizing.fill(), selected.name);
             nameBox.onChanged().subscribe(value -> {
-                String filtered = value.replaceAll("[^a-zA-Z0-9_]", "");
-                if (!filtered.equals(value)) nameBox.text(filtered);
+                selected.name = value.replaceAll("[^a-zA-Z0-9_]", "");
             });
             content.child(nameBox);
             content.child(UIComponents.label(Text.literal("当前图标物品 ID：" + selected.icon)));

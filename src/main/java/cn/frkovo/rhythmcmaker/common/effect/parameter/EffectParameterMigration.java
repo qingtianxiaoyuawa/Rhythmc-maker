@@ -66,17 +66,37 @@ public final class EffectParameterMigration {
         }
         if (type.equals("EFFECT")) migrateEffect(result);
         if (type.equals("CLEAR_EFFECT")) migrateClearedEffects(result);
-        if (type.equals("HIDE_NOTES") && result.has("noteTypes") && result.get("noteTypes").isJsonArray()) {
-            JsonArray values = result.getAsJsonArray("noteTypes");
-            if (values.asList().stream().allMatch(value -> number(value) && value.getAsDouble() == value.getAsInt()
-                    && value.getAsInt() >= 0 && value.getAsInt() <= 3)) {
+        if (type.equals("HIDE_NOTES")) {
+            if (!result.has("noteTypes")) result.add("noteTypes", new JsonArray());
+            if (!result.has("tracks")) result.add("tracks", new JsonArray());
+            JsonElement values = result.get("noteTypes");
+            if (values.isJsonArray()) {
                 JsonArray names = new JsonArray();
                 List<String> noteTypes = List.of("TAP", "LOOK", "HOLD", "DODGE");
-                for (JsonElement value : values) names.add(noteTypes.get(value.getAsInt()));
+                for (JsonElement value : values.getAsJsonArray()) {
+                    if (number(value) && value.getAsDouble() == value.getAsInt() && value.getAsInt() >= 0 && value.getAsInt() <= 3) {
+                        names.add(noteTypes.get(value.getAsInt()));
+                    } else if (string(value)) {
+                        names.add(migrateNoteType(value.getAsString()));
+                    } else {
+                        names.add(value.deepCopy());
+                    }
+                }
                 result.add("noteTypes", names);
             }
         }
         return result;
+    }
+
+    private String migrateNoteType(String value) {
+        String normalized = value.trim().toUpperCase(java.util.Locale.ROOT).replace('-', '_').replace(' ', '_');
+        return switch (normalized) {
+            case "TAP", "NOTE", "CLICK", "NOTE_CLICK", "NOTE_TAP" -> "TAP";
+            case "LOOK", "NOTE_LOOK" -> "LOOK";
+            case "HOLD", "NOTE_HOLD" -> "HOLD";
+            case "DODGE", "NOTE_DODGE", "NOTE_DO_NOT_CLICK", "DO_NOT_CLICK" -> "DODGE";
+            default -> value;
+        };
     }
 
     private void migrateEffect(JsonObject properties) {

@@ -80,6 +80,7 @@ public final class EffectEditorImGuiView {
     private final Consumer<Integer> divisionsAction;
     private final ImInt divisionsField = new ImInt();
     private final ImDouble pitchPercentField = new ImDouble(100.0);
+    private final imgui.ImVec2 toolbarTextSize = new imgui.ImVec2();
     private boolean inputLocked;
     private final List<EffectEditorLayout.KeyframePosition> keyframePositions = new ArrayList<>();
     private List<TimelineRow> cachedTimelineRows;
@@ -449,11 +450,23 @@ public final class EffectEditorImGuiView {
         ImGui.textColored(0xFF66CCFF, "RhythMC Maker");
         ImGui.sameLine();
         ImGui.text("特效编辑器");
-        ImGui.sameLine(Math.max(210.0f, width - 480.0f));
-        ImGui.text(chart == null ? "未加载谱面" : displayText(chartTitle()) + "  ·  BPM " + format(chart.bpm));
+        String chartInformation = chart == null ? "未加载谱面" : displayText(chartTitle()) + "  ·  BPM " + format(chart.bpm);
+        String saveStatus = dirty ? "● 未保存" : "已保存";
+        float controlsWidth = toolbarTextWidth("撤销") + toolbarTextWidth("恢复")
+                + toolbarTextWidth("保存") + toolbarTextWidth("关闭")
+                + ImGui.getStyle().getFramePaddingX() * 8.0f + ImGui.getStyle().getItemSpacingX() * 3.0f;
+        float controlsStart = width - ImGui.getStyle().getWindowPaddingX() - controlsWidth;
+        float informationStart = ImGui.getCursorPosX() + 12.0f;
+        ImGui.setCursorPosX(informationStart);
+        float informationRight = Math.max(informationStart,
+                Math.min(controlsStart - 8.0f, width - ImGui.getStyle().getWindowPaddingX() - 8.0f));
+        ImGui.pushClipRect(ImGui.getWindowPosX() + informationStart, ImGui.getCursorScreenPosY(),
+                ImGui.getWindowPosX() + informationRight, ImGui.getCursorScreenPosY() + ImGui.getTextLineHeightWithSpacing(), true);
+        ImGui.text(chartInformation);
         ImGui.sameLine();
-        ImGui.text(dirty ? "● 未保存" : "已保存");
-        ImGui.sameLine();
+        ImGui.text(saveStatus);
+        ImGui.popClipRect();
+        ImGui.setCursorPosX(controlsStart);
         boolean canUndo = !undoHistory.isEmpty();
         boolean canRedo = !redoHistory.isEmpty();
         ImGui.beginDisabled(!canUndo);
@@ -468,6 +481,11 @@ public final class EffectEditorImGuiView {
         ImGui.sameLine();
         if (ImGui.button("关闭##effect-close")) closeAction.run();
         ImGui.end();
+    }
+
+    private float toolbarTextWidth(String value) {
+        ImGui.calcTextSize(toolbarTextSize, value);
+        return toolbarTextSize.x;
     }
 
     private void drawEmptyState(float width, float height) {
@@ -1110,7 +1128,14 @@ public final class EffectEditorImGuiView {
                 }
             }
         }
-        double delta = target - timelineDragStartBeat;
+        double minimumOriginBeat = Double.POSITIVE_INFINITY;
+        double maximumOriginBeat = Double.NEGATIVE_INFINITY;
+        for (DragOrigin origin : timelineDragOrigins) {
+            minimumOriginBeat = Math.min(minimumOriginBeat, origin.beat());
+            maximumOriginBeat = Math.max(maximumOriginBeat, origin.beat());
+        }
+        double delta = Math.max(-minimumOriginBeat, Math.min(timelineDragMaximumBeat - maximumOriginBeat,
+                target - timelineDragStartBeat));
         boolean trackAssignmentChanged = false;
         for (DragOrigin origin : timelineDragOrigins) {
             double beat = origin.beat() + delta;
@@ -1139,6 +1164,7 @@ public final class EffectEditorImGuiView {
             redoHistory.clear();
             status = "已移动特效";
         }
+        cachedTimelineRows = null;
         timelineDragSnapshot = null;
         timelineDragOrigins.clear();
         timelineDraggedEventIndices.clear();
