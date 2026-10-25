@@ -36,13 +36,13 @@ public final class EffectParameterEditor {
     private final Map<JsonObject, EventForm> forms = new IdentityHashMap<>();
     private boolean changed;
     private List<JsonObject> availableEvents = List.of();
-    private List<String> availableSceneNames = List.of();
+    private List<SceneOption> availableScenes = List.of();
     private String sceneReadError = "";
     private List<Integer> availableTrackIds = List.of();
     private ChartManifest currentChart;
     private List<JsonObject> availableEventsSource;
     private ChartManifest availableTrackIdsSource;
-    private ChartManifest availableSceneNamesSource;
+    private ChartManifest availableScenesSource;
 
     public boolean render(JsonObject event, List<JsonObject> events, ChartManifest chart) {
         changed = false;
@@ -50,9 +50,9 @@ public final class EffectParameterEditor {
             availableEventsSource = events;
             availableEvents = events == null ? List.of(event) : events;
         }
-        if (availableSceneNamesSource != chart) {
-            availableSceneNamesSource = chart;
-            availableSceneNames = sceneNames(chart);
+        if (availableScenesSource != chart) {
+            availableScenesSource = chart;
+            availableScenes = sceneOptions(chart);
         }
         if (availableTrackIdsSource != chart) {
             availableTrackIdsSource = chart;
@@ -110,10 +110,10 @@ public final class EffectParameterEditor {
         forms.clear();
         availableEventsSource = null;
         availableTrackIdsSource = null;
-        availableSceneNamesSource = null;
+        availableScenesSource = null;
         availableEvents = List.of();
         availableTrackIds = List.of();
-        availableSceneNames = List.of();
+        availableScenes = List.of();
     }
 
     private EventForm form(JsonObject event) {
@@ -455,15 +455,17 @@ public final class EffectParameterEditor {
         return codec.type(form.event).equals("HIDE_NOTES") && field.name().equals("noteTypes");
     }
 
-    private List<String> sceneNames(ChartManifest chart) {
+    private List<SceneOption> sceneOptions(ChartManifest chart) {
         sceneReadError = "";
         try {
-            return ClientSceneAccess.savedSceneNames();
+            return ClientSceneAccess.savedScenes().stream().map(scene -> new SceneOption(scene.name, scene.displayName)).toList();
         } catch (java.io.IOException exception) {
             sceneReadError = "读取已保存场景失败：" + exception.getMessage();
             return List.of();
         }
     }
+
+    private record SceneOption(String id, String displayName) {}
 
     private List<Integer> trackIds(ChartManifest chart) {
         if (chart == null) return List.of();
@@ -496,15 +498,16 @@ public final class EffectParameterEditor {
             return;
         }
         String value = state.value == null ? "" : state.value.getAsString();
-        if (availableSceneNames.isEmpty()) {
+        if (availableScenes.isEmpty()) {
             ImGui.textColored(0xFF7777FF, "当前谱面没有可用场景。");
             return;
         }
-        if (ImGui.beginCombo("##arena", value)) {
-            for (String name : availableSceneNames) if (ImGui.selectable(name + "##arena-" + name, name.equals(value))) commitValue(form, state, new JsonPrimitive(name));
+        SceneOption selected = availableScenes.stream().filter(scene -> scene.id().equals(value)).findFirst().orElse(null);
+        if (ImGui.beginCombo("##arena", selected == null ? value : selected.displayName())) {
+            for (SceneOption scene : availableScenes) if (ImGui.selectable(scene.displayName() + "##arena-" + scene.id(), scene.id().equals(value))) commitValue(form, state, new JsonPrimitive(scene.id()));
             ImGui.endCombo();
         }
-        if (!availableSceneNames.contains(value)) ImGui.textColored(0xFF7777FF, "当前场景不存在，请重新选择。");
+        if (selected == null) ImGui.textColored(0xFF7777FF, "当前场景不存在，请重新选择。");
     }
 
     private void renderNoteTypesMenu(EventForm form, FieldState state) {

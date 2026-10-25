@@ -36,7 +36,7 @@ final class SceneEditScreen extends RhythmcScreen {
                 if (scenes.isEmpty()) content.child(wrappedLabel("暂无场景，请先新建场景。", contentWidth));
                 for (SceneEditStorage.Scene scene : scenes) {
                     String status = scene.saved ? "已保存" : "未保存";
-                    content.child(UIComponents.button(Text.literal(scene.name + "  [" + scene.icon + "]  " + status), button -> MinecraftClient.getInstance().setScreen(new SceneEditScreen(scene))).horizontalSizing(Sizing.fill()));
+                    content.child(UIComponents.button(Text.literal(scene.displayName + "  [" + scene.icon + "]  " + status), button -> MinecraftClient.getInstance().setScreen(new SceneEditScreen(scene))).horizontalSizing(Sizing.fill()));
                 }
             } catch (IOException exception) {
                 content.child(wrappedLabel("读取场景失败：" + exception.getMessage(), contentWidth));
@@ -44,9 +44,9 @@ final class SceneEditScreen extends RhythmcScreen {
         } else {
             content.child(UIComponents.label(Text.literal("场景 " + selected.index + " 设置")).shadow(true));
             content.child(UIComponents.label(Text.literal("场景名称")));
-            nameBox = UIComponents.textBox(Sizing.fill(), selected.name);
+            nameBox = UIComponents.textBox(Sizing.fill(), selected.displayName);
             nameBox.onChanged().subscribe(value -> {
-                selected.name = value.replaceAll("[^a-zA-Z0-9_]", "");
+                selected.displayName = value;
             });
             content.child(nameBox);
             content.child(UIComponents.label(Text.literal("当前图标物品 ID：" + selected.icon)));
@@ -80,9 +80,9 @@ final class SceneEditScreen extends RhythmcScreen {
 
     private void save() {
         String name = nameBox.getText().trim();
-        if (name.isBlank() || !name.matches("[a-zA-Z0-9_]+")) { ClientSceneAccess.status("场景名称只能包含大小写字母、数字和下划线"); return; }
+        if (name.isBlank()) { ClientSceneAccess.status("场景显示名称不能为空"); return; }
         if (selected.icon == null || !selected.icon.matches("[a-z0-9_.-]+:[a-z0-9_./-]+")) { ClientSceneAccess.status("图标必须是有效物品 ID"); return; }
-        selected.name = name;
+        selected.displayName = name;
         try { ClientSceneAccess.save(selected); ClientSceneAccess.status("场景设置已保存"); MinecraftClient.getInstance().setScreen(new SceneEditScreen()); }
         catch (IOException exception) { ClientSceneAccess.status("保存场景失败：" + exception.getMessage()); }
     }

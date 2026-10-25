@@ -21,6 +21,9 @@ public final class ClientSceneAccess {
         return list().stream().filter(scene -> scene.saved && scene.name != null && !scene.name.isBlank())
                 .map(scene -> scene.name).distinct().toList();
     }
+    public static List<SceneEditStorage.Scene> savedScenes() throws IOException {
+        return list().stream().filter(scene -> scene.saved && scene.name != null && !scene.name.isBlank()).toList();
+    }
     static SceneEditStorage.Scene create() throws IOException {
         var player = MinecraftClient.getInstance().player;
         String icon = player == null || player.getMainHandStack().isEmpty() ? null : Registries.ITEM.getId(player.getMainHandStack().getItem()).toString();

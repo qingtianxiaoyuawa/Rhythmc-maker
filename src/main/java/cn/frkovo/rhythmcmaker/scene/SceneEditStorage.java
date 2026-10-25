@@ -43,6 +43,7 @@ public final class SceneEditStorage {
                 ? GSON.fromJson(Files.readString(path, StandardCharsets.UTF_8), LIST_TYPE)
                 : new ArrayList<>();
         if (scenes == null) scenes = new ArrayList<>();
+        migrateSceneNames(server, chartId, scenes);
         normalize(scenes);
         refreshSavedState(server, chartId, scenes);
         migrateLegacyScenes(server, chartId, scenes);
@@ -59,12 +60,10 @@ public final class SceneEditStorage {
         normalize(scenes);
         migrateLegacyScenes(server, chartId, scenes);
         Path root = localRoot(server, chartId);
-        boolean hasPersistedScenes = scenes.stream().anyMatch(scene -> !scene.initial || scene.saved);
-        if (hasPersistedScenes) Files.createDirectories(root);
+        if (!scenes.isEmpty()) Files.createDirectories(root);
         for (Scene scene : scenes) {
             Path directory = root.resolve(sceneDirectoryName(scene)).normalize();
             if (!directory.startsWith(root)) throw new IOException("场景目录无效");
-            if (scene.initial && !scene.saved && !Files.isDirectory(directory)) continue;
             Files.createDirectories(directory);
             Files.writeString(directory.resolve("metadata.yml"), metadata(scene), StandardCharsets.UTF_8);
         }
@@ -77,7 +76,8 @@ public final class SceneEditStorage {
         Scene initial = scenes.stream().filter(scene -> scene.initial).findFirst().orElseGet(() -> {
             Scene scene = new Scene();
             scene.initial = true;
-            scene.name = "initial_arena";
+            scene.name = UUID.randomUUID().toString();
+            scene.displayName = "initial_arena";
             scene.icon = "minecraft:grass_block";
             return scene;
         });
@@ -87,7 +87,8 @@ public final class SceneEditStorage {
         if (initial.sceneId == null || initial.sceneId.isBlank()) initial.sceneId = UUID.randomUUID().toString();
         initial.index = 1;
         initial.x = 200;
-        if (!validName(initial.name)) initial.name = "initial_arena";
+        if (!validName(initial.name)) initial.name = UUID.randomUUID().toString();
+        if (initial.displayName == null || initial.displayName.isBlank()) initial.displayName = "initial_arena";
         if (initial.icon == null || initial.icon.isBlank()) initial.icon = "minecraft:grass_block";
         scenes.add(initial);
         for (int position = 0; position < customScenes.size(); position++) {
@@ -96,9 +97,28 @@ public final class SceneEditStorage {
             if (scene.sceneId == null || scene.sceneId.isBlank()) scene.sceneId = UUID.randomUUID().toString();
             scene.index = position + 2;
             scene.x = 600 + position * 200;
-            if (!validName(scene.name)) scene.name = "effect_arena";
+            if (!validName(scene.name)) scene.name = UUID.randomUUID().toString();
+            if (scene.displayName == null || scene.displayName.isBlank()) scene.displayName = "effect_arena_" + (position + 1);
             if (scene.icon == null || scene.icon.isBlank()) scene.icon = "minecraft:grass_block";
             scenes.add(scene);
+        }
+    }
+
+    private static void migrateSceneNames(MinecraftServer server, String chartId, List<Scene> scenes) throws IOException {
+        Path root = localRoot(server, chartId);
+        for (Scene scene : scenes) {
+            if (scene == null) continue;
+            boolean needsMigration = scene.displayName == null || scene.displayName.isBlank();
+            if (!needsMigration) continue;
+            scene.displayName = scene.name;
+            Path directory = localSceneDirectory(root, scene.index);
+            Path metadata = directory == null ? null : directory.resolve("metadata.yml");
+            if (metadata != null && Files.isRegularFile(metadata)) {
+                String storedName = readLegacySceneValue(metadata, "name", "");
+                if (validName(storedName)) scene.name = storedName;
+                String storedDisplayName = readLegacySceneValue(metadata, "display-name", "");
+                if (storedDisplayName != null && !storedDisplayName.isBlank()) scene.displayName = storedDisplayName;
+            } else if (needsMigration && validName(scene.name)) scene.name = UUID.randomUUID().toString();
         }
     }
 
@@ -182,15 +202,14 @@ public final class SceneEditStorage {
     }
 
     private static String metadata(Scene scene) {
-        String arenaName = scene.initial ? "initial_arena" : scene.name.toLowerCase(java.util.Locale.ROOT);
-        return "name: \"" + yaml(arenaName) + "\"\ndisplay-name: \"" + yaml(scene.name) + "\"\nauthor: RhythMC Maker\n"
+        return "name: \"" + yaml(scene.name) + "\"\ndisplay-name: \"" + yaml(scene.displayName) + "\"\nauthor: RhythMC Maker\n"
                 + "description: \"\"\nicon: " + material(scene.icon) + "\nborder: CYAN_CONCRETE\nsuccess: GREEN_CONCRETE\n"
                 + "schematic: arena.schem\nhide: false\nsceneId: " + scene.sceneId + "\nindex: " + scene.index
                 + "\ntype: " + (scene.initial ? "initial" : "effect") + "\n";
     }
 
     private static boolean validName(String value) {
-        return value != null && value.matches("[a-zA-Z0-9_]+");
+        return value != null && value.matches("[a-zA-Z0-9._-]+");
     }
 
     private static String material(String icon) {
@@ -219,8 +238,8 @@ public final class SceneEditStorage {
             else if (key.equals("type")) scene.initial = value.equals("initial");
             else if (key.equals("icon")) scene.icon = value;
         }
-        scene.name = importedDisplayName == null || importedDisplayName.isBlank() ? importedName : importedDisplayName;
-        if (scene.name == null || scene.name.isBlank()) scene.name = fallbackName;
+        scene.name = importedName == null || importedName.isBlank() ? UUID.randomUUID().toString() : importedName;
+        scene.displayName = importedDisplayName == null || importedDisplayName.isBlank() ? fallbackName : importedDisplayName;
         return scene;
     }
 
@@ -231,6 +250,7 @@ public final class SceneEditStorage {
             value.index = scene.index;
             value.initial = scene.initial;
             value.name = scene.name;
+            value.displayName = scene.displayName;
             value.icon = scene.icon;
             value.x = scene.x;
             value.saved = scene.saved;
@@ -316,7 +336,7 @@ public final class SceneEditStorage {
     public static Path schematicPath(MinecraftServer server, String chartId, String sceneName) throws IOException {
         if (sceneName == null || sceneName.isBlank()) throw new IOException("场景名称无效");
         Scene scene = list(server, chartId).stream()
-                .filter(value -> sceneName.equals(value.name))
+                .filter(value -> sceneName.equals(value.name) || sceneName.equals(value.displayName))
                 .findFirst()
                 .orElseThrow(() -> new IOException("谱面中不存在场景：" + sceneName));
         return schematicPath(server, chartId, scene.index);
@@ -344,9 +364,20 @@ public final class SceneEditStorage {
         CACHE.remove(path(server, chartId).toAbsolutePath().normalize());
     }
 
-    public static void deleteSchematic(MinecraftServer server, String chartId, int sceneIndex) throws IOException {
-        Files.deleteIfExists(schematicPath(server, chartId, sceneIndex));
+    public static void deleteSceneFiles(MinecraftServer server, String chartId, Scene scene) throws IOException {
+        Path root = localRoot(server, chartId).toAbsolutePath().normalize();
+        Path directory = root.resolve(sceneDirectoryName(scene)).normalize();
+        if (!directory.startsWith(root)) throw new IOException("场景目录无效");
+        Files.deleteIfExists(directory.resolve("arena.schem").toAbsolutePath().normalize());
+        Files.deleteIfExists(directory.resolve("metadata.yml").toAbsolutePath().normalize());
+        deleteDirectoryIfEmpty(directory);
         CACHE.remove(path(server, chartId).toAbsolutePath().normalize());
+    }
+
+    public static void deleteSchematic(MinecraftServer server, String chartId, int sceneIndex) throws IOException {
+        Scene scene = list(server, chartId).stream().filter(value -> value.index == sceneIndex).findFirst()
+                .orElseThrow(() -> new IOException("场景不存在"));
+        deleteSceneFiles(server, chartId, scene);
     }
 
     public static void copySchematic(MinecraftServer server, String chartId, int sceneIndex, Path source) throws IOException {
@@ -406,6 +437,7 @@ public final class SceneEditStorage {
         public int index;
         public boolean initial;
         public String name;
+        public String displayName;
         public String icon;
         public int x;
         public boolean saved;
@@ -415,7 +447,8 @@ public final class SceneEditStorage {
         public Scene(int index) {
             this.index = index;
             this.initial = index == 1;
-            this.name = index == 1 ? "initial_arena" : "effect_arena";
+            this.name = UUID.randomUUID().toString();
+            this.displayName = index == 1 ? "initial_arena" : "effect_arena_" + (index - 1);
             this.icon = "minecraft:grass_block";
             this.x = index == 1 ? 200 : 600 + (index - 2) * 200;
             this.sceneId = UUID.randomUUID().toString();

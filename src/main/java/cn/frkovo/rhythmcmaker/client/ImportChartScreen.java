@@ -175,7 +175,7 @@ private void importLegacyMenu(FlowLayout page) {
         List<ClientChartAccess.ImportedScene> importedScenes = new ArrayList<>();
         for (int sceneIndex = 0; sceneIndex < draft.scenes.size(); sceneIndex++) {
             Scene scene = draft.scenes.get(sceneIndex);
-            importedScenes.add(new ClientChartAccess.ImportedScene(scene.schem, scene.info, sceneIndex == 0));
+            if (scene.complete()) importedScenes.add(new ClientChartAccess.ImportedScene(scene.schem, scene.info, sceneIndex == 0));
         }
         ClientChartAccess.status("正在导入 3.0 谱面，请稍候...");
         java.util.concurrent.CompletableFuture.supplyAsync(() -> {
@@ -199,7 +199,7 @@ private void importLegacyMenu(FlowLayout page) {
                     long incompleteScenes = draft.scenes.stream().filter(scene -> !scene.complete()).count();
                     ClientChartAccess.status(incompleteScenes == 0
                             ? "3.0 谱面已导入（完整场景 " + importedScenes.size() + " 个）"
-                            : "3.0 谱面已导入，但有 " + incompleteScenes + " 个场景未完整导入，已使用默认场景");
+                            : "3.0 谱面已导入（完整场景 " + importedScenes.size() + " 个，跳过不完整场景 " + incompleteScenes + " 个）");
                     client.setScreen(new ChartListScreen());
                 });
             } catch (Exception exception) {

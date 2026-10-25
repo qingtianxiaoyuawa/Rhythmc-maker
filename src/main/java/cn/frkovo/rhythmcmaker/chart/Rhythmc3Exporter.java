@@ -56,7 +56,9 @@ public final class Rhythmc3Exporter {
 
         Path exportRoot = ChartStorage.chartDirectoryPath(server, chart.id).resolve("exports").toAbsolutePath().normalize();
         String songFolderName = safeExportName(chart.title);
-        String arenaKey = safeArenaKey(chart);
+        java.util.List<SceneEditStorage.Scene> scenes = SceneEditStorage.list(server, chart.id);
+        SceneEditStorage.Scene initialScene = scenes.stream().filter(scene -> scene.initial).findFirst().orElseThrow(() -> new IOException("初始场景不存在"));
+        String initialDirectory = sceneDirectoryName(initialScene, scenes);
         Files.createDirectories(exportRoot);
         String timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
         Path folder = uniqueExportFolder(exportRoot, songFolderName + " - " + timestamp);
@@ -69,10 +71,10 @@ public final class Rhythmc3Exporter {
             Files.createDirectories(chartFolder);
             writeManifest(chartFolder, chart);
             writeEditorTrackLayout(chartFolder, chart);
-            writeChart(chartFolder, chart, arenaKey);
-            exportScenes(server, world, chart, temporary.resolve("Arenas"), arenaKey);
+            writeChart(chartFolder, chart, initialScene.name);
+            exportScenes(server, world, chart, temporary.resolve("Arenas"), scenes);
             copyAudio(server, temporary, chart);
-            writeExportManifest(temporary, chart, chartFolder, arenaKey);
+            writeExportManifest(temporary, chart, chartFolder, initialDirectory);
             Files.move(temporary, folder, StandardCopyOption.ATOMIC_MOVE);
             return folder;
         } catch (IOException | RuntimeException exception) {
@@ -89,28 +91,30 @@ public final class Rhythmc3Exporter {
         return candidate;
     }
 
-    private static void exportScenes(MinecraftServer server, ServerWorld world, ChartManifest chart, Path arenas, String arenaKey) throws IOException {
+    private static void exportScenes(MinecraftServer server, ServerWorld world, ChartManifest chart, Path arenas, java.util.List<SceneEditStorage.Scene> scenes) throws IOException {
         Files.createDirectories(arenas);
-        for (SceneEditStorage.Scene scene : SceneEditStorage.list(server, chart.id)) {
-            String directoryName = scene.initial ? "initial" : safeSceneName(scene.name, scene.sceneId);
+        for (SceneEditStorage.Scene scene : scenes) {
+            String directoryName = sceneDirectoryName(scene, scenes);
             Path target = arenas.resolve(directoryName).normalize();
+            if (!target.startsWith(arenas.toAbsolutePath().normalize())) throw new IOException("场景导出目录无效");
             Files.createDirectories(target);
             Path source = SceneEditStorage.schematicPath(server, chart.id, scene.index);
             if (Files.isRegularFile(source)) {
                 Files.copy(source, target.resolve("arena.schem"), StandardCopyOption.REPLACE_EXISTING);
-                writeExportSceneMetadata(target, chart, scene, arenaKey);
+                writeExportSceneMetadata(target, chart, scene);
             } else if (scene.initial) {
-                writeScene(target, world, chart, arenaKey);
+                writeScene(target, world, chart, scene.name);
+                writeExportSceneMetadata(target, chart, scene);
             } else {
                 throw new IOException("场景缺少 arena.schem：" + scene.name);
             }
         }
     }
 
-    private static void writeExportSceneMetadata(Path folder, ChartManifest chart, SceneEditStorage.Scene scene, String arenaKey) throws IOException {
-        String sceneName = scene.initial ? arenaKey : blank(scene.name, "scene").toLowerCase(Locale.ROOT);
+    private static void writeExportSceneMetadata(Path folder, ChartManifest chart, SceneEditStorage.Scene scene) throws IOException {
+        String sceneName = scene.name;
         String content = "name: " + yaml(sceneName) + "\n"
-                + "display-name: " + yaml(scene.name) + "\n"
+                + "display-name: " + yaml(scene.displayName) + "\n"
                 + "author: " + yaml(blank(chart.charter, "Unknown")) + "\n"
                 + "description: \"\"\n"
                 + "icon: " + bukkitMaterial(scene.icon) + "\n"
@@ -121,20 +125,19 @@ public final class Rhythmc3Exporter {
         Files.writeString(folder.resolve("metadata.yml"), content, StandardCharsets.UTF_8);
     }
 
-    private static String safeSceneName(String name, String id) {
-        String value = name == null ? "scene" : name.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_").replace("..", "_").trim();
-        if (value.isBlank()) value = "scene";
-        String suffix = id == null ? "scene" : id.replace("-", "");
-        return value + "~" + suffix.substring(0, Math.min(8, suffix.length()));
+    private static String sceneDirectoryName(SceneEditStorage.Scene scene, java.util.List<SceneEditStorage.Scene> scenes) {
+        String displayName = safeExportName(scene.displayName);
+        long duplicateCount = scenes.stream().filter(candidate -> safeExportName(candidate.displayName).equalsIgnoreCase(displayName)).count();
+        return duplicateCount > 1 ? displayName + "_" + safeExportName(scene.name) : displayName;
     }
 
-    private static void writeExportManifest(Path folder, ChartManifest chart, Path chartFolder, String arenaKey) throws IOException {
+    private static void writeExportManifest(Path folder, ChartManifest chart, Path chartFolder, String initialDirectory) throws IOException {
         JsonObject root = new JsonObject();
         root.addProperty("chartId", chart.id); root.addProperty("title", chart.title);
         root.addProperty("exportedAt", java.time.Instant.now().toString());
         root.addProperty("audio", "audio." + extension(chart.audioFile));
         root.addProperty("chart", folder.relativize(chartFolder.resolve(difficultyFile(chart.difficulty) + ".rmcc")).toString().replace('\\', '/'));
-        root.addProperty("initialArena", "Arenas/initial");
+        root.addProperty("initialArena", "Arenas/" + initialDirectory);
         JsonArray arenas = new JsonArray();
         Path arenaRoot = folder.resolve("Arenas");
         if (Files.isDirectory(arenaRoot)) {
@@ -192,7 +195,7 @@ public final class Rhythmc3Exporter {
         EditorTrackLayoutFile.write(folder.resolve(EditorTrackLayoutFile.FILE_NAME), EditorTrackLayout.of(chart));
     }
 
-    private static void writeChart(Path folder, ChartManifest chart, String arenaKey) throws IOException {
+    private static void writeChart(Path folder, ChartManifest chart, String initialArenaId) throws IOException {
         ChartTiming.Prepared timing = ChartTiming.prepare(chart);
         double endBeat = Math.max(8.0, timing.secondsToBeat(Math.max(0.0, chart.durationSeconds)));
         if (chart.notes != null) for (ChartManifest.Note note : chart.notes) if (note != null) endBeat = Math.max(endBeat, exportBeat(note) + 8.0);
@@ -204,7 +207,7 @@ public final class Rhythmc3Exporter {
         meta.addProperty("level", chart.level);
         meta.addProperty("offset", chart.offsetMillis);
         meta.addProperty("uid", positiveId(chart.id) * 10 + difficultyIndex(chart.difficulty));
-        meta.addProperty("initialArena", arenaKey);
+        meta.addProperty("initialArena", initialArenaId);
         meta.add("comments", new JsonArray());
         JsonArray bpms = new JsonArray();
         if (chart.bpms == null || chart.bpms.isEmpty()) {
@@ -367,6 +370,7 @@ public final class Rhythmc3Exporter {
     private static int positiveId(String value) { return Math.floorMod(value.hashCode(), (Integer.MAX_VALUE - 4) / 10) + 1; }
     private static String safeExportName(String name) {
         String value = blank(name, "untitled").replaceAll("[\\/:*?\"<>|\\p{Cntrl}]", "_").trim();
+        value = value.replace("..", "_");
         return value.isBlank() ? "untitled" : value;
     }
 

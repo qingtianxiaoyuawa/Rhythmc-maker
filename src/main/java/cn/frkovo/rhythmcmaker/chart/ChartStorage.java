@@ -126,33 +126,33 @@ public final class ChartStorage {
     }
 
     public static void installImportedScenes(MinecraftServer server, ChartManifest chart, List<ImportedScene> scenes) throws IOException {
-        List<ImportedScene> importedScenes = scenes == null ? List.of() : scenes;
-        long initialSceneCount = importedScenes.stream().filter(scene -> scene != null && scene.initial()).count();
-        if (initialSceneCount > 1) throw new IOException("只能导入一个初始场景");
+        List<ImportedScene> importedScenes = scenes == null ? List.of() : scenes.stream()
+                .filter(scene -> scene != null && scene.schem() != null && scene.info() != null
+                        && Files.isRegularFile(scene.schem()) && Files.isRegularFile(scene.info()))
+                .toList();
+        if (importedScenes.stream().filter(ImportedScene::initial).count() > 1) throw new IOException("只能导入一个初始场景");
         List<SceneEditStorage.Scene> editorScenes = SceneEditStorage.list(server, chart.id);
-        int initialSceneIndex = editorScenes.stream().filter(scene -> scene.initial).mapToInt(scene -> scene.index).findFirst().orElse(1);
+        int initialSceneIndex = editorScenes.stream().filter(scene -> scene.initial).mapToInt(scene -> scene.index).findFirst().orElseThrow();
         int sceneIndex = editorScenes.stream().mapToInt(scene -> scene.index).max().orElse(0) + 1;
         if (chart.initialArena != null && !chart.initialArena.isBlank()) {
             chart.arenaBindings.put(chart.initialArena, "scene-editor:" + initialSceneIndex);
         }
         for (ImportedScene importedScene : importedScenes) {
-            if (importedScene == null || importedScene.schem() == null || importedScene.info() == null
-                    || !Files.isRegularFile(importedScene.schem()) || !Files.isRegularFile(importedScene.info())) continue;
-            String sceneName = sceneKey(importedScene.info(), importedScene.initial() ? "initial" : "scene" + sceneIndex);
+            String sceneName = sceneKey(importedScene.info(), importedScene.initial() ? "initial" : "scene_" + sceneIndex);
             if (importedScene.initial()) {
                 chart.arenaBindings.put(sceneName, "scene-editor:" + initialSceneIndex);
-                continue;
+            } else {
+                chart.arenaBindings.put(sceneName, "scene-editor:" + sceneIndex);
+                sceneIndex++;
             }
-            chart.arenaBindings.put(sceneName, "scene-editor:" + sceneIndex);
-            sceneIndex++;
         }
         if (chart.effects != null) for (JsonObject effect : chart.effects) {
             if (effect == null) continue;
             JsonObject properties = effect.has("properties") && effect.get("properties").isJsonObject() ? effect.getAsJsonObject("properties") : effect;
             if (!properties.has("arena")) continue;
             String arena = properties.get("arena").getAsString();
-            String path = chart.arenaBindings.get(arena);
-            if (path != null) properties.addProperty("arenaPath", path);
+            String binding = chart.arenaBindings.get(arena);
+            if (binding != null) properties.addProperty("arenaPath", binding);
         }
         RhythmcMaker.installImportedScenes(server, chart, importedScenes);
     }

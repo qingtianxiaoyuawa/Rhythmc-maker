@@ -644,14 +644,19 @@ public final class RhythmcMaker implements ModInitializer {
                 restoreEditorTrackFoundation(editor, 0, chart.trackLength, laneCount(chart));
                 extendEditorArea(editor, 0, chart.trackLength, chartBeats(source.getServer(), chartId), laneCount(chart), player.getUuid());
             }
-            if (!chart.sceneInitialized) {
-                Path initialScene = SceneEditStorage.schematicPath(source.getServer(), chart.id, 1);
+            Path initialScene = SceneEditStorage.schematicPath(source.getServer(), chart.id, 1);
+            SceneEditorAreaKey initialAreaKey = new SceneEditorAreaKey(editor.getRegistryKey(), PLAYBACK_PLATFORM_X);
+            boolean initialCapturePending = SCENE_CAPTURE_TASKS.stream()
+                    .anyMatch(task -> chart.id.equals(task.chartId) && task.sceneIndex == 1);
+            boolean initialScenePending = SCENE_EDITOR_AREA_TASKS.containsKey(initialAreaKey)
+                    || initialCapturePending || IMPORTING_CHARTS.contains(chart.id);
+            if ((!chart.sceneInitialized || !Files.isRegularFile(initialScene)) && !initialScenePending) {
                 if (Files.isRegularFile(initialScene)) {
                     SCENE_IMPORT_TASKS.offer(new SceneImportTask(chart, initialScene, PLAYBACK_PLATFORM_X, PLAYBACK_PLATFORM_Y, PLAYBACK_PLATFORM_Z));
                     IMPORTING_CHARTS.add(chart.id);
                 } else {
-                    buildPlaybackArea(editor, laneCount(chart));
-                    queueSceneCapture(editor, chart.id, 1, PLAYBACK_PLATFORM_X, null, false);
+                    SceneEditStorage.save(source.getServer(), chart.id, SceneEditStorage.list(source.getServer(), chart.id));
+                    queueSceneEditorArea(editor, PLAYBACK_PLATFORM_X, laneCount(chart), chart.id, 1);
                 }
                 chart.sceneInitialized = true;
                 saveChart(source.getServer(), chart);
@@ -1316,7 +1321,7 @@ public final class RhythmcMaker implements ModInitializer {
             player.teleport(world, scene.x + 0.5, 66.0, 0.5, Set.of(), 0.0f, 0.0f, false);
             player.getInventory().setStack(0, menuStack(SAVE_SCENE_ITEM));
             player.currentScreenHandler.sendContentUpdates();
-            player.sendMessage(Text.literal("已进入 " + scene.name + " 搭建场地，右键保存场景后返回"), true);
+            player.sendMessage(Text.literal("已进入 " + scene.displayName + " 搭建场地，右键保存场景后返回"), true);
             return 1;
         } catch (IOException exception) {
             player.sendMessage(Text.literal("读取场景失败：" + exception.getMessage()), true);
@@ -1340,7 +1345,7 @@ public final class RhythmcMaker implements ModInitializer {
         java.util.List<SceneEditStorage.Scene> scenes = SceneEditStorage.list(server, chartId);
         int index = scenes.stream().mapToInt(scene -> scene.index).max().orElse(0) + 1;
         SceneEditStorage.Scene scene = new SceneEditStorage.Scene(index);
-        scene.name = nextEffectArenaName(scenes);
+        scene.displayName = nextEffectArenaName(scenes);
         if (iconId != null && iconId.matches("[a-z0-9_.-]+:[a-z0-9_./-]+")) scene.icon = iconId;
         scenes.add(scene);
         SceneEditStorage.save(server, chartId, scenes);
@@ -1352,7 +1357,7 @@ public final class RhythmcMaker implements ModInitializer {
         return scene;
     }
     private static String nextEffectArenaName(java.util.List<SceneEditStorage.Scene> scenes) {
-        java.util.Set<String> names = scenes.stream().map(scene -> scene.name).collect(java.util.stream.Collectors.toSet());
+        java.util.Set<String> names = scenes.stream().map(scene -> scene.displayName).collect(java.util.stream.Collectors.toSet());
         int suffix = 1;
         while (names.contains("effect_arena_" + suffix)) suffix++;
         return "effect_arena_" + suffix;
@@ -1363,29 +1368,31 @@ public final class RhythmcMaker implements ModInitializer {
         SceneEditStorage.save(server, chartId, scenes);
     }
     public static void installImportedScenes(MinecraftServer server, ChartManifest chart, java.util.List<ImportedScene> imported) throws IOException {
-        if (imported == null || imported.isEmpty()) return;
-        chart.sceneImportIncomplete = imported.stream().anyMatch(scene -> !isCompleteImportedScene(scene));
+        if (imported == null || imported.stream().noneMatch(RhythmcMaker::isCompleteImportedScene)) return;
+        java.util.List<ImportedScene> completeScenes = imported.stream().filter(RhythmcMaker::isCompleteImportedScene).toList();
+        chart.sceneImportIncomplete = false;
         ChartDimensionManager.key(chart);
         java.util.List<SceneEditStorage.Scene> scenes = SceneEditStorage.list(server, chart.id);
         SceneEditStorage.save(server, chart.id, scenes);
         java.util.List<SceneImportTask> pending = new java.util.ArrayList<>();
         int nextIndex = scenes.stream().mapToInt(scene -> scene.index).max().orElse(0) + 1;
-        ImportedScene initial = imported.stream().filter(scene -> scene != null && scene.initial()).findFirst().orElse(null);
-        if (isCompleteImportedScene(initial)) {
-            String importedInitialName = readSceneName(initial.info(), "");
-            String initialSceneName = importedInitialName.isBlank() ? chart.initialArena : importedInitialName;
-            if (initialSceneName != null && !initialSceneName.isBlank())
-                scenes.stream().filter(scene -> scene.index == 1).findFirst().ifPresent(scene -> scene.name = initialSceneName);
+        ImportedScene initial = completeScenes.stream().filter(ImportedScene::initial).findFirst().orElse(null);
+        if (initial != null) {
+            SceneEditStorage.Scene initialScene = scenes.stream().filter(scene -> scene.initial).findFirst().orElseThrow();
+            initialScene.name = readSceneName(initial.info(), initialScene.name);
+            initialScene.displayName = readSceneDisplayName(initial.info(), initialScene.displayName);
+            chart.initialArena = initialScene.name;
             SceneEditStorage.save(server, chart.id, scenes);
-            SceneEditStorage.copySchematic(server, chart.id, 1, initial.schem());
+            SceneEditStorage.copySchematic(server, chart.id, initialScene.index, initial.schem());
             chart.sceneInitialized = true;
             pending.add(new SceneImportTask(chart, initial.schem(), PLAYBACK_PLATFORM_X, PLAYBACK_PLATFORM_Y, PLAYBACK_PLATFORM_Z));
         }
-        for (ImportedScene importedScene : imported) {
-            if (importedScene == null || importedScene.initial() || !isCompleteImportedScene(importedScene)) continue;
+        for (ImportedScene importedScene : completeScenes) {
+            if (importedScene.initial()) continue;
             int sceneIndex = nextIndex++;
             SceneEditStorage.Scene scene = new SceneEditStorage.Scene(sceneIndex);
-            scene.name = readSceneName(importedScene.info(), "场景" + sceneIndex);
+            scene.name = readSceneName(importedScene.info(), scene.name);
+            scene.displayName = readSceneDisplayName(importedScene.info(), "场景" + sceneIndex);
             scene.icon = readSceneIcon(importedScene.info());
             scene.saved = true;
             scenes.add(scene);
@@ -1402,31 +1409,43 @@ public final class RhythmcMaker implements ModInitializer {
         }
     }
     public static void installDefaultArenaScenes(MinecraftServer server, ChartManifest chart, java.util.List<String> arenaNames) throws IOException {
-        if (chart == null || arenaNames == null || arenaNames.isEmpty()) return;
+        if (chart == null || arenaNames == null) return;
         ServerWorld world = ChartDimensionManager.getOrCreate(server, chart);
         java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
         for (String name : arenaNames) if (name != null && !name.isBlank()) names.add(name.trim());
-        if (names.isEmpty()) return;
         java.util.List<SceneEditStorage.Scene> scenes = SceneEditStorage.list(server, chart.id);
         int nextIndex = scenes.stream().mapToInt(scene -> scene.index).max().orElse(0) + 1;
         SceneEditStorage.Scene initialScene = scenes.stream().filter(scene -> scene.initial).findFirst().orElseThrow();
-        if (chart.initialArena != null && !chart.initialArena.isBlank()) initialScene.name = chart.initialArena;
-        if (chart.initialArena != null && !chart.initialArena.isBlank()) {
-            chart.arenaBindings.put(chart.initialArena, "scene-editor:" + initialScene.index);
+        String importedInitialName = chart.initialArena;
+        if (importedInitialName != null && !importedInitialName.isBlank()) {
+            initialScene.displayName = importedInitialName;
+            chart.arenaBindings.put(importedInitialName, "scene-editor:" + initialScene.index);
+        } else {
+            initialScene.displayName = "initial_arena";
+        }
+        chart.initialArena = initialScene.name;
+        chart.arenaBindings.put(initialScene.name, "scene-editor:" + initialScene.index);
+        if (!Files.isRegularFile(SceneEditStorage.schematicPath(server, chart.id, initialScene.index))) {
+            SceneEditorAreaKey initialAreaKey = new SceneEditorAreaKey(world.getRegistryKey(), initialScene.x);
+            if (!SCENE_EDITOR_AREA_TASKS.containsKey(initialAreaKey)) {
+                queueSceneEditorArea(world, initialScene.x, laneCount(chart), chart.id, initialScene.index);
+            }
+            chart.sceneInitialized = true;
         }
         for (String arenaName : names) {
-            if (arenaName.equals(chart.initialArena)) continue;
-            SceneEditStorage.Scene existing = scenes.stream().filter(scene -> arenaName.equals(scene.name)).findFirst().orElse(null);
+            if (arenaName.equals(importedInitialName)) continue;
+            SceneEditStorage.Scene existing = scenes.stream().filter(scene -> arenaName.equals(scene.displayName)).findFirst().orElse(null);
             if (existing != null || chart.arenaBindings.containsKey(arenaName)) {
                 if (existing != null) chart.arenaBindings.put(arenaName, "scene-editor:" + existing.index);
                 continue;
             }
             int index = nextIndex++;
             SceneEditStorage.Scene scene = new SceneEditStorage.Scene(index);
-            scene.name = arenaName;
+            scene.displayName = arenaName;
             scene.saved = false;
             scenes.add(scene);
-            chart.arenaBindings.put(arenaName, "scene-editor:" + index);
+            chart.arenaBindings.put(scene.name, "scene-editor:" + index);
+            if (!scene.displayName.equals(arenaName)) chart.arenaBindings.put(arenaName, "scene-editor:" + index);
             queueSceneEditorArea(world, scene.x, laneCount(chart), chart.id, scene.index);
         }
         SceneEditStorage.save(server, chart.id, scenes);
@@ -1439,22 +1458,29 @@ public final class RhythmcMaker implements ModInitializer {
     private static String readSceneName(Path info, String fallback) {
         if (info == null || !Files.isRegularFile(info)) return fallback;
         try {
-            String arenaName = fallback;
             for (String line : Files.readAllLines(info)) {
                 String trimmed = line.trim();
                 if (trimmed.startsWith("name:")) {
                     String value = trimmed.substring(5).trim().replace("\"", "");
-                    if (!value.isBlank()) arenaName = value;
-                } else if (trimmed.startsWith("display-name:")) {
-                    String value = trimmed.substring("display-name:".length()).trim().replace("\"", "");
                     if (!value.isBlank()) return value;
                 }
             }
-            return arenaName;
         } catch (IOException ignored) { }
         return fallback;
     }
 
+    private static String readSceneDisplayName(Path info, String fallback) {
+        if (info == null || !Files.isRegularFile(info)) return fallback;
+        try {
+            for (String line : Files.readAllLines(info, java.nio.charset.StandardCharsets.UTF_8)) {
+                String trimmed = line.trim();
+                if (!trimmed.startsWith("display-name:")) continue;
+                String value = trimmed.substring("display-name:".length()).trim().replace("\"", "");
+                if (!value.isBlank()) return value;
+            }
+        } catch (IOException ignored) { }
+        return fallback;
+    }
     private static String readSceneIcon(Path info) {
         if (info == null || !Files.isRegularFile(info)) return "minecraft:grass_block";
         try {
@@ -1823,7 +1849,7 @@ public final class RhythmcMaker implements ModInitializer {
     }
     private static boolean isSceneReferenced(ChartManifest chart, SceneEditStorage.Scene scene) {
         String targetBinding = "scene-editor:" + scene.index;
-        if (scene.name.equals(chart.initialArena) || targetBinding.equals(chart.arenaBindings.get(chart.initialArena))) return true;
+        if (scene.name.equals(chart.initialArena) || scene.displayName.equals(chart.initialArena) || targetBinding.equals(chart.arenaBindings.get(chart.initialArena))) return true;
         for (com.google.gson.JsonObject effect : chart.effects) {
             if (effect == null) continue;
             String effectType = effect.has("effectType") ? effect.get("effectType").getAsString()
@@ -1833,7 +1859,7 @@ public final class RhythmcMaker implements ModInitializer {
                     ? effect.getAsJsonObject("properties") : effect;
             if (!properties.has("arena") || !properties.get("arena").isJsonPrimitive()) continue;
             String arena = properties.get("arena").getAsString();
-            if (scene.name.equals(arena) || targetBinding.equals(chart.arenaBindings.get(arena))) return true;
+            if (scene.name.equals(arena) || scene.displayName.equals(arena) || targetBinding.equals(chart.arenaBindings.get(arena))) return true;
         }
         return false;
     }
@@ -1844,14 +1870,12 @@ public final class RhythmcMaker implements ModInitializer {
             for (int position = 0; position < scenes.size(); position++) if (scenes.get(position).index == index) { removedPosition = position; break; }
             if (index <= 1 || removedPosition < 0) return false;
             ServerWorld world = ChartDimensionManager.getOrCreate(server, chart);
-            SceneEditStorage.deleteSchematic(server, chart.id, index);
-            for (int sourcePosition = removedPosition + 1; sourcePosition < scenes.size(); sourcePosition++) {
-                SceneEditStorage.moveSchematic(server, chart.id, scenes.get(sourcePosition).index, scenes.get(sourcePosition - 1).index);
-            }
+            SceneEditStorage.Scene removedScene = scenes.get(removedPosition);
+            SceneEditStorage.deleteSceneFiles(server, chart.id, removedScene);
             for (int sourcePosition = removedPosition + 1; sourcePosition < scenes.size(); sourcePosition++) {
                 moveSceneArea(world, scenes.get(sourcePosition).x, scenes.get(sourcePosition - 1).x);
             }
-            clearSceneEditorArea(world, scenes.get(scenes.size() - 1).x);
+            if (removedPosition == scenes.size() - 1) clearSceneEditorArea(world, removedScene.x);
             scenes.remove(removedPosition);
             chart.arenaBindings.entrySet().removeIf(entry -> ("scene-editor:" + index).equals(entry.getValue()));
             for (int position = 0; position < scenes.size(); position++) {
@@ -2069,7 +2093,7 @@ public final class RhythmcMaker implements ModInitializer {
                         player.teleport(world, scene.x + 0.5, 66.0, 0.5, Set.of(), 0.0f, 0.0f, false);
                         player.getInventory().setStack(0, menuStack(SAVE_SCENE_ITEM));
                         player.currentScreenHandler.sendContentUpdates();
-                        player.sendMessage(Text.literal("已进入 " + scene.name + " 搭建场地，右键保存场景后返回"), true);
+                        player.sendMessage(Text.literal("已进入 " + scene.displayName + " 搭建场地，右键保存场景后返回"), true);
                     }
                 } catch (IOException exception) {
                     player.sendMessage(Text.literal("进入场景失败：" + exception.getMessage()), true);
