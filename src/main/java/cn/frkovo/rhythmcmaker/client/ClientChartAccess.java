@@ -310,11 +310,15 @@ final class ClientChartAccess {
 
     static void status(String message) {
         MinecraftClient client = MinecraftClient.getInstance();
-        if (client.player != null) client.player.sendMessage(Text.literal(message), true);
+        if (client.player != null) client.player.sendMessage(Text.literal(statusText(message)), true);
     }
 
     static void statusWarning(String message) {
         MinecraftClient client = MinecraftClient.getInstance();
-        if (client.player != null) client.player.sendMessage(Text.literal(message).formatted(net.minecraft.util.Formatting.RED), true);
+        if (client.player != null) client.player.sendMessage(Text.literal(statusText(message)).formatted(net.minecraft.util.Formatting.RED), true);
+    }
+
+    private static String statusText(String message) {
+        return message.replaceAll("(?i)(?:[a-z]:[\\\\/]|\\\\\\\\|/(?:[a-z0-9_.-]+/)+)[^\\s]*", "[\\u8def\\u5f84\\u5df2\\u9690\\u85cf]");
     }
 }

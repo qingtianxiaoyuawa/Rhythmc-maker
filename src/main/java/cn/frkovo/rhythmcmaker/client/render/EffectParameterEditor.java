@@ -273,6 +273,7 @@ public final class EffectParameterEditor {
         if (isArenaField(form, field)) { renderArena(form, state); return; }
         if (isNoteTypesField(form, field)) { renderNoteTypesMenu(form, state); return; }
         if (isTextDisplayTrackField(form, field)) { renderTextDisplayTrack(form, state); return; }
+        if (isTracksField(form, field)) { renderTracksMenu(form, state); return; }
         if (isClearEffectsField(form, field)) {
             renderClearEffects(form, state, actual == null);
             return;
@@ -453,6 +454,10 @@ public final class EffectParameterEditor {
 
     private boolean isNoteTypesField(EventForm form, EffectParameterField field) {
         return codec.type(form.event).equals("HIDE_NOTES") && field.name().equals("noteTypes");
+    }
+
+    private boolean isTracksField(EventForm form, EffectParameterField field) {
+        return codec.type(form.event).equals("HIDE_NOTES") && field.name().equals("tracks");
     }
 
     private List<SceneOption> sceneOptions(ChartManifest chart) {

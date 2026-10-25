@@ -462,10 +462,7 @@ public final class EffectEditorImGuiView {
                 Math.min(controlsStart - 8.0f, width - ImGui.getStyle().getWindowPaddingX() - 8.0f));
         String information = chartInformation + "  ·  " + saveStatus;
         float informationWidth = toolbarTextWidth(information);
-        float informationAvailable = informationRight - informationStart;
-        float informationX = informationWidth < informationAvailable
-                ? informationStart + (informationAvailable - informationWidth) * 0.5f
-                : informationStart;
+        float informationX = Math.max(informationStart, informationRight - informationWidth);
         ImGui.setCursorPosX(informationStart);
         ImGui.pushClipRect(ImGui.getWindowPosX() + informationStart, ImGui.getCursorScreenPosY(),
                 ImGui.getWindowPosX() + informationRight, ImGui.getCursorScreenPosY() + ImGui.getTextLineHeightWithSpacing(), true);
