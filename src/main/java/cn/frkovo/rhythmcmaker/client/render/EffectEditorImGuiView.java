@@ -460,11 +460,17 @@ public final class EffectEditorImGuiView {
         ImGui.setCursorPosX(informationStart);
         float informationRight = Math.max(informationStart,
                 Math.min(controlsStart - 8.0f, width - ImGui.getStyle().getWindowPaddingX() - 8.0f));
+        String information = chartInformation + "  ·  " + saveStatus;
+        float informationWidth = toolbarTextWidth(information);
+        float informationAvailable = informationRight - informationStart;
+        float informationX = informationWidth < informationAvailable
+                ? informationStart + (informationAvailable - informationWidth) * 0.5f
+                : informationStart;
+        ImGui.setCursorPosX(informationStart);
         ImGui.pushClipRect(ImGui.getWindowPosX() + informationStart, ImGui.getCursorScreenPosY(),
                 ImGui.getWindowPosX() + informationRight, ImGui.getCursorScreenPosY() + ImGui.getTextLineHeightWithSpacing(), true);
-        ImGui.text(chartInformation);
-        ImGui.sameLine();
-        ImGui.text(saveStatus);
+        ImGui.setCursorPosX(informationX);
+        ImGui.text(information);
         ImGui.popClipRect();
         ImGui.setCursorPosX(controlsStart);
         boolean canUndo = !undoHistory.isEmpty();

@@ -129,19 +129,23 @@ public final class ChartStorage {
         List<ImportedScene> importedScenes = scenes == null ? List.of() : scenes;
         long initialSceneCount = importedScenes.stream().filter(scene -> scene != null && scene.initial()).count();
         if (initialSceneCount > 1) throw new IOException("只能导入一个初始场景");
-        int sceneIndex = 2;
+        List<SceneEditStorage.Scene> editorScenes = SceneEditStorage.list(server, chart.id);
+        int initialSceneIndex = editorScenes.stream().filter(scene -> scene.initial).mapToInt(scene -> scene.index).findFirst().orElse(1);
+        int sceneIndex = editorScenes.stream().mapToInt(scene -> scene.index).max().orElse(0) + 1;
+        if (chart.initialArena != null && !chart.initialArena.isBlank()) {
+            chart.arenaBindings.put(chart.initialArena, "scene-editor:" + initialSceneIndex);
+        }
         for (ImportedScene importedScene : importedScenes) {
             if (importedScene == null || importedScene.schem() == null || importedScene.info() == null
                     || !Files.isRegularFile(importedScene.schem()) || !Files.isRegularFile(importedScene.info())) continue;
             String sceneName = sceneKey(importedScene.info(), importedScene.initial() ? "initial" : "scene" + sceneIndex);
             if (importedScene.initial()) {
-                chart.arenaBindings.put(sceneName, "scene-editor:1");
+                chart.arenaBindings.put(sceneName, "scene-editor:" + initialSceneIndex);
                 continue;
             }
             chart.arenaBindings.put(sceneName, "scene-editor:" + sceneIndex);
             sceneIndex++;
         }
-        if (chart.initialArena != null && !chart.initialArena.isBlank()) chart.arenaBindings.put(chart.initialArena, "scene-editor:1");
         if (chart.effects != null) for (JsonObject effect : chart.effects) {
             if (effect == null) continue;
             JsonObject properties = effect.has("properties") && effect.get("properties").isJsonObject() ? effect.getAsJsonObject("properties") : effect;
@@ -369,13 +373,11 @@ public final class ChartStorage {
                 }
                 properties.add("noteTypes", noteTypes);
             }
-            JsonElement legacyTracks = firstJsonElement(old, properties, "tracks", "track-ids", "trackIds", "track");
-            if (legacyTracks != null) {
-                JsonArray tracks = new JsonArray();
-                if (legacyTracks.isJsonArray()) for (JsonElement value : legacyTracks.getAsJsonArray()) if (value.isJsonPrimitive()) tracks.add(value.getAsInt());
-                else if (legacyTracks.isJsonPrimitive()) tracks.add(legacyTracks.getAsInt());
-                properties.add("tracks", tracks);
-            }
+            properties.remove("tracks");
+            properties.remove("track-ids");
+            properties.remove("trackIds");
+            properties.remove("track");
+            properties.add("tracks", new JsonArray());
         }
         converted.add("properties", properties); return converted;
     }

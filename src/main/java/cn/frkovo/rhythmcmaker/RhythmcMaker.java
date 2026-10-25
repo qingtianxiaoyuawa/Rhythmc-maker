@@ -8,6 +8,7 @@ import cn.frkovo.rhythmcmaker.chart.PlaybackCoordinates;
 import cn.frkovo.rhythmcmaker.chart.TrackPlayback;
 import cn.frkovo.rhythmcmaker.client.playback.PotionEffectClearPolicy;
 import cn.frkovo.rhythmcmaker.client.playback.PotionDurationAtSeek;
+import cn.frkovo.rhythmcmaker.client.playback.TextDisplayDurationAtSeek;
 import cn.frkovo.rhythmcmaker.client.playback.PlaybackTimelineClock;
 import cn.frkovo.rhythmcmaker.client.playback.PersistentEffectStateFold;
 import cn.frkovo.rhythmcmaker.client.playback.TextDisplayEventFold;
@@ -3850,11 +3851,13 @@ private static void showSceneBoundary(MinecraftServer server) {
                 String value = effectString(effect, "text", effectString(effect, "content", ""));
                 if (value.isBlank()) value = textDisplayContents(effect);
                 long duration = (long) effectDouble(effect, "duration", 0.0);
+                long remainingDuration = bootstrap
+                        ? TextDisplayDurationAtSeek.remainingMillis(duration, targetTime - effectTime)
+                        : duration;
                 String positionKey = type.equals("HOLOGRAM") ? "location" : "position";
                 double[] position = relativeTextDisplayPosition(effect, positionKey);
                 textDisplayAnchors.put(id, position.clone());
-                double expiresAt = PlaybackTimelineClock.songTimeAfterWallMillis(bootstrap ? effectTime : targetTime, duration, rate);
-                if (!bootstrap && duration > 0 && expiresAt <= targetTime) {
+                if (duration > 0 && remainingDuration <= 0) {
                     DisplayEntity.TextDisplayEntity display = textDisplays.remove(id);
                     if (display != null) releaseTextDisplay(id, display);
                     textDisplayAnchors.remove(id);
@@ -3864,6 +3867,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                     textDisplaySyncUntilSeconds.remove(id);
                     return;
                 }
+                double expiresAt = PlaybackTimelineClock.songTimeAfterWallMillis(targetTime, remainingDuration, rate);
                 if (value.isBlank()) {
                     DisplayEntity.TextDisplayEntity display = textDisplays.remove(id);
                     if (display != null) releaseTextDisplay(id, display);
@@ -3888,7 +3892,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 textDisplayLastPoses.put(id, new double[]{position[0], position[1], position[2], rotation[0], rotation[1], rotation[2], scale[0], scale[1], scale[2]});
                 setTextDisplayShadow(display, effectBoolean(effect, "shadowed", false));
                 display.setGlowing(effectBoolean(effect, "glowing", false));
-                if (duration > 0 && expiresAt > targetTime) textDisplayExpiresAtSeconds.put(id, expiresAt);
+                if (remainingDuration > 0 && expiresAt > targetTime) textDisplayExpiresAtSeconds.put(id, expiresAt);
                 else textDisplayExpiresAtSeconds.remove(id);
                 display.setInterpolationDuration(bootstrap ? 0 : 1);
             } catch (RuntimeException exception) {
