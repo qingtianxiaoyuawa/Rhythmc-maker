@@ -831,7 +831,7 @@ public final class ChartStorage {
     }
 
     private static void writeChartDocument(Path path, ChartManifest chart) throws IOException {
-        String document = GSON.toJson(new ChartDocument(metadataOnly(chart)));
+        String document = GSON.toJson(new ChartDocument(chart));
         writeJsonAtomically(path, document);
     }
 
@@ -1040,8 +1040,8 @@ public final class ChartStorage {
     }
 
     private record ChartDocument(ChartManifest meta, List<ChartManifest.Track> tracks, List<ChartManifest.Note> notes, List<com.google.gson.JsonObject> effects) {
-        private ChartDocument(ChartManifest meta) {
-            this(meta, meta.tracks == null ? List.of() : meta.tracks, meta.notes == null ? List.of() : meta.notes, meta.effects == null ? List.of() : meta.effects);
+        private ChartDocument(ChartManifest chart) {
+            this(metadataOnly(chart), chart.tracks == null ? List.of() : chart.tracks, chart.notes == null ? List.of() : chart.notes, chart.effects == null ? List.of() : chart.effects);
         }
     }
 }
