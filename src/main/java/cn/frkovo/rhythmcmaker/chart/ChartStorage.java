@@ -101,9 +101,9 @@ public final class ChartStorage {
         chart.level = level;
         if (meta.has("initial-arena") && meta.get("initial-arena").isJsonPrimitive()) chart.initialArena = meta.get("initial-arena").getAsString();
         JsonObject root = convertRhythmc2ToRhythmc3(legacyRoot, chart.charter, chart.level, chart.offsetMillis, chart.initialArena, chart.divisionsPerBeat, bpm);
-        importRhythmc3Document(server, chart, root, stagedAudio);
+        importRhythmc3Document(chart, root);
         chart.trackLength = calculateImportedTrackLength(chart);
-        writeLocalChart(server, chart);
+        create(server, chart, stagedAudio);
         RhythmcMaker.installDefaultArenaScenes(server, chart, arenaNames(chart));
         return chart;
     }
@@ -184,9 +184,11 @@ public final class ChartStorage {
         ChartManifest.Track primary = chart.tracks.stream().filter(track -> track.id == 0).findFirst().orElse(chart.tracks.get(0));
         chart.speedEvents = primary.speedEvents.stream().map(event -> new ChartManifest.SpeedEvent(event.startBeat, event.endBeat, event.startValue, event.endValue, event.easingType)).collect(java.util.stream.Collectors.toCollection(ArrayList::new));
         if (root.has("effects") && root.get("effects").isJsonArray()) for (JsonElement effect : root.getAsJsonArray("effects")) if (effect.isJsonObject()) chart.effects.add(Rhythmc3EffectCodec.importEffect(effect.getAsJsonObject()));
-        create(server, chart, stagedAudio); return chart;
+        importRhythmc3Document(chart, root);
+        create(server, chart, stagedAudio);
+        return chart;
     }
-    private static void importRhythmc3Document(MinecraftServer server, ChartManifest chart, JsonObject root, Path stagedAudio) throws IOException {
+    private static void importRhythmc3Document(ChartManifest chart, JsonObject root) throws IOException {
         JsonObject meta = root.getAsJsonObject("meta");
         if (meta == null) throw new IOException("3.0 难度文件缺少 meta");
         if (meta.has("offset") || meta.has("offsetMillis")) chart.offsetMillis = jsonNumber(meta, "offset", jsonNumber(meta, "offsetMillis", chart.offsetMillis)).longValue();
@@ -210,7 +212,7 @@ public final class ChartStorage {
         ChartManifest.Track primary = chart.tracks.stream().filter(track -> track.id == 0).findFirst().orElse(chart.tracks.get(0));
         chart.speedEvents = primary.speedEvents.stream().map(event -> new ChartManifest.SpeedEvent(event.startBeat, event.endBeat, event.startValue, event.endValue, event.easingType)).collect(java.util.stream.Collectors.toCollection(ArrayList::new));
         if (root.has("effects") && root.get("effects").isJsonArray()) for (JsonElement effect : root.getAsJsonArray("effects")) if (effect.isJsonObject()) chart.effects.add(Rhythmc3EffectCodec.importEffect(effect.getAsJsonObject()));
-        create(server, chart, stagedAudio);
+
     }
     private static EditorTrackLayout readEditorTrackLayout(JsonObject meta, Path difficultyFile, Path selectedLayoutFile) throws IOException {
         if (selectedLayoutFile != null) {
