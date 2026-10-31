@@ -1,5 +1,8 @@
 package cn.frkovo.rhythmcmaker.client;
 
+import cn.frkovo.rhythmcmaker.ChartDimensionManager;
+import cn.frkovo.rhythmcmaker.chart.ChartManifest;
+
 import io.wispforest.owo.ui.component.UIComponents;
 import io.wispforest.owo.ui.component.TextBoxComponent;
 import io.wispforest.owo.ui.container.FlowLayout;
@@ -100,35 +103,28 @@ private void importLegacyMenu(FlowLayout page) {
             return;
         }
         MinecraftClient client = MinecraftClient.getInstance();
-        if (client.getServer() == null || importing) return;
+        net.minecraft.server.MinecraftServer server = client.getServer();
+        if (server == null || importing) return;
         importing = true;
         Path difficulty = draft.difficulty;
         Path song = draft.song;
-        ClientChartAccess.status("正在导入 2.0 谱面，请稍候...");
-        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+        ImportProgressScreen.State state = new ImportProgressScreen.State();
+        client.setScreen(new ImportProgressScreen(state));
+        server.execute(() -> {
             try {
-                return ClientChartAccess.importRhythmc2(difficulty, ClientChartAccess.stageAudio(song), bpm, draft.importDifficulty, level);
-            } catch (Exception exception) {
-                throw new java.util.concurrent.CompletionException(exception);
+                state.update(8, "准备音频文件...");
+                Path stagedAudio = ClientChartAccess.stageAudio(server, song);
+                state.update(20, "读取并转换 2.0 谱面...");
+                ChartManifest chart = ClientChartAccess.importRhythmc2(server, difficulty, stagedAudio, bpm, draft.importDifficulty, level);
+                state.update(90, "创建谱面维度和场景绑定...");
+                state.success(chart);
+            } catch (Throwable exception) {
+                state.fail(exception);
+            } finally {
+                importing = false;
             }
-        }).whenComplete((chart, failure) -> client.getServer().execute(() -> {
-            try {
-                if (failure != null) throw new java.io.IOException(failure.getCause() == null ? failure : failure.getCause());
-                ClientChartAccess.installDefaultArenaScenes(client.getServer(), chart);
-                client.execute(() -> {
-                    importing = false;
-                    ClientChartAccess.status("2.0 谱面已转换并导入为 3.0");
-                    client.setScreen(new ChartListScreen());
-                });
-            } catch (Exception exception) {
-                client.execute(() -> {
-                    importing = false;
-                    ClientChartAccess.status("2.0 导入失败：" + exception.getMessage());
-                });
-            }
-        }));
-    }
-    private void importMenu(FlowLayout page) {
+        });
+    }    private void importMenu(FlowLayout page) {
         page.child(menuHeader("导入 3.0 谱面", "导入现有 RhythMC 3.0 谱面文件", pageWidth() - 24));
         upload(page, "上传难度文件", draft.difficulty, path -> draft.difficulty = path, "难度文件|*.rmcc;*.json");
         upload(page, "上传谱面信息文件", draft.manifest, path -> draft.manifest = path, "谱面信息|manifest.yml;*.yml;*.yaml");
@@ -184,40 +180,26 @@ private void importLegacyMenu(FlowLayout page) {
             Scene scene = draft.scenes.get(sceneIndex);
             if (scene.complete()) importedScenes.add(new ClientChartAccess.ImportedScene(scene.schem, scene.info, sceneIndex == 0));
         }
-        ClientChartAccess.status("正在导入 3.0 谱面，请稍候...");
-        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+        ImportProgressScreen.State state = new ImportProgressScreen.State();
+        client.setScreen(new ImportProgressScreen(state));
+        server.execute(() -> {
             try {
+                state.update(8, "准备音频文件...");
                 Path stagedAudio = ClientChartAccess.stageAudio(server, song);
-                return ClientChartAccess.importRhythmc3(server, difficulty, manifest, layout, stagedAudio);
-            } catch (Exception exception) {
-                throw new java.util.concurrent.CompletionException(exception);
-            }
-        }).whenComplete((chart, importFailure) -> server.execute(() -> {
-            if (importFailure != null) {
-                Throwable cause = importFailure.getCause() == null ? importFailure : importFailure.getCause();
-                importing = false;
-                ClientChartAccess.status("导入失败：" + cause.getMessage());
-                return;
-            }
-            try {
+                state.update(20, "读取并导入 3.0 谱面...");
+                ChartManifest chart = ClientChartAccess.importRhythmc3(server, difficulty, manifest, layout, stagedAudio);
+                state.update(72, "安装场景并建立绑定...");
                 ClientChartAccess.installImportedScenes(server, chart, importedScenes);
-                client.execute(() -> {
-                    importing = false;
-                    long incompleteScenes = draft.scenes.stream().filter(scene -> !scene.complete()).count();
-                    ClientChartAccess.status(incompleteScenes == 0
-                            ? "3.0 谱面已导入（完整场景 " + importedScenes.size() + " 个）"
-                            : "3.0 谱面已导入（完整场景 " + importedScenes.size() + " 个，跳过不完整场景 " + incompleteScenes + " 个）");
-                    client.setScreen(new ChartListScreen());
-                });
-            } catch (Exception exception) {
-                client.execute(() -> {
-                    importing = false;
-                    ClientChartAccess.status("导入失败：" + exception.getMessage());
-                });
+                state.update(92, "准备谱面维度...");
+                ChartDimensionManager.getOrCreate(server, chart);
+                state.awaitSceneImport(chart);
+            } catch (Throwable exception) {
+                state.fail(exception);
+            } finally {
+                importing = false;
             }
-        }));
+        });
     }
-
     private void back(FlowLayout page) { page.child(UIComponents.button(Text.literal("返回"), button -> MinecraftClient.getInstance().setScreen(new ChartListScreen())).horizontalSizing(Sizing.fixed(100))); }
     private void reopen(int index) { MinecraftClient.getInstance().setScreen(new ImportChartScreen(draft, index)); }
 

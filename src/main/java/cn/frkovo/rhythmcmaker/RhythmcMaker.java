@@ -1068,6 +1068,10 @@ public final class RhythmcMaker implements ModInitializer {
         current.effectEditorLayout = layout;
         updateChart(server, current);
     }
+    public static boolean isChartImporting(String chartId) {
+        return chartId != null && IMPORTING_CHARTS.contains(chartId);
+    }
+
     public static boolean isEditorTrackAdjustmentPending(UUID playerId) {
         return EDITOR_TRACK_ADJUSTMENTS.contains(playerId);
     }
