@@ -71,6 +71,11 @@ final class ImportProgressScreen extends Screen {
     }
 
     @Override
+    public boolean shouldCloseOnEsc() {
+        return state.failure != null;
+    }
+
+    @Override
     public boolean shouldPause() {
         return false;
     }

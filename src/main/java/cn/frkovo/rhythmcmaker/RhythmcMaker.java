@@ -1068,6 +1068,12 @@ public final class RhythmcMaker implements ModInitializer {
         current.effectEditorLayout = layout;
         updateChart(server, current);
     }
+    public static void invalidateChart(String chartId) {
+        if (chartId == null || chartId.isBlank()) return;
+        CHART_CACHE_BY_ID.remove(chartId);
+        CHART_CACHE_BY_WORLD.entrySet().removeIf(entry -> entry.getValue() != null && chartId.equals(entry.getValue().id));
+    }
+
     public static boolean isChartImporting(String chartId) {
         return chartId != null && IMPORTING_CHARTS.contains(chartId);
     }

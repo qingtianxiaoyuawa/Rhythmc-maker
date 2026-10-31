@@ -20,9 +20,13 @@ import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 final class ClientChartAccess {
     private static ChartManifest activeChart;
@@ -264,7 +268,8 @@ final class ClientChartAccess {
     static void saveConfig(cn.frkovo.rhythmcmaker.config.RhythmcMakerConfig config) throws IOException { cn.frkovo.rhythmcmaker.RhythmcMaker.updateConfig(server(), config); }
 
     static void update(ChartManifest chart) throws IOException {
-        cn.frkovo.rhythmcmaker.RhythmcMaker.updateChart(server(), chart);
+        MinecraftServer server = server();
+        runOnServer(server, () -> cn.frkovo.rhythmcmaker.RhythmcMaker.updateChart(server, chart));
     }
     static Path exportRhythmc3(ChartManifest chart) throws IOException {
         return Rhythmc3Exporter.export(server(), chart);
@@ -277,7 +282,42 @@ final class ClientChartAccess {
     }
 
     static void delete(ChartManifest chart) throws IOException {
-        ChartStorage.delete(server(), chart);
+        MinecraftServer server = server();
+        runOnServer(server, () -> {
+            ChartStorage.delete(server, chart);
+            cn.frkovo.rhythmcmaker.RhythmcMaker.invalidateChart(chart.id);
+        });
+    }
+
+    @FunctionalInterface
+    private interface ServerAction { void run() throws IOException; }
+
+    private static void runOnServer(MinecraftServer server, ServerAction action) throws IOException {
+        if (server.isOnThread()) {
+            action.run();
+            return;
+        }
+        CompletableFuture<Void> completion = new CompletableFuture<>();
+        server.execute(() -> {
+            try {
+                action.run();
+                completion.complete(null);
+            } catch (Throwable exception) {
+                completion.completeExceptionally(exception);
+            }
+        });
+        try {
+            completion.get(10, TimeUnit.SECONDS);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IOException("等待服务端操作被中断", exception);
+        } catch (TimeoutException exception) {
+            throw new IOException("服务端操作超时", exception);
+        } catch (ExecutionException exception) {
+            Throwable cause = exception.getCause();
+            if (cause instanceof IOException io) throw io;
+            throw new IOException("服务端操作失败", cause);
+        }
     }
 
     static int defaultDivisionsPerBeat() {
