@@ -677,7 +677,23 @@ public final class ChartStorage {
             throw new IOException("谱面编号无效");
         }
         migrateLegacyChart(server, chart.id);
+        preventAccidentalContentLoss(server, chart);
         writeLocalChart(server, chart);
+    }
+
+    private static void preventAccidentalContentLoss(MinecraftServer server, ChartManifest incoming) throws IOException {
+        Path path = localChartPath(server, incoming.id);
+        if (!Files.isRegularFile(path)) return;
+        ChartManifest existing = parseLocalChart(server, incoming.id);
+        if (hasContent(existing) && !hasContent(incoming)) {
+            throw new IOException("拒绝用空谱面覆盖已有谱面内容：" + incoming.id);
+        }
+    }
+
+    private static boolean hasContent(ChartManifest chart) {
+        return chart != null && ((chart.tracks != null && !chart.tracks.isEmpty())
+                || (chart.notes != null && !chart.notes.isEmpty())
+                || (chart.effects != null && !chart.effects.isEmpty()));
     }
 
     public static ChartManifest find(MinecraftServer server, String chartId) throws IOException {

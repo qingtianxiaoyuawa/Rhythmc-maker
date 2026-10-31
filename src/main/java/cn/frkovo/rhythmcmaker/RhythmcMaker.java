@@ -1132,15 +1132,30 @@ public final class RhythmcMaker implements ModInitializer {
             CHART_CACHE_BY_ID.clear();
             CHART_CACHE_BY_WORLD.clear();
         }
-        return CHART_CACHE_BY_ID.computeIfAbsent(chart.id, ignored -> new CachedChartState(chart));
+        CachedChartState state = CHART_CACHE_BY_ID.computeIfAbsent(chart.id, ignored -> new CachedChartState(chart));
+        synchronized (state) {
+            if (!hasChartContent(state.chart) && hasChartContent(chart)) state.chart = chart;
+        }
+        return state;
+    }
+
+    private static boolean hasChartContent(ChartManifest chart) {
+        return chart != null && ((chart.tracks != null && !chart.tracks.isEmpty())
+                || (chart.notes != null && !chart.notes.isEmpty())
+                || (chart.effects != null && !chart.effects.isEmpty()));
     }
 
     private static ChartManifest cachedChart(MinecraftServer server, String chartId) throws IOException {
         if (chartId == null || chartId.isBlank()) return null;
         CachedChartState cached = CHART_CACHE_BY_ID.get(chartId);
-        if (cached != null) return cached.chart;
+        if (cached != null && hasChartContent(cached.chart)) return cached.chart;
         ChartManifest chart = ChartStorage.find(server, chartId);
-        return chart == null ? null : cacheChart(server, chart).chart;
+        if (chart == null) return cached == null ? null : cached.chart;
+        CachedChartState state = cacheChart(server, chart);
+        synchronized (state) {
+            if (!state.dirty && hasChartContent(chart)) state.chart = chart;
+            return state.chart;
+        }
     }
 
     private static boolean queueChartSave(MinecraftServer server, CachedChartState state) {
