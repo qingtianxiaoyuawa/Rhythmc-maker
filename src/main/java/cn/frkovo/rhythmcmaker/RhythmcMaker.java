@@ -1346,6 +1346,7 @@ public final class RhythmcMaker implements ModInitializer {
         int index = scenes.stream().mapToInt(scene -> scene.index).max().orElse(0) + 1;
         SceneEditStorage.Scene scene = new SceneEditStorage.Scene(index);
         scene.displayName = nextEffectArenaName(scenes);
+        scene.name = stableSceneName(chart == null ? chartId : chart.title, scene.displayName);
         if (iconId != null && iconId.matches("[a-z0-9_.-]+:[a-z0-9_./-]+")) scene.icon = iconId;
         scenes.add(scene);
         SceneEditStorage.save(server, chartId, scenes);
@@ -1361,6 +1362,13 @@ public final class RhythmcMaker implements ModInitializer {
         int suffix = 1;
         while (names.contains("effect_arena_" + suffix)) suffix++;
         return "effect_arena_" + suffix;
+    }
+    private static String stableSceneName(String songTitle, String displayName) {
+        return sceneNamePart(songTitle) + "-" + sceneNamePart(displayName);
+    }
+    private static String sceneNamePart(String value) {
+        String normalized = value == null ? "" : value.trim().replaceAll("[^a-zA-Z0-9._-]+", "_");
+        return normalized.isBlank() ? "scene" : normalized;
     }
     public static void saveSceneEditor(MinecraftServer server, String chartId, SceneEditStorage.Scene scene) throws IOException {
         java.util.List<SceneEditStorage.Scene> scenes = SceneEditStorage.list(server, chartId);
@@ -1391,8 +1399,8 @@ public final class RhythmcMaker implements ModInitializer {
             if (importedScene.initial()) continue;
             int sceneIndex = nextIndex++;
             SceneEditStorage.Scene scene = new SceneEditStorage.Scene(sceneIndex);
-            scene.name = readSceneName(importedScene.info(), scene.name);
             scene.displayName = readSceneDisplayName(importedScene.info(), "场景" + sceneIndex);
+            scene.name = stableSceneName(chart.title, scene.displayName);
             scene.icon = readSceneIcon(importedScene.info());
             scene.saved = true;
             scenes.add(scene);
@@ -1419,9 +1427,11 @@ public final class RhythmcMaker implements ModInitializer {
         String importedInitialName = chart.initialArena;
         if (importedInitialName != null && !importedInitialName.isBlank()) {
             initialScene.displayName = importedInitialName;
+            initialScene.name = stableSceneName(chart.title, initialScene.displayName);
             chart.arenaBindings.put(importedInitialName, "scene-editor:" + initialScene.index);
         } else {
             initialScene.displayName = "initial_arena";
+            initialScene.name = stableSceneName(chart.title, initialScene.displayName);
         }
         chart.initialArena = initialScene.name;
         chart.arenaBindings.put(initialScene.name, "scene-editor:" + initialScene.index);
@@ -2839,7 +2849,7 @@ private static void showSceneBoundary(MinecraftServer server) {
     }
 
     private static String effectType(JsonObject effect) {
-        return effectString(effect, "eventType", effectString(effect, "type", "PARTICLE")).trim().toUpperCase(java.util.Locale.ROOT);
+        return effectString(effect, "effectType", effectString(effect, "eventType", effectString(effect, "type", "PARTICLE"))).trim().toUpperCase(java.util.Locale.ROOT);
     }
     private static String effectString(JsonObject effect, String key, String fallback) {
         return EffectPayload.string(effect, key, fallback);
@@ -3475,25 +3485,41 @@ private static void showSceneBoundary(MinecraftServer server) {
             com.google.gson.JsonElement tracks = effect.has("tracks") ? effect.get("tracks") : properties.get("tracks");
             java.util.Set<Integer> selectedTypes = new java.util.HashSet<>();
             java.util.Set<Integer> selectedTracks = new java.util.HashSet<>();
-            if (noteTypes != null && noteTypes.isJsonArray()) for (com.google.gson.JsonElement value : noteTypes.getAsJsonArray()) {
-                if (value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber()) selectedTypes.add(value.getAsInt());
-                else {
-                    String type = value.getAsString().toUpperCase(java.util.Locale.ROOT);
-                    selectedTypes.add(switch (type) { case "LOOK" -> 1; case "HOLD" -> 2; case "DODGE" -> 3; default -> 0; });
-                }
-            }
-            else if (noteTypes != null && noteTypes.isJsonPrimitive()) selectedTypes.add(noteTypes.getAsInt());
-            if (tracks != null && tracks.isJsonArray()) for (com.google.gson.JsonElement value : tracks.getAsJsonArray()) selectedTracks.add(value.getAsInt());
-            else if (tracks != null && tracks.isJsonPrimitive()) selectedTracks.add(tracks.getAsInt());
+            if (noteTypes != null && noteTypes.isJsonArray()) for (com.google.gson.JsonElement value : noteTypes.getAsJsonArray()) addHiddenNoteType(selectedTypes, value);
+            else if (noteTypes != null && noteTypes.isJsonPrimitive()) addHiddenNoteType(selectedTypes, noteTypes);
+            if (tracks != null && tracks.isJsonArray()) for (com.google.gson.JsonElement value : tracks.getAsJsonArray()) addHiddenTrack(selectedTracks, value);
+            else if (tracks != null && tracks.isJsonPrimitive()) addHiddenTrack(selectedTracks, tracks);
             hiddenNoteKeys.clear();
             boolean legacyHiddenAction = hidden != null && hidden.isJsonPrimitive() && hidden.getAsJsonPrimitive().isBoolean();
             if (legacyHiddenAction && !hidden.getAsBoolean()) return;
-            if (selectedTypes.isEmpty() && selectedTracks.isEmpty()) return;
             if (selectedTypes.isEmpty()) for (ChartManifest.Note note : notes) selectedTypes.add(note.type);
             if (selectedTracks.isEmpty()) for (ChartManifest.Note note : notes) selectedTracks.add(note.trackId);
             for (ChartManifest.Note note : notes) {
                 if (selectedTypes.contains(note.type) && selectedTracks.contains(note.trackId)) hiddenNoteKeys.add(hiddenNoteKey(note));
             }
+        }
+        private void addHiddenNoteType(java.util.Set<Integer> selectedTypes, com.google.gson.JsonElement value) {
+            if (value == null || !value.isJsonPrimitive()) return;
+            try {
+                if (value.getAsJsonPrimitive().isNumber()) {
+                    selectedTypes.add(value.getAsInt());
+                    return;
+                }
+                String type = value.getAsString().trim().toUpperCase(java.util.Locale.ROOT).replace('-', '_').replace(' ', '_');
+                selectedTypes.add(switch (type) {
+                    case "TAP", "NOTE", "CLICK", "NOTE_CLICK", "NOTE_TAP" -> 0;
+                    case "LOOK", "NOTE_LOOK" -> 1;
+                    case "HOLD", "NOTE_HOLD" -> 2;
+                    case "DODGE", "NOTE_DODGE", "NOTE_DO_NOT_CLICK", "DO_NOT_CLICK" -> 3;
+                    default -> -1;
+                });
+            } catch (RuntimeException ignored) {
+                selectedTypes.add(-1);
+            }
+        }
+        private void addHiddenTrack(java.util.Set<Integer> selectedTracks, com.google.gson.JsonElement value) {
+            if (value == null || !value.isJsonPrimitive()) return;
+            try { selectedTracks.add(value.getAsInt()); } catch (RuntimeException ignored) { }
         }
         private HiddenNoteKey hiddenNoteKey(ChartManifest.Note note) { return new HiddenNoteKey(note.trackId, note.type); }
         private void clearDisplayPools() {

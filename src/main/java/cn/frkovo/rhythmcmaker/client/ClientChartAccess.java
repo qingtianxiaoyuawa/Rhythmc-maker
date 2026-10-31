@@ -197,7 +197,7 @@ final class ClientChartAccess {
         if (result.error != null) {
             if (!result.request.equals(lastRefreshError)) {
                 lastRefreshError = result.request;
-                status("谱面刷新失败，已保留当前谱面：" + result.error);
+                status("谱面刷新失败，请查看日志");
             }
             return false;
         }
@@ -309,16 +309,19 @@ final class ClientChartAccess {
     }
 
     static void status(String message) {
+        if (containsPathInformation(message)) return;
         MinecraftClient client = MinecraftClient.getInstance();
-        if (client.player != null) client.player.sendMessage(Text.literal(statusText(message)), true);
+        if (client.player != null) client.player.sendMessage(Text.literal(message), true);
     }
 
     static void statusWarning(String message) {
+        if (containsPathInformation(message)) return;
         MinecraftClient client = MinecraftClient.getInstance();
-        if (client.player != null) client.player.sendMessage(Text.literal(statusText(message)).formatted(net.minecraft.util.Formatting.RED), true);
+        if (client.player != null) client.player.sendMessage(Text.literal(message).formatted(net.minecraft.util.Formatting.RED), true);
     }
 
-    private static String statusText(String message) {
-        return message.replaceAll("(?i)(?:[a-z]:[\\\\/]|\\\\\\\\|/(?:[a-z0-9_.-]+/)+)[^\\s]*", "[\\u8def\\u5f84\\u5df2\\u9690\\u85cf]");
+    private static boolean containsPathInformation(String message) {
+        if (message == null || message.isBlank()) return false;
+        return message.contains("\\") || message.contains("/") || message.contains("留当前谱面");
     }
 }

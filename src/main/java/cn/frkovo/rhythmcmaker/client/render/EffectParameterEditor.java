@@ -463,14 +463,31 @@ public final class EffectParameterEditor {
     private List<SceneOption> sceneOptions(ChartManifest chart) {
         sceneReadError = "";
         try {
-            return ClientSceneAccess.savedScenes().stream().map(scene -> new SceneOption(scene.name, scene.displayName)).toList();
+            Map<String, Set<String>> aliasesBySceneId = new java.util.HashMap<>();
+            if (chart != null && chart.arenaBindings != null) {
+                for (Map.Entry<String, String> entry : chart.arenaBindings.entrySet()) {
+                    String binding = entry.getValue();
+                    if (binding == null || !binding.startsWith("scene-editor:")) continue;
+                    String sceneIndex = binding.substring("scene-editor:".length());
+                    Set<String> aliases = aliasesBySceneId.computeIfAbsent("scene-editor:" + sceneIndex, ignored -> new HashSet<>());
+                    aliases.add(entry.getKey());
+                    aliases.add(binding);
+                }
+            }
+            return ClientSceneAccess.savedScenes().stream().map(scene -> {
+                Set<String> aliases = new HashSet<>();
+                aliases.add(scene.name);
+                aliases.add(scene.displayName);
+                aliases.addAll(aliasesBySceneId.getOrDefault("scene-editor:" + scene.index, Set.of()));
+                return new SceneOption(scene.name, scene.displayName, Set.copyOf(aliases));
+            }).toList();
         } catch (java.io.IOException exception) {
-            sceneReadError = "读取已保存场景失败：" + exception.getMessage();
+            sceneReadError = "读取已保存场景失败";
             return List.of();
         }
     }
 
-    private record SceneOption(String id, String displayName) {}
+    private record SceneOption(String id, String displayName, Set<String> aliases) {}
 
     private List<Integer> trackIds(ChartManifest chart) {
         if (chart == null) return List.of();
@@ -507,7 +524,14 @@ public final class EffectParameterEditor {
             ImGui.textColored(0xFF7777FF, "当前谱面没有可用场景。");
             return;
         }
-        SceneOption selected = availableScenes.stream().filter(scene -> scene.id().equals(value)).findFirst().orElse(null);
+        String storedValue = value;
+        SceneOption selected = availableScenes.stream()
+                .filter(scene -> scene.id().equals(storedValue) || scene.aliases().contains(storedValue))
+                .findFirst().orElse(null);
+        if (selected != null && !selected.id().equals(value)) {
+            commitValue(form, state, new JsonPrimitive(selected.id()));
+            value = selected.id();
+        }
         if (ImGui.beginCombo("##arena", selected == null ? value : selected.displayName())) {
             for (SceneOption scene : availableScenes) if (ImGui.selectable(scene.displayName() + "##arena-" + scene.id(), scene.id().equals(value))) commitValue(form, state, new JsonPrimitive(scene.id()));
             ImGui.endCombo();

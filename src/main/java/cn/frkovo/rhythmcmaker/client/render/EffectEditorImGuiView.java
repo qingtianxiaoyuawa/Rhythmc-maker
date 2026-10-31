@@ -447,31 +447,32 @@ public final class EffectEditorImGuiView {
             ImGui.end();
             return;
         }
+        float toolbarWidth = Math.max(1.0f, ImGui.getWindowSizeX());
+        float toolbarHeight = Math.max(1.0f, ImGui.getWindowSizeY());
+        float windowPaddingX = ImGui.getStyle().getWindowPaddingX();
+        float windowPaddingY = ImGui.getStyle().getWindowPaddingY();
+        float buttonHeight = ImGui.getFrameHeight();
+        float toolbarContentY = Math.max(windowPaddingY, (toolbarHeight - buttonHeight) * 0.5f);
+        ImGui.setCursorPos(windowPaddingX, toolbarContentY);
         ImGui.textColored(0xFF66CCFF, "RhythMC Maker");
-        ImGui.sameLine();
+        ImGui.sameLine(0.0f, ImGui.getStyle().getItemSpacingX());
         ImGui.text("特效编辑器");
-        String chartInformation = chart == null ? "未加载谱面" : displayText(chartTitle()) + "  ·  BPM " + format(chart.bpm);
-        String saveStatus = dirty ? "● 未保存" : "已保存";
-        float controlsWidth = toolbarTextWidth("撤销") + toolbarTextWidth("恢复")
-                + toolbarTextWidth("保存") + toolbarTextWidth("关闭")
-                + ImGui.getStyle().getFramePaddingX() * 8.0f + ImGui.getStyle().getItemSpacingX() * 3.0f;
-        float controlsStart = width - ImGui.getStyle().getWindowPaddingX() - controlsWidth;
-        float informationStart = ImGui.getCursorPosX() + 12.0f;
-        ImGui.setCursorPosX(informationStart);
-        float informationRight = Math.max(informationStart,
-                Math.min(controlsStart - 8.0f, width - ImGui.getStyle().getWindowPaddingX() - 8.0f));
-        String information = chartInformation + "  ·  " + saveStatus;
-        float informationWidth = toolbarTextWidth(information);
-        float informationX = Math.max(informationStart, informationRight - informationWidth);
-        ImGui.setCursorPosX(informationStart);
-        ImGui.pushClipRect(ImGui.getWindowPosX() + informationStart, ImGui.getCursorScreenPosY(),
-                ImGui.getWindowPosX() + informationRight, ImGui.getCursorScreenPosY() + ImGui.getTextLineHeightWithSpacing(), true);
-        ImGui.setCursorPosX(informationX);
-        ImGui.text(information);
-        ImGui.popClipRect();
-        ImGui.setCursorPosX(controlsStart);
+
         boolean canUndo = !undoHistory.isEmpty();
         boolean canRedo = !redoHistory.isEmpty();
+        float controlsWidth = toolbarButtonWidth("撤销##effect-undo") + toolbarButtonWidth("恢复##effect-redo")
+                + toolbarButtonWidth("保存##effect-save") + toolbarButtonWidth("关闭##effect-close")
+                + ImGui.getStyle().getItemSpacingX() * 3.0f;
+        float controlsStart = Math.max(windowPaddingX, toolbarWidth - windowPaddingX - controlsWidth);
+        float informationStart = Math.max(windowPaddingX, ImGui.getCursorPosX() + ImGui.getStyle().getItemSpacingX());
+        float informationRight = Math.max(informationStart, controlsStart - ImGui.getStyle().getItemSpacingX());
+        String chartInformation = chart == null ? "未加载谱面" : displayText(chartTitle()) + "  ·  BPM " + format(chart.bpm);
+        String saveStatus = dirty ? "● 未保存" : "已保存";
+        String information = truncateToolbarText(chartInformation + "  ·  " + saveStatus,
+                Math.max(0.0f, informationRight - informationStart));
+        ImGui.setCursorPosX(informationStart);
+        ImGui.text(information);
+        ImGui.setCursorPosX(controlsStart);
         ImGui.beginDisabled(!canUndo);
         if (ImGui.button("撤销##effect-undo")) undo();
         ImGui.endDisabled();
@@ -489,6 +490,22 @@ public final class EffectEditorImGuiView {
     private float toolbarTextWidth(String value) {
         ImGui.calcTextSize(toolbarTextSize, value);
         return toolbarTextSize.x;
+    }
+
+    private float toolbarButtonWidth(String value) {
+        return toolbarTextWidth(value) + ImGui.getStyle().getFramePaddingX() * 2.0f;
+    }
+
+    private String truncateToolbarText(String value, float availableWidth) {
+        if (availableWidth <= 0.0f) return "";
+        if (toolbarTextWidth(value) <= availableWidth) return value;
+        String ellipsis = "...";
+        if (toolbarTextWidth(ellipsis) > availableWidth) return "";
+        int end = value.length();
+        while (end > 0 && toolbarTextWidth(value.substring(0, end) + ellipsis) > availableWidth) {
+            end = value.offsetByCodePoints(end, -1);
+        }
+        return value.substring(0, end) + ellipsis;
     }
 
     private void drawEmptyState(float width, float height) {
