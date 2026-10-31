@@ -451,28 +451,37 @@ public final class EffectEditorImGuiView {
         float toolbarHeight = Math.max(1.0f, ImGui.getWindowSizeY());
         float windowPaddingX = ImGui.getStyle().getWindowPaddingX();
         float windowPaddingY = ImGui.getStyle().getWindowPaddingY();
+        float itemSpacingX = ImGui.getStyle().getItemSpacingX();
         float buttonHeight = ImGui.getFrameHeight();
-        float toolbarContentY = Math.max(windowPaddingY, (toolbarHeight - buttonHeight) * 0.5f);
-        ImGui.setCursorPos(windowPaddingX, toolbarContentY);
-        ImGui.textColored(0xFF66CCFF, "RhythMC Maker");
-        ImGui.sameLine(0.0f, ImGui.getStyle().getItemSpacingX());
-        ImGui.text("特效编辑器");
+        float toolbarButtonY = Math.max(windowPaddingY, (toolbarHeight - buttonHeight) * 0.5f);
+        float toolbarTextY = Math.max(windowPaddingY, (toolbarHeight - ImGui.getTextLineHeight()) * 0.5f);
+        String makerTitle = "RhythMC Maker";
+        String editorTitle = "特效编辑器";
+        ImGui.setCursorPos(windowPaddingX, toolbarTextY);
+        ImGui.textColored(0xFF66CCFF, makerTitle);
+        ImGui.sameLine(0.0f, itemSpacingX);
+        ImGui.text(editorTitle);
 
         boolean canUndo = !undoHistory.isEmpty();
         boolean canRedo = !redoHistory.isEmpty();
-        float controlsWidth = toolbarButtonWidth("撤销##effect-undo") + toolbarButtonWidth("恢复##effect-redo")
-                + toolbarButtonWidth("保存##effect-save") + toolbarButtonWidth("关闭##effect-close")
-                + ImGui.getStyle().getItemSpacingX() * 3.0f;
+        float controlsWidth = toolbarButtonWidth("撤销") + toolbarButtonWidth("恢复")
+                + toolbarButtonWidth("保存") + toolbarButtonWidth("关闭") + itemSpacingX * 3.0f;
         float controlsStart = Math.max(windowPaddingX, toolbarWidth - windowPaddingX - controlsWidth);
-        float informationStart = Math.max(windowPaddingX, ImGui.getCursorPosX() + ImGui.getStyle().getItemSpacingX());
-        float informationRight = Math.max(informationStart, controlsStart - ImGui.getStyle().getItemSpacingX());
-        String chartInformation = chart == null ? "未加载谱面" : displayText(chartTitle()) + "  ·  BPM " + format(chart.bpm);
+        float informationStart = windowPaddingX + toolbarTextWidth(makerTitle) + itemSpacingX
+                + toolbarTextWidth(editorTitle) + itemSpacingX;
+        float informationRight = Math.max(informationStart, controlsStart - itemSpacingX);
+        float informationAvailableWidth = Math.max(0.0f, informationRight - informationStart);
         String saveStatus = dirty ? "● 未保存" : "已保存";
-        String information = truncateToolbarText(chartInformation + "  ·  " + saveStatus,
-                Math.max(0.0f, informationRight - informationStart));
-        ImGui.setCursorPosX(informationStart);
+        String informationSuffix = (chart == null ? "" : "  ·  BPM " + format(chart.bpm)) + "  ·  " + saveStatus;
+        String chartTitle = chart == null ? "未加载谱面" : displayText(chartTitle());
+        String visibleChartTitle = truncateToolbarText(chartTitle,
+                Math.max(0.0f, informationAvailableWidth - toolbarTextWidth(informationSuffix)));
+        String information = visibleChartTitle + informationSuffix;
+        float informationX = Math.max(informationStart, informationRight - toolbarTextWidth(information));
+        ImGui.setCursorPos(informationX, toolbarTextY);
         ImGui.text(information);
-        ImGui.setCursorPosX(controlsStart);
+
+        ImGui.setCursorPos(controlsStart, toolbarButtonY);
         ImGui.beginDisabled(!canUndo);
         if (ImGui.button("撤销##effect-undo")) undo();
         ImGui.endDisabled();

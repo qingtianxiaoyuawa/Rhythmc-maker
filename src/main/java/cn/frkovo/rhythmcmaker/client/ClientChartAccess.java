@@ -197,7 +197,7 @@ final class ClientChartAccess {
         if (result.error != null) {
             if (!result.request.equals(lastRefreshError)) {
                 lastRefreshError = result.request;
-                status("谱面刷新失败，请查看日志");
+                status("谱面刷新失败，请查看日志（非特殊情况请忽略这条提示）");
             }
             return false;
         }
