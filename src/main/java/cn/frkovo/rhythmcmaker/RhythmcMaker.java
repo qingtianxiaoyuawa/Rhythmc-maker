@@ -3209,7 +3209,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             session.clearDisplayPools();
             session.clearTextDisplays();
             session.displays.clear();
-            session.hiddenNoteKeys.clear();
+            session.clearHiddenNoteFilter();
             String tag = "rhythmc_preview:" + player.getUuid();
             for (DisplayEntity.BlockDisplayEntity display : session.world.getEntitiesByType(EntityType.BLOCK_DISPLAY,
                     entity -> entity.getCommandTags().contains(tag))) {
@@ -3364,7 +3364,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             }
             effectSession.clearDisplayPools();
             effectSession.displays.clear();
-            effectSession.hiddenNoteKeys.clear();
+            effectSession.clearHiddenNoteFilter();
             effectSession = null;
         }
     }
@@ -3426,7 +3426,9 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final java.util.List<JsonObject> effects;
         private final java.util.List<Double> effectTimes;
         private final java.util.List<String> effectTypes;
-        private final Set<HiddenNoteKey> hiddenNoteKeys = new java.util.HashSet<>();
+        private final Set<Integer> hiddenNoteTypes = new java.util.HashSet<>();
+        private final Set<Integer> hiddenNoteTracks = new java.util.HashSet<>();
+        private boolean hideAllNotes;
         private final Map<HiddenNoteKey, java.util.ArrayDeque<DisplayEntity.BlockDisplayEntity>> displayPools = new java.util.HashMap<>();
         private final Map<Integer, Team> glowTeams = new java.util.HashMap<>();
         private Formatting observerGlowColor = Formatting.WHITE;
@@ -3499,7 +3501,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             resetClientTime(player);
             clearTextDisplays();
             clearGlowTeam();
-            hiddenNoteKeys.clear();
+            clearHiddenNoteFilter();
             observerGlowColor = Formatting.WHITE;
             resetChartPotionEffects(player);
             for (int index = 0; index < effects.size(); index++) {
@@ -3619,7 +3621,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             if (restored > 0) updateGlowTeam();
         }
         private boolean shouldHide(ChartManifest.Note note) {
-            return hiddenNoteKeys.contains(new HiddenNoteKey(note.trackId, note.type));
+            return hideAllNotes || hiddenNoteTypes.contains(note.type) || hiddenNoteTracks.contains(note.trackId);
         }
         private void updateHiddenNotes(JsonObject effect) {
             if (effect == null) return;
@@ -3627,20 +3629,28 @@ private static void showSceneBoundary(MinecraftServer server) {
             com.google.gson.JsonElement hidden = effect.has("hidden") ? effect.get("hidden") : properties.get("hidden");
             com.google.gson.JsonElement noteTypes = effect.has("noteTypes") ? effect.get("noteTypes") : properties.get("noteTypes");
             com.google.gson.JsonElement tracks = effect.has("tracks") ? effect.get("tracks") : properties.get("tracks");
+            hiddenNoteTypes.clear();
+            hiddenNoteTracks.clear();
+            hideAllNotes = false;
             java.util.Set<Integer> selectedTypes = new java.util.HashSet<>();
             java.util.Set<Integer> selectedTracks = new java.util.HashSet<>();
             if (noteTypes != null && noteTypes.isJsonArray()) for (com.google.gson.JsonElement value : noteTypes.getAsJsonArray()) addHiddenNoteType(selectedTypes, value);
             else if (noteTypes != null && noteTypes.isJsonPrimitive()) addHiddenNoteType(selectedTypes, noteTypes);
             if (tracks != null && tracks.isJsonArray()) for (com.google.gson.JsonElement value : tracks.getAsJsonArray()) addHiddenTrack(selectedTracks, value);
             else if (tracks != null && tracks.isJsonPrimitive()) addHiddenTrack(selectedTracks, tracks);
-            hiddenNoteKeys.clear();
             boolean legacyHiddenAction = hidden != null && hidden.isJsonPrimitive() && hidden.getAsJsonPrimitive().isBoolean();
             if (legacyHiddenAction && !hidden.getAsBoolean()) return;
-            if (selectedTypes.isEmpty()) for (ChartManifest.Note note : notes) selectedTypes.add(note.type);
-            if (selectedTracks.isEmpty()) for (ChartManifest.Note note : notes) selectedTracks.add(note.trackId);
-            for (ChartManifest.Note note : notes) {
-                if (selectedTypes.contains(note.type) && selectedTracks.contains(note.trackId)) hiddenNoteKeys.add(hiddenNoteKey(note));
+            if (selectedTypes.isEmpty() && selectedTracks.isEmpty()) {
+                hideAllNotes = true;
+                return;
             }
+            hiddenNoteTypes.addAll(selectedTypes);
+            hiddenNoteTracks.addAll(selectedTracks);
+        }
+        private void clearHiddenNoteFilter() {
+            hiddenNoteTypes.clear();
+            hiddenNoteTracks.clear();
+            hideAllNotes = false;
         }
         private void addHiddenNoteType(java.util.Set<Integer> selectedTypes, com.google.gson.JsonElement value) {
             if (value == null || !value.isJsonPrimitive()) return;
@@ -3672,7 +3682,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             displayPools.clear();
         }
         private void clearHiddenNotesForArenaSwitch() {
-            hiddenNoteKeys.clear();
+            clearHiddenNoteFilter();
             clearDisplayPools();
         }
         private void updateGlowTeam() {

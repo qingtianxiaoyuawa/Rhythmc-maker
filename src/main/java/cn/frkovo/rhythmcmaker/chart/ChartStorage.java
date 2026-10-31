@@ -360,20 +360,33 @@ public final class ChartStorage {
             properties.addProperty("hidden", visible == null || !visible.getAsBoolean());
             properties.remove("visible");
             JsonElement legacyTypes = firstJsonElement(old, properties, "note-types", "noteTypes");
+            JsonArray noteTypes = new JsonArray();
             if (legacyTypes != null) {
-                JsonArray noteTypes = new JsonArray();
                 if (legacyTypes.isJsonArray()) for (JsonElement noteType : legacyTypes.getAsJsonArray()) {
                     int value = noteType.isJsonPrimitive() && noteType.getAsJsonPrimitive().isNumber() ? noteType.getAsInt() : oldNoteType(noteType.getAsString());
                     noteTypes.add(switch (value) { case 1 -> "LOOK"; case 2 -> "HOLD"; case 3 -> "DODGE"; default -> "TAP"; });
+                } else if (legacyTypes.isJsonPrimitive()) {
+                    int value = legacyTypes.getAsJsonPrimitive().isNumber() ? legacyTypes.getAsInt() : oldNoteType(legacyTypes.getAsString());
+                    noteTypes.add(switch (value) { case 1 -> "LOOK"; case 2 -> "HOLD"; case 3 -> "DODGE"; default -> "TAP"; });
                 }
-                properties.add("noteTypes", noteTypes);
             }
-            properties.remove("tracks");
+            properties.add("noteTypes", noteTypes);
+            JsonElement legacyTracks = firstJsonElement(old, properties, "tracks", "track-ids", "trackIds", "track");
+            JsonArray tracks = new JsonArray();
+            if (legacyTracks != null) {
+                if (legacyTracks.isJsonArray()) for (JsonElement track : legacyTracks.getAsJsonArray()) if (track.isJsonPrimitive()) {
+                    try { tracks.add(track.getAsInt()); } catch (RuntimeException ignored) { }
+                } else if (legacyTracks.isJsonPrimitive()) {
+                    try { tracks.add(legacyTracks.getAsInt()); } catch (RuntimeException ignored) { }
+                }
+            }
+            properties.add("tracks", tracks);
+            properties.remove("note-types");
             properties.remove("track-ids");
             properties.remove("trackIds");
             properties.remove("track");
-            properties.add("tracks", new JsonArray());
         }
+        for (String legacyKey : List.of("effect-type", "eventType", "effectType", "start-tick", "visible", "note-types", "track-ids", "trackIds", "track", "hologram-loc", "hologram-contents", "displayId", "content", "loc", "durationTicks", "effect-id", "potion-effect", "potion", "effect", "time-of-day", "world-time", "client-time", "clientTime", "value")) properties.remove(legacyKey);
         converted.add("properties", properties); return converted;
     }
     private static void convertRhythmc2Hologram(JsonObject properties, JsonObject old) {
