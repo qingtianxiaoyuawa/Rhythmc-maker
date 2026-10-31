@@ -48,7 +48,7 @@ final class ImportProgressScreen extends Screen {
 
     @Override
     public void render(DrawContext context, int mouseX, int mouseY, float delta) {
-        renderBackground(context, mouseX, mouseY, delta);
+        super.render(context, mouseX, mouseY, delta);
         int centerX = width / 2;
         int centerY = height / 2;
         context.drawCenteredTextWithShadow(textRenderer, Text.literal("导入谱面"), centerX, centerY - 58, 0xFFFFFFFF);
@@ -67,7 +67,6 @@ final class ImportProgressScreen extends Screen {
         } else if (state.finished) {
             context.drawCenteredTextWithShadow(textRenderer, Text.literal("导入成功，正在打开开始写谱菜单"), centerX, centerY + 34, 0xFF69D98A);
         }
-        super.render(context, mouseX, mouseY, delta);
     }
 
     @Override
