@@ -1,6 +1,7 @@
 package cn.frkovo.rhythmcmaker;
 
 import cn.frkovo.rhythmcmaker.chart.ChartManifest;
+import com.google.gson.Gson;
 import cn.frkovo.rhythmcmaker.chart.ChartStorage;
 import cn.frkovo.rhythmcmaker.chart.ChartTiming;
 import cn.frkovo.rhythmcmaker.chart.EditorTrackLayout;
@@ -98,6 +99,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 public final class RhythmcMaker implements ModInitializer {
     public static final String MOD_ID = "rhythmc_maker";
@@ -157,6 +159,7 @@ public final class RhythmcMaker implements ModInitializer {
     private static final Map<RegistryKey<World>, EditorNoteDisplaySweepTask> EDITOR_NOTE_DISPLAY_SWEEP_TASKS = new ConcurrentHashMap<>();
     private static final Map<RegistryKey<World>, ChartManifest> CHART_CACHE_BY_WORLD = new ConcurrentHashMap<>();
     private static final Map<String, CachedChartState> CHART_CACHE_BY_ID = new ConcurrentHashMap<>();
+    private static final Gson CHART_SNAPSHOT_GSON = new Gson();
     private static final ExecutorService CHART_PERSISTENCE_EXECUTOR = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "rhythmc-maker-chart-persistence");
         thread.setDaemon(true);
@@ -236,6 +239,7 @@ public final class RhythmcMaker implements ModInitializer {
             LOGGER.info("Rhythmc maker dynamic chart dimensions are loaded on demand");
         });
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+            flushChartPersistence(server);
             for (UUID playerId : Set.copyOf(PLAYBACK_CHUNK_TICKETS_BY_PLAYER.keySet())) releasePlaybackChunkTickets(server, playerId);
         });
         registerOptionalWorldEditIntegration();
@@ -296,7 +300,10 @@ public final class RhythmcMaker implements ModInitializer {
             if (tick % SCENE_BORDER_INTERVAL_TICKS == 0) showSceneBoundary(server);
             if (tick - lastAutosaveTick < ticksForSeconds(config.autosaveIntervalSeconds)) return;
             lastAutosaveTick = server.getTicks();
-            for (CachedChartState state : CHART_CACHE_BY_ID.values()) if (state.dirty) queueChartSave(server, state);
+            for (CachedChartState state : CHART_CACHE_BY_ID.values()) {
+                synchronizeChartNoteDisplays(server, state);
+                if (state.dirty) queueChartSave(server, state);
+            }
         });
         UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
             if (!(world instanceof ServerWorld serverWorld) || !isEditorWorld(world) || !(player instanceof ServerPlayerEntity serverPlayer)) return ActionResult.PASS;
@@ -1138,33 +1145,121 @@ public final class RhythmcMaker implements ModInitializer {
 
     private static boolean queueChartSave(MinecraftServer server, CachedChartState state) {
         long revision;
+        ChartManifest snapshot;
         synchronized (state) {
             if (!state.dirty || state.saving) return false;
             state.saving = true;
             revision = state.revision;
+            snapshot = copyChart(state.chart);
         }
         CHART_PERSISTENCE_EXECUTOR.submit(() -> {
             try {
-                ChartStorage.update(server, state.chart);
-                server.execute(() -> {
-                    boolean savedCurrentRevision;
-                    synchronized (state) {
-                        savedCurrentRevision = state.revision == revision;
-                        if (savedCurrentRevision) state.dirty = false;
-                        state.saving = false;
-                    }
-                    if (savedCurrentRevision) notifyAutoSaveSuccess(server, state.chart.id);
-                });
+                ChartStorage.update(server, snapshot);
+                boolean savedCurrentRevision;
+                synchronized (state) {
+                    savedCurrentRevision = state.revision == revision;
+                    if (savedCurrentRevision) state.dirty = false;
+                    state.saving = false;
+                }
+                if (savedCurrentRevision) server.execute(() -> notifyAutoSaveSuccess(server, state.chart.id));
             } catch (IOException exception) {
-                server.execute(() -> {
-                    synchronized (state) { state.saving = false; }
-                    LOGGER.warn("Failed to persist chart {}", state.chart.id, exception);
-                });
+                synchronized (state) { state.saving = false; }
+                server.execute(() -> LOGGER.warn("Failed to persist chart {}", state.chart.id, exception));
             }
         });
         return true;
     }
 
+    private static ChartManifest copyChart(ChartManifest chart) {
+        return CHART_SNAPSHOT_GSON.fromJson(CHART_SNAPSHOT_GSON.toJson(chart), ChartManifest.class);
+    }
+
+    private static void flushChartPersistence(MinecraftServer server) {
+        for (CachedChartState state : CHART_CACHE_BY_ID.values()) {
+            synchronizeChartNoteDisplays(server, state);
+            if (state.dirty) queueChartSave(server, state);
+        }
+        try {
+            CHART_PERSISTENCE_EXECUTOR.submit(() -> { }).get(30L, TimeUnit.SECONDS);
+        } catch (Exception exception) {
+            LOGGER.error("Timed out while flushing chart persistence", exception);
+        }
+        for (CachedChartState state : CHART_CACHE_BY_ID.values()) {
+            ChartManifest snapshot;
+            long revision;
+            synchronized (state) {
+                if (!state.dirty || state.saving) continue;
+                state.saving = true;
+                revision = state.revision;
+                snapshot = copyChart(state.chart);
+            }
+            try {
+                ChartStorage.update(server, snapshot);
+                synchronized (state) {
+                    if (state.revision == revision) state.dirty = false;
+                    state.saving = false;
+                }
+            } catch (IOException exception) {
+                synchronized (state) { state.saving = false; }
+                LOGGER.error("Failed to flush chart {}", snapshot.id, exception);
+            }
+        }
+    }
+
+    private static void synchronizeChartNoteDisplays(MinecraftServer server, CachedChartState state) {
+        ChartManifest chart;
+        synchronized (state) { chart = state.chart; }
+        if (chart == null || chart.id == null || chart.notes == null || chart.notes.isEmpty()) return;
+        java.util.Map<String, ChartManifest.Note> notesById = new java.util.HashMap<>();
+        for (ChartManifest.Note note : chart.notes) if (note != null && note.id != null && !note.id.isBlank()) notesById.put(note.id, note);
+        boolean changed = false;
+        String prefix = "rhythmc_note:" + chart.id + ":";
+        for (ServerWorld world : server.getWorlds()) {
+            if (!isEditorWorld(world)) continue;
+            ChartManifest worldChart = CHART_CACHE_BY_WORLD.get(world.getRegistryKey());
+            if (worldChart == null) worldChart = chartForWorld(world);
+            if (worldChart == null || !chart.id.equals(worldChart.id)) continue;
+            for (DisplayEntity.BlockDisplayEntity display : world.getEntitiesByType(EntityType.BLOCK_DISPLAY,
+                    entity -> entity.getCommandTags().stream().anyMatch(tag -> tag.startsWith(prefix)))) {
+                String noteId = display.getCommandTags().stream().filter(tag -> tag.startsWith(prefix)).findFirst()
+                        .map(tag -> tag.substring(prefix.length())).orElse("");
+                ChartManifest.Note note = notesById.get(noteId);
+                if (note == null) continue;
+                double x = display.getX();
+                double y = display.getY();
+                double z = display.getZ();
+                int type = noteTypeForBlockState(display.getBlockState());
+                if (note.x != x || note.y != y || note.z != z || note.type != type) {
+                    note.x = x;
+                    note.y = y;
+                    note.z = z;
+                    note.type = type;
+                    changed = true;
+                }
+            }
+            for (ChartManifest.Note note : chart.notes) {
+                if (note == null || hasFraction(note.x) || hasFraction(note.y) || hasFraction(note.z)) continue;
+                int type = noteTypeForBlockState(world.getBlockState(BlockPos.ofFloored(note.x, note.y, note.z)));
+                if (type >= 0 && note.type != type) {
+                    note.type = type;
+                    changed = true;
+                }
+            }
+        }
+        if (changed) synchronized (state) {
+            state.revision++;
+            state.dirty = true;
+        }
+    }
+
+    private static int noteTypeForBlockState(BlockState state) {
+        if (state == null) return -1;
+        if (state.isOf(Blocks.OBSERVER)) return 1;
+        if (state.isOf(Blocks.DIAMOND_BLOCK)) return 2;
+        if (state.isOf(Blocks.REDSTONE_BLOCK)) return 3;
+        if (state.isOf(Blocks.TNT)) return 0;
+        return -1;
+    }
     private static void notifyAutoSaveSuccess(MinecraftServer server, String chartId) {
         Text message = Text.literal("保存成功！").styled(style -> style.withColor(0xB7E66A));
         for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {

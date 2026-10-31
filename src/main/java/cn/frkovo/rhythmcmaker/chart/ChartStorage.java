@@ -1042,9 +1042,10 @@ public final class ChartStorage {
         return filename.substring(index + 1).toLowerCase();
     }
 
-    private record ChartDocument(ChartManifest meta, List<ChartManifest.Track> tracks, List<ChartManifest.Note> notes, List<com.google.gson.JsonObject> effects) {
+    private record ChartDocument(ChartManifest meta, List<ChartManifest.Track> tracks, List<ChartManifest.Note> notes, List<com.google.gson.JsonObject> effects, List<ChartManifest.SpeedEvent> speedEvents) {
         private ChartDocument(ChartManifest chart) {
-            this(metadataOnly(chart), chart.tracks == null ? List.of() : chart.tracks, chart.notes == null ? List.of() : chart.notes, chart.effects == null ? List.of() : chart.effects);
+            this(metadataOnly(chart), chart.tracks == null ? List.of() : chart.tracks, chart.notes == null ? List.of() : chart.notes,
+                    chart.effects == null ? List.of() : chart.effects, chart.speedEvents == null ? List.of() : chart.speedEvents);
         }
     }
 }
