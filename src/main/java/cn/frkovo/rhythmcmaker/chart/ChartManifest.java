@@ -11,6 +11,9 @@ public final class ChartManifest {
     public String charter;
     public double bpm;
     public List<BpmEvent> bpms = new ArrayList<>();
+    transient ChartTiming.Prepared timingCache;
+    transient long timingCacheSignature;
+    transient boolean timingCacheInitialized;
     /** RhythMC offset in milliseconds; positive values move notes later. */
     public long offsetMillis = 0;
     public boolean sceneInitialized = false;

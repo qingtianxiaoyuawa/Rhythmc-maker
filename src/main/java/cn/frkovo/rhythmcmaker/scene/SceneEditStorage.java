@@ -65,7 +65,7 @@ public final class SceneEditStorage {
             Path directory = root.resolve(sceneDirectoryName(scene)).normalize();
             if (!directory.startsWith(root)) throw new IOException("场景目录无效");
             Files.createDirectories(directory);
-            Files.writeString(directory.resolve("metadata.yml"), metadata(scene), StandardCharsets.UTF_8);
+            writeMetadataIfChanged(directory.resolve("metadata.yml"), metadata(scene));
         }
         CACHE.remove(path(server, chartId).toAbsolutePath().normalize());
     }
@@ -148,7 +148,7 @@ public final class SceneEditStorage {
                 if (!Files.exists(target)) Files.move(staged, target, StandardCopyOption.ATOMIC_MOVE);
                 else {
                     if (!Files.isRegularFile(target.resolve("arena.schem")) && Files.isRegularFile(staged.resolve("arena.schem"))) Files.copy(staged.resolve("arena.schem"), target.resolve("arena.schem"));
-                    Files.writeString(target.resolve("metadata.yml"), metadata(scene), StandardCharsets.UTF_8);
+                    writeMetadataIfChanged(target.resolve("metadata.yml"), metadata(scene));
                 }
             }
             for (Scene scene : scenes) {
@@ -208,6 +208,16 @@ public final class SceneEditStorage {
                 + "\ntype: " + (scene.initial ? "initial" : "effect") + "\n";
     }
 
+    private static void writeMetadataIfChanged(Path target, String content) throws IOException {
+        if (Files.isRegularFile(target) && content.equals(Files.readString(target, StandardCharsets.UTF_8))) return;
+        Path temporary = target.resolveSibling(target.getFileName() + ".tmp");
+        Files.writeString(temporary, content, StandardCharsets.UTF_8);
+        try {
+            Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException exception) {
+            Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
     private static boolean validName(String value) {
         return value != null && value.matches("[a-zA-Z0-9._-]+");
     }
