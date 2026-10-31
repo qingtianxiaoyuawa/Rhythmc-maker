@@ -50,8 +50,12 @@ public final class ChartStorage {
                     .filter(path -> Files.isRegularFile(path.resolve("chart.rmcc"))
                             || Files.isRegularFile(path.resolve("manifests.json")))
                     .forEach(path -> {
-                        try { ChartManifest chart = find(server, path.getFileName().toString()); if (chart != null) charts.add(chart); }
-                        catch (IOException ignored) { }
+                        try {
+                            Path localManifest = path.resolve("manifests.json");
+                            ChartManifest chart = Files.isRegularFile(localManifest)
+                                    ? parseManifest(localManifest) : find(server, path.getFileName().toString());
+                            if (chart != null) charts.add(chart);
+                        } catch (IOException ignored) { }
                     });
         }
         Path manifests = root.resolve("manifests");
@@ -96,22 +100,10 @@ public final class ChartStorage {
         chart.offsetMillis = Math.round(jsonNumber(meta, "offset", 0).doubleValue() * 50.0);
         chart.level = level;
         if (meta.has("initial-arena") && meta.get("initial-arena").isJsonPrimitive()) chart.initialArena = meta.get("initial-arena").getAsString();
-        List<String> arenaNames = new ArrayList<>();
-        if (chart.initialArena != null && !chart.initialArena.isBlank()) arenaNames.add(chart.initialArena);
         JsonObject root = convertRhythmc2ToRhythmc3(legacyRoot, chart.charter, chart.level, chart.offsetMillis, chart.initialArena, chart.divisionsPerBeat, bpm);
         importRhythmc3Document(server, chart, root, stagedAudio);
-        if (chart.effects != null) for (JsonObject effect : chart.effects) {
-            if (effect == null) continue;
-            JsonObject properties = effect.has("properties") && effect.get("properties").isJsonObject() ? effect.getAsJsonObject("properties") : effect;
-            String eventType = firstJsonString(effect, "effectType", "eventType", "");
-            if ((eventType.equalsIgnoreCase("ARENA") || eventType.equalsIgnoreCase("CHANGE_ARENA")) && properties.has("arena")) {
-                String arena = properties.get("arena").getAsString();
-                if (!arena.isBlank() && !arenaNames.contains(arena)) arenaNames.add(arena);
-            }
-        }
         chart.trackLength = calculateImportedTrackLength(chart);
         writeLocalChart(server, chart);
-        RhythmcMaker.installDefaultArenaScenes(server, chart, arenaNames);
         return chart;
     }
 
@@ -835,11 +827,11 @@ public final class ChartStorage {
     }
 
     private static void writeManifest(Path path, ChartManifest chart) throws IOException {
-        writeJsonAtomically(path, GSON.toJson(chart));
+        writeJsonAtomically(path, GSON.toJson(metadataOnly(chart)));
     }
 
     private static void writeChartDocument(Path path, ChartManifest chart) throws IOException {
-        String document = GSON.toJson(new ChartDocument(chart));
+        String document = GSON.toJson(new ChartDocument(metadataOnly(chart)));
         writeJsonAtomically(path, document);
     }
 
@@ -850,13 +842,65 @@ public final class ChartStorage {
     }
 
     private static void writeLocalMetadata(MinecraftServer server, ChartManifest chart) throws IOException {
-        JsonObject metadata = JsonParser.parseString(GSON.toJson(chart)).getAsJsonObject();
-        metadata.remove("tracks");
-        metadata.remove("notes");
-        metadata.remove("effects");
-        metadata.remove("speedEvents");
-        metadata.remove("bpms");
-        writeJsonAtomically(localManifestPath(server, chart.id), GSON.toJson(metadata));
+        writeJsonAtomically(localManifestPath(server, chart.id), GSON.toJson(metadataOnly(chart)));
+    }
+
+    private static ChartManifest metadataOnly(ChartManifest source) {
+        ChartManifest metadata = new ChartManifest();
+        metadata.id = source.id;
+        metadata.title = source.title;
+        metadata.artist = source.artist;
+        metadata.charter = source.charter;
+        metadata.bpm = source.bpm;
+        metadata.bpms = source.bpms == null ? new ArrayList<>() : new ArrayList<>(source.bpms);
+        metadata.offsetMillis = source.offsetMillis;
+        metadata.sceneInitialized = source.sceneInitialized;
+        metadata.sceneImportIncomplete = source.sceneImportIncomplete;
+        metadata.difficulty = source.difficulty;
+        metadata.level = source.level;
+        metadata.divisionsPerBeat = source.divisionsPerBeat;
+        metadata.laneCount = source.laneCount;
+        metadata.beatsPerMeasure = source.beatsPerMeasure;
+        metadata.coverItemId = source.coverItemId;
+        metadata.audioFile = source.audioFile;
+        metadata.lastEdited = source.lastEdited;
+        metadata.durationSeconds = source.durationSeconds;
+        metadata.totalBeats = source.totalBeats;
+        metadata.beatCount = source.beatCount;
+        metadata.trackLength = source.trackLength;
+        metadata.editorTrackBuiltLength = source.editorTrackBuiltLength;
+        metadata.editorTrackBuiltLaneCount = source.editorTrackBuiltLaneCount;
+        metadata.editorTrackBuiltDivisionsPerBeat = source.editorTrackBuiltDivisionsPerBeat;
+        metadata.dimensionId = source.dimensionId;
+        metadata.selectedStartBeat = source.selectedStartBeat;
+        metadata.noteDisplayRevision = source.noteDisplayRevision;
+        metadata.noteDisplayCleanupTrackLength = source.noteDisplayCleanupTrackLength;
+        metadata.noteDisplayCleanupLaneCount = source.noteDisplayCleanupLaneCount;
+        metadata.effectEditorLayout = source.effectEditorLayout;
+        metadata.initialArena = source.initialArena;
+        metadata.arenaBindings = source.arenaBindings == null ? new java.util.LinkedHashMap<>() : new java.util.LinkedHashMap<>(source.arenaBindings);
+        metadata.tracks = new ArrayList<>();
+        metadata.notes = new ArrayList<>();
+        metadata.effects = new ArrayList<>();
+        metadata.speedEvents = new ArrayList<>();
+        return metadata;
+    }
+
+    public static List<String> arenaNames(ChartManifest chart) {
+        List<String> names = new ArrayList<>();
+        if (chart == null) return names;
+        if (chart.initialArena != null && !chart.initialArena.isBlank()) names.add(chart.initialArena);
+        if (chart.effects == null) return names;
+        for (JsonObject effect : chart.effects) {
+            if (effect == null) continue;
+            JsonObject properties = effect.has("properties") && effect.get("properties").isJsonObject() ? effect.getAsJsonObject("properties") : effect;
+            String eventType = firstJsonString(effect, "effectType", "eventType", "");
+            if ((eventType.equalsIgnoreCase("ARENA") || eventType.equalsIgnoreCase("CHANGE_ARENA")) && properties.has("arena")) {
+                String name = properties.get("arena").getAsString();
+                if (!name.isBlank() && !names.contains(name)) names.add(name);
+            }
+        }
+        return names;
     }
 
     private static ChartManifest parseLocalChart(MinecraftServer server, String chartId) throws IOException {
@@ -965,12 +1009,10 @@ public final class ChartStorage {
     }
 
     private static void writeJsonAtomically(Path path, String json) throws IOException {
-        JsonParser.parseString(json);
         Files.createDirectories(path.getParent());
         Path temporary = path.resolveSibling(path.getFileName() + ".tmp-" + UUID.randomUUID());
         try {
             Files.writeString(temporary, json, StandardCharsets.UTF_8);
-            JsonParser.parseString(Files.readString(temporary, StandardCharsets.UTF_8));
             if (Files.exists(path)) Files.copy(path, backupPath(path), StandardCopyOption.REPLACE_EXISTING);
             try {
                 Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);

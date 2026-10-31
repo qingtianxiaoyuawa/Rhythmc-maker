@@ -105,9 +105,16 @@ private void importLegacyMenu(FlowLayout page) {
         Path difficulty = draft.difficulty;
         Path song = draft.song;
         ClientChartAccess.status("正在导入 2.0 谱面，请稍候...");
-        client.getServer().execute(() -> {
+        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
             try {
-                ClientChartAccess.importRhythmc2(difficulty, ClientChartAccess.stageAudio(song), bpm, draft.importDifficulty, level);
+                return ClientChartAccess.importRhythmc2(difficulty, ClientChartAccess.stageAudio(song), bpm, draft.importDifficulty, level);
+            } catch (Exception exception) {
+                throw new java.util.concurrent.CompletionException(exception);
+            }
+        }).whenComplete((chart, failure) -> client.getServer().execute(() -> {
+            try {
+                if (failure != null) throw new java.io.IOException(failure.getCause() == null ? failure : failure.getCause());
+                ClientChartAccess.installDefaultArenaScenes(client.getServer(), chart);
                 client.execute(() -> {
                     importing = false;
                     ClientChartAccess.status("2.0 谱面已转换并导入为 3.0");
@@ -119,7 +126,7 @@ private void importLegacyMenu(FlowLayout page) {
                     ClientChartAccess.status("2.0 导入失败：" + exception.getMessage());
                 });
             }
-        });
+        }));
     }
     private void importMenu(FlowLayout page) {
         page.child(menuHeader("导入 3.0 谱面", "导入现有 RhythMC 3.0 谱面文件", pageWidth() - 24));

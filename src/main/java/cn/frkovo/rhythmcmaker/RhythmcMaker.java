@@ -610,7 +610,7 @@ public final class RhythmcMaker implements ModInitializer {
         }
         ChartManifest chart;
         try {
-            chart = ChartStorage.find(source.getServer(), chartId);
+            chart = cachedChart(source.getServer(), chartId);
             if (chart == null) { player.sendMessage(Text.literal("找不到谱面：" + chartId), false); return 0; }
             cacheChart(source.getServer(), chart);
             if (IMPORTING_CHARTS.contains(chart.id)) { player.sendMessage(Text.literal("该谱面的场景仍在导入，请稍后重试"), true); return 0; }
@@ -3320,6 +3320,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final Set<String> activeChartPotionEffects = new java.util.HashSet<>();
         private final java.util.Set<String> hitNotes = new java.util.HashSet<>();
         private int nextEffectIndex;
+        private int nextHiddenNoteIndex;
         private long lastDisplayUpdateTick = Long.MIN_VALUE;
         private long lastResyncNanos;
 
@@ -3350,6 +3351,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             }
             hitNotes.clear();
             nextNoteIndex = 0;
+            nextHiddenNoteIndex = 0;
             while (nextNoteIndex < notes.size() && noteTimes.getOrDefault(notes.get(nextNoteIndex).id, Double.POSITIVE_INFINITY) < corrected) {
                 hitNotes.add(notes.get(nextNoteIndex).id);
                 nextNoteIndex++;
@@ -3437,10 +3439,12 @@ private static void showSceneBoundary(MinecraftServer server) {
                     chart.id, notes.size(), nextNoteIndex, firstDistance, displays.size());
         }
         private void playHiddenNoteJudgements(ServerPlayerEntity player, double songTime) {
-            for (ChartManifest.Note note : notes) {
-                if (!shouldHide(note)) continue;
+            while (nextHiddenNoteIndex < notes.size()) {
+                ChartManifest.Note note = notes.get(nextHiddenNoteIndex);
                 double noteTime = noteTimes.getOrDefault(note.id, Double.POSITIVE_INFINITY);
-                if (noteTime <= songTime && hitNotes.add(note.id)) playHitSound(this, player, note);
+                if (noteTime > songTime) break;
+                nextHiddenNoteIndex++;
+                if (shouldHide(note) && hitNotes.add(note.id)) playHitSound(this, player, note);
             }
         }
         private void applyVisualState() {
@@ -3456,7 +3460,10 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
         private void restoreVisibleNotes(ServerPlayerEntity player, double songTime) {
             int restored = 0;
-            for (ChartManifest.Note note : notes) {
+            int start = Math.max(0, nextNoteIndex - PLAYBACK_MAX_ACTIVE_DISPLAYS);
+            int end = Math.min(notes.size(), Math.max(nextNoteIndex + PLAYBACK_MAX_ACTIVE_DISPLAYS, start + PLAYBACK_MAX_ACTIVE_DISPLAYS));
+            for (int index = start; index < end; index++) {
+                ChartManifest.Note note = notes.get(index);
                 if (restored >= PLAYBACK_MAX_PRELOADS_PER_TICK || shouldHide(note) || displays.containsKey(note.id)) continue;
                 double noteTime = noteTimes.getOrDefault(note.id, Double.POSITIVE_INFINITY);
                 if (!Double.isFinite(noteTime) || noteTime <= songTime) continue;

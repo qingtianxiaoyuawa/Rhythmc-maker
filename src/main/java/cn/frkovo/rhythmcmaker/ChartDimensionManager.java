@@ -68,20 +68,7 @@ public final class ChartDimensionManager {
     }
 
     public static void preloadCharts(MinecraftServer server) {
-        try {
-            for (ChartManifest chart : ChartStorage.list(server)) {
-                if (chart.id == null || chart.id.isBlank()) continue;
-                String previousDimensionId = chart.dimensionId;
-                key(chart);
-                boolean migrated = !chart.dimensionId.equals(previousDimensionId);
-                if (migrated) ChartStorage.update(server, chart);
-                ServerWorld world = getOrCreate(server, chart);
-                RhythmcMaker.LOGGER.info("Loaded Rhythmc chart dimension {} -> {} ({})",
-                        chart.id, chart.dimensionId, world.getRegistryKey().getValue());
-            }
-        } catch (IOException | RuntimeException exception) {
-            RhythmcMaker.LOGGER.error("Failed to preload Rhythmc chart dimensions", exception);
-        }
+        RhythmcMaker.LOGGER.debug("Skipped eager Rhythmc chart dimension creation; dimensions are created on demand");
     }
 
     public static String stableDimensionId(String chartId) {

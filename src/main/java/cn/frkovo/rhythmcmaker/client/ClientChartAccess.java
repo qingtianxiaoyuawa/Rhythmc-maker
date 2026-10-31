@@ -83,6 +83,7 @@ final class ClientChartAccess {
         ChartStorage.installImportedScenes(server, chart, scenes.stream().map(scene -> new ChartStorage.ImportedScene(scene.schem(), scene.info(), scene.initial())).toList());
     }
     static ChartManifest importRhythmc2(Path difficultyFile, Path stagedAudio, double bpm, String difficulty, double level) throws IOException { return ChartStorage.importRhythmc2(server(), difficultyFile, stagedAudio, bpm, difficulty, level); }
+    static void installDefaultArenaScenes(MinecraftServer server, ChartManifest chart) throws IOException { cn.frkovo.rhythmcmaker.RhythmcMaker.installDefaultArenaScenes(server, chart, ChartStorage.arenaNames(chart)); }
     static ChartManifest importRhythmc3(Path difficultyFile, Path manifestFile, Path stagedAudio, List<ImportedScene> scenes) throws IOException {
         return importRhythmc3(difficultyFile, manifestFile, null, stagedAudio, scenes);
     }
