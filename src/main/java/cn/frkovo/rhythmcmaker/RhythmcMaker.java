@@ -199,8 +199,9 @@ public final class RhythmcMaker implements ModInitializer {
 
     private static final int PLAYBACK_START_DELAY_TICKS = 0;
     private static final float EFFECT_PREVIEW_DISPLAY_VIEW_RANGE = 128.0f;
-    private static final int SCENE_IMPORT_BLOCKS_PER_TICK = 1024;
+    private static final int SCENE_IMPORT_BLOCKS_PER_TICK = 4096;
     private static final int SCENE_CAPTURE_BLOCKS_PER_TICK = 8192;
+    private static final int EDITOR_TRACK_REBUILD_SLOTS_PER_TICK = 32;
     private static final int SCENE_MIN_X = PLAYBACK_PLATFORM_X - SCENE_SIZE / 2;
     private static final int SCENE_MAX_X = SCENE_MIN_X + SCENE_SIZE - 1;
     private static final int SCENE_MIN_Y = PLAYBACK_PLATFORM_Y - SCENE_SIZE / 2;
@@ -1143,10 +1144,13 @@ public final class RhythmcMaker implements ModInitializer {
             try {
                 ChartStorage.update(server, state.chart);
                 server.execute(() -> {
+                    boolean savedCurrentRevision;
                     synchronized (state) {
-                        if (state.revision == revision) state.dirty = false;
+                        savedCurrentRevision = state.revision == revision;
+                        if (savedCurrentRevision) state.dirty = false;
                         state.saving = false;
                     }
+                    if (savedCurrentRevision) notifyAutoSaveSuccess(server, state.chart.id);
                 });
             } catch (IOException exception) {
                 server.execute(() -> {
@@ -1156,6 +1160,13 @@ public final class RhythmcMaker implements ModInitializer {
             }
         });
         return true;
+    }
+
+    private static void notifyAutoSaveSuccess(MinecraftServer server, String chartId) {
+        Text message = Text.literal("保存成功！").styled(style -> style.withColor(0xB7E66A));
+        for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+            if (chartId.equals(ACTIVE_CHARTS.get(player.getUuid()))) player.sendMessage(message, true);
+        }
     }
 
     private static final class CachedChartState {
@@ -1391,7 +1402,6 @@ public final class RhythmcMaker implements ModInitializer {
         chart.sceneImportIncomplete = false;
         ChartDimensionManager.key(chart);
         java.util.List<SceneEditStorage.Scene> scenes = SceneEditStorage.list(server, chart.id);
-        SceneEditStorage.save(server, chart.id, scenes);
         java.util.List<SceneImportTask> pending = new java.util.ArrayList<>();
         int nextIndex = scenes.stream().mapToInt(scene -> scene.index).max().orElse(0) + 1;
         ImportedScene initial = completeScenes.stream().filter(ImportedScene::initial).findFirst().orElse(null);
@@ -1400,7 +1410,6 @@ public final class RhythmcMaker implements ModInitializer {
             initialScene.name = readSceneName(initial.info(), initialScene.name);
             initialScene.displayName = readSceneDisplayName(initial.info(), initialScene.displayName);
             chart.initialArena = initialScene.name;
-            SceneEditStorage.save(server, chart.id, scenes);
             SceneEditStorage.copySchematic(server, chart.id, initialScene.index, initial.schem());
             chart.sceneInitialized = true;
             pending.add(new SceneImportTask(chart, initial.schem(), PLAYBACK_PLATFORM_X, PLAYBACK_PLATFORM_Y, PLAYBACK_PLATFORM_Z));
@@ -1414,7 +1423,6 @@ public final class RhythmcMaker implements ModInitializer {
             scene.icon = readSceneIcon(importedScene.info());
             scene.saved = true;
             scenes.add(scene);
-            SceneEditStorage.save(server, chart.id, scenes);
             SceneEditStorage.copySchematic(server, chart.id, sceneIndex, importedScene.schem());
             pending.add(new SceneImportTask(chart, importedScene.schem(), scene.x, PLAYBACK_PLATFORM_Y, PLAYBACK_PLATFORM_Z));
         }
@@ -2544,8 +2552,8 @@ private static void showSceneBoundary(MinecraftServer server) {
     private static void ensurePlaybackChunksLoaded(ServerWorld world) {
         int centerChunkX = Math.floorDiv(PLAYBACK_PLATFORM_X, 16);
         int centerChunkZ = Math.floorDiv(PLAYBACK_PLATFORM_Z, 16);
-        for (int chunkX = centerChunkX - 4; chunkX <= centerChunkX + 4; chunkX++) {
-            for (int chunkZ = centerChunkZ - 4; chunkZ <= centerChunkZ + 4; chunkZ++) {
+        for (int chunkX = centerChunkX - 1; chunkX <= centerChunkX + 1; chunkX++) {
+            for (int chunkZ = centerChunkZ - 1; chunkZ <= centerChunkZ + 1; chunkZ++) {
                 ensurePlaybackChunkLoaded(world, new ChunkPos(chunkX, chunkZ));
             }
         }
@@ -4684,7 +4692,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 iterator.remove();
                 continue;
             }
-            int budget = 8;
+            int budget = EDITOR_TRACK_REBUILD_SLOTS_PER_TICK;
             if (!task.foundationReady) {
                 restoreEditorTrackFoundation(world, task.x, task.newLength, task.laneCount);
                 task.foundationReady = true;
