@@ -104,6 +104,7 @@ public final class ChartStorage {
         importRhythmc3Document(server, chart, root, stagedAudio);
         chart.trackLength = calculateImportedTrackLength(chart);
         writeLocalChart(server, chart);
+        RhythmcMaker.installDefaultArenaScenes(server, chart, arenaNames(chart));
         return chart;
     }
 

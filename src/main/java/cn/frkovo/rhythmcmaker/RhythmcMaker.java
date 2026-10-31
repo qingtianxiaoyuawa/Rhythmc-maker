@@ -3421,7 +3421,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 this.effectTypes.add(effectType(effect));
             }
             this.notes.removeIf(note -> note == null || note.id == null);
-            this.notes.sort(java.util.Comparator.comparingDouble(note -> note.time));
+            this.notes.sort(java.util.Comparator.comparingDouble(note -> effectiveNoteTime(note, chart)));
             for (ChartManifest.Note note : this.notes) {
                 notesById.put(note.id, note);
                 double noteTime = effectiveNoteTime(note, chart);
