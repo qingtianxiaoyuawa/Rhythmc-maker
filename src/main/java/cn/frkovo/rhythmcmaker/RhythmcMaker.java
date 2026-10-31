@@ -10,6 +10,9 @@ import cn.frkovo.rhythmcmaker.client.playback.PotionEffectClearPolicy;
 import cn.frkovo.rhythmcmaker.client.playback.PotionDurationAtSeek;
 import cn.frkovo.rhythmcmaker.client.playback.TextDisplayDurationAtSeek;
 import cn.frkovo.rhythmcmaker.client.playback.PlaybackTimelineClock;
+import cn.frkovo.rhythmcmaker.client.playback.PlaybackDemandProfile;
+import cn.frkovo.rhythmcmaker.client.playback.PlaybackDiagnostics;
+import cn.frkovo.rhythmcmaker.client.playback.DisplayPose;
 import cn.frkovo.rhythmcmaker.client.playback.PersistentEffectStateFold;
 import cn.frkovo.rhythmcmaker.client.playback.TextDisplayEventFold;
 import cn.frkovo.rhythmcmaker.common.effect.EffectPayload;
@@ -3300,6 +3303,8 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final float returnYaw, returnPitch;
         private final ChartManifest chart;
         private final ChartTiming.Prepared timing;
+        private final PlaybackDemandProfile demandProfile;
+        private final PlaybackDiagnostics diagnostics = new PlaybackDiagnostics();
         private boolean sceneChanged;
 
         private final Map<Integer, TrackPlayback.Prepared> trackProfiles = new java.util.HashMap<>();
@@ -3327,7 +3332,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private int nextNoteIndex;
         private final Map<String, DisplayEntity.BlockDisplayEntity> displays = new java.util.HashMap<>();
         private final Map<String, DisplayEntity.TextDisplayEntity> textDisplays = new java.util.HashMap<>();
-        private final java.util.ArrayDeque<DisplayEntity.TextDisplayEntity> textDisplayPool = new java.util.ArrayDeque<>();
+        private final java.util.ArrayDeque<DisplayEntity.TextDisplayEntity> textDisplayPool;
         private final Map<String, double[]> textDisplayAnchors = new java.util.HashMap<>();
         private final Map<String, double[]> textDisplayLastPoses = new java.util.HashMap<>();
         private final Map<Integer, TrackPlayback.PoseBuffer> textDisplayPoseBuffers = new java.util.HashMap<>();
@@ -3358,6 +3363,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             double corrected = Math.max(0.0, songSeconds);
             startSeconds = corrected;
             startNanos = now;
+            long rebuildStarted = System.nanoTime();
             cancelPlaybackSceneImports(this);
             for (DisplayEntity.BlockDisplayEntity display : displays.values()) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
             displays.clear();
@@ -3377,6 +3383,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             rebuildPersistentEffectState(player, corrected);
             nextEffectIndex = 0;
             while (nextEffectIndex < effects.size() && effectSeconds(effects.get(nextEffectIndex)) <= corrected) nextEffectIndex++;
+            diagnostics.recordSeekRebuild(System.nanoTime() - rebuildStarted);
         }
         private void rebuildPersistentEffectState(ServerPlayerEntity player, double targetSeconds) {
             resetClientTime(player);
@@ -3416,6 +3423,8 @@ private static void showSceneBoundary(MinecraftServer server) {
             this.returnPitch = returnPitch;
             this.chart = chart;
             this.timing = ChartTiming.prepare(chart);
+            this.demandProfile = PlaybackDemandProfile.from(chart);
+            this.textDisplayPool = new java.util.ArrayDeque<>(demandProfile.recommendedTextPoolCapacity());
 
             if (chart.tracks != null) for (ChartManifest.Track track : chart.tracks) if (track != null) trackProfiles.put(track.id, TrackPlayback.prepare(track, chart.speedEvents));
             trackProfiles.computeIfAbsent(0, ignored -> TrackPlayback.prepare(null, chart.speedEvents));
@@ -3983,8 +3992,11 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
         private DisplayEntity.TextDisplayEntity acquireTextDisplay(String id, double[] initialPosition) {
             DisplayEntity.TextDisplayEntity display = textDisplayPool.pollFirst();
-            if (display == null || display.isRemoved()) display = createTextDisplay(initialPosition);
-            else {
+            if (display == null || display.isRemoved()) {
+                diagnostics.recordPoolMiss();
+                display = createTextDisplay(initialPosition);
+            } else {
+                diagnostics.recordPoolHit();
                 display.setInterpolationDuration(0);
                 display.setInvisible(true);
                 display.setText(Text.empty());
@@ -4003,6 +4015,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             display.setBillboardMode(DisplayEntity.BillboardMode.FIXED);
             display.setInterpolationDuration(0);
             world.spawnEntity(display);
+            diagnostics.recordGeneratedEntity();
             return display;
         }
         private void releaseTextDisplay(String id, DisplayEntity.TextDisplayEntity display) {
@@ -4012,14 +4025,11 @@ private static void showSceneBoundary(MinecraftServer server) {
             display.setTextOpacity((byte) 0);
             display.setInterpolationDuration(0);
             textDisplayPool.addLast(display);
+            diagnostics.recordRecycledEntity();
         }
         private static boolean sameTextDisplayPose(double[] left, TrackPlayback.PoseBuffer right) {
-            return left != null && left.length == 9
-                    && Math.abs(left[0] - right.x()) <= 1.0E-5 && Math.abs(left[1] - right.y()) <= 1.0E-5
-                    && Math.abs(left[2] - right.z()) <= 1.0E-5 && Math.abs(left[3] - right.rotationX()) <= 1.0E-5
-                    && Math.abs(left[4] - right.rotationY()) <= 1.0E-5 && Math.abs(left[5] - right.rotationZ()) <= 1.0E-5
-                    && Math.abs(left[6] - right.scaleX()) <= 1.0E-5 && Math.abs(left[7] - right.scaleY()) <= 1.0E-5
-                    && Math.abs(left[8] - right.scaleZ()) <= 1.0E-5;
+            DisplayPose pose = DisplayPose.from(left);
+            return pose != null && pose.matches(right);
         }
 
         private static void setBufferedTextDisplayPose(DisplayEntity.TextDisplayEntity display, TrackPlayback.PoseBuffer pose) {

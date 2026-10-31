@@ -11,6 +11,8 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.AtomicMoveNotSupportedException;
 
 public final class RhythmcMakerConfig {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
@@ -55,7 +57,7 @@ public final class RhythmcMakerConfig {
         normalize();
         Path path = path(server);
         Files.createDirectories(path.getParent());
-        Files.writeString(path, GSON.toJson(this), StandardCharsets.UTF_8);
+
     }
 
     private static Path path(MinecraftServer server) {

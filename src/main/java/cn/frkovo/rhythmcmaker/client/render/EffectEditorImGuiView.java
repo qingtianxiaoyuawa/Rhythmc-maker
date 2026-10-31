@@ -85,6 +85,7 @@ public final class EffectEditorImGuiView {
     private final List<EffectEditorLayout.KeyframePosition> keyframePositions = new ArrayList<>();
     private List<TimelineRow> cachedTimelineRows;
     private double cachedTimelineMaxBeat;
+    private long cachedTimelineRevision = Long.MIN_VALUE;
     private String contextTrackId;
     private double contextBeat;
     private String pendingDeleteTrack;
@@ -1339,7 +1340,7 @@ public final class EffectEditorImGuiView {
     }
 
     private List<TimelineRow> buildTimelineRows() {
-        if (cachedTimelineRows != null) return cachedTimelineRows;
+        if (cachedTimelineRows != null && cachedTimelineRevision == layoutModel.revision()) return cachedTimelineRows;
         List<TimelineRow> rows = new ArrayList<>();
         cachedTimelineMaxBeat = Math.max(1.0, chart == null ? 1.0 : chart.totalBeats);
         List<EffectEditorLayout.Track> orderedTracks = new ArrayList<>(layoutModel.tracks());
@@ -1372,6 +1373,7 @@ public final class EffectEditorImGuiView {
         }
         if (timelineDragSnapshot != null) cachedTimelineMaxBeat = timelineDragMaximumBeat;
         cachedTimelineRows = List.copyOf(rows);
+        cachedTimelineRevision = layoutModel.revision();
         return cachedTimelineRows;
     }
 

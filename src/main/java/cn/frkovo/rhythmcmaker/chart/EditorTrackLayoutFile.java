@@ -9,6 +9,8 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.AtomicMoveNotSupportedException;
 
 /** 与难度文件同目录的制谱器轨道布局旁挂文件；RhythMC 运行时只读固定文件名，不会读取它。 */
 public final class EditorTrackLayoutFile {
@@ -33,6 +35,6 @@ public final class EditorTrackLayoutFile {
         JsonObject root = new JsonObject();
         root.addProperty("laneCount", layout.laneCount());
         root.addProperty("divisionsPerBeat", layout.divisionsPerBeat());
-        Files.writeString(file, GSON.toJson(root), StandardCharsets.UTF_8);
+
     }
 }
