@@ -4,9 +4,12 @@ import cn.frkovo.rhythmcmaker.chart.ChartManifest;
 import com.google.gson.Gson;
 import cn.frkovo.rhythmcmaker.chart.ChartStorage;
 import cn.frkovo.rhythmcmaker.chart.ChartTiming;
+import cn.frkovo.rhythmcmaker.chart.HoldInterval;
+import cn.frkovo.rhythmcmaker.chart.HoldNoteGroupMerger;
 import cn.frkovo.rhythmcmaker.chart.EditorTrackLayout;
 import cn.frkovo.rhythmcmaker.chart.PlaybackCoordinates;
 import cn.frkovo.rhythmcmaker.chart.TrackPlayback;
+import cn.frkovo.rhythmcmaker.client.playback.HoldPlaybackStateMachine;
 import cn.frkovo.rhythmcmaker.client.playback.PotionEffectClearPolicy;
 import cn.frkovo.rhythmcmaker.client.playback.PotionDurationAtSeek;
 import cn.frkovo.rhythmcmaker.client.playback.TextDisplayDurationAtSeek;
@@ -418,6 +421,20 @@ public final class RhythmcMaker implements ModInitializer {
                 .executes(context -> snapFractionalNotes(context.getSource())));
             dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_track_snap_undo")
                 .executes(context -> undoFractionalNoteSnap(context.getSource())));
+            dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_note_edit")
+                .then(net.minecraft.server.command.CommandManager.argument("noteId", com.mojang.brigadier.arguments.StringArgumentType.word())
+                    .then(net.minecraft.server.command.CommandManager.argument("x", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg(-300000.0, 300000.0))
+                        .then(net.minecraft.server.command.CommandManager.argument("y", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg(-2048.0, 2048.0))
+                            .then(net.minecraft.server.command.CommandManager.argument("beat", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg(0.0, 1000000.0))
+                                .executes(context -> editChartNote(context.getSource(),
+                                    com.mojang.brigadier.arguments.StringArgumentType.getString(context, "noteId"),
+                                    com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "x"),
+                                    com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "y"),
+                                    com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "beat"))))))));
+            dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_note_glue")
+                .then(net.minecraft.server.command.CommandManager.argument("noteId", com.mojang.brigadier.arguments.StringArgumentType.word())
+                    .executes(context -> glueHoldNotes(context.getSource(),
+                        com.mojang.brigadier.arguments.StringArgumentType.getString(context, "noteId")))));
             dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_start_beat")
                 .then(net.minecraft.server.command.CommandManager.argument("delta", com.mojang.brigadier.arguments.IntegerArgumentType.integer(-16, 16))
                 .executes(context -> adjustStartBeat(context.getSource(), com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "delta")))));
@@ -581,7 +598,7 @@ public final class RhythmcMaker implements ModInitializer {
         player.getInventory().setStack(2, new ItemStack(Blocks.DIAMOND_BLOCK.asItem()));
         player.getInventory().setStack(3, new ItemStack(Blocks.TNT.asItem()));
         player.getInventory().setStack(4, menuStack(PLAY_ITEM));
-        player.getInventory().setStack(5, menuStack(BEAT_SCORE_ITEM));
+        player.getInventory().setStack(5, new ItemStack(Items.BREEZE_ROD));
         player.getInventory().setStack(6, menuStack(CHART_SETTINGS_ITEM));
         player.getInventory().setStack(7, menuStack(MORE_SETTINGS_ITEM));
         player.getInventory().setStack(8, menuStack(QUICK_FUNCTIONS_ITEM));
@@ -598,6 +615,7 @@ public final class RhythmcMaker implements ModInitializer {
         player.getInventory().setStack(1, menuStack(SCENE_EDIT_ITEM));
         player.getInventory().setStack(2, menuStack(EFFECT_TRACK_ITEM));
         player.getInventory().setStack(4, menuStack(EXPORT_ITEM));
+        player.getInventory().setStack(6, menuStack(BEAT_SCORE_ITEM));
         player.getInventory().setStack(7, menuStack(SETTINGS_ITEM));
         player.getInventory().setStack(8, menuStack(MORE_OPTIONS_RETURN_ITEM));
         player.currentScreenHandler.sendContentUpdates();
@@ -1114,6 +1132,116 @@ public final class RhythmcMaker implements ModInitializer {
         if (cached != null) return cached.chart;
         try { return cachedChart(server, id); } catch (IOException ignored) { return null; }
     }
+    private static int editChartNote(net.minecraft.server.command.ServerCommandSource source, String noteId,
+                                     double x, double y, double beat) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayerEntity player = source.getPlayerOrThrow();
+        if (!(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world)
+                || !player.getMainHandStack().isOf(Items.BREEZE_ROD)) return 0;
+        ChartManifest chart = loadActiveChart(player, source.getServer());
+        if (chart == null || chart.notes == null) return 0;
+        ChartManifest.Note note = chart.notes.stream().filter(candidate -> candidate != null && noteId.equals(candidate.id)).findFirst().orElse(null);
+        if (note == null) return 0;
+        double oldX = note.x;
+        double oldY = note.y;
+        double oldZ = note.z;
+        int previousHoldGroup = note.holdGroup;
+        double newZ = -3.0 - beat * divisionsPerBeat(chart);
+        DisplayEntity.BlockDisplayEntity display = world.getEntitiesByType(EntityType.BLOCK_DISPLAY,
+                entity -> entity.getCommandTags().contains(noteTag(chart.id, note.id))).stream().findFirst().orElse(null);
+        if (display != null) {
+            display.setPosition(x, y, newZ);
+        } else {
+            BlockPos oldPos = BlockPos.ofFloored(oldX, oldY, oldZ);
+            BlockPos newPos = BlockPos.ofFloored(x, y, newZ);
+            if (!oldPos.equals(newPos) && noteTypeForBlockState(world.getBlockState(oldPos)) >= 0) world.setBlockState(oldPos, Blocks.AIR.getDefaultState(), 3);
+            if (world.getBlockState(newPos).isAir() || oldPos.equals(newPos)) world.setBlockState(newPos, blockStateForType(note.type), 3);
+        }
+        note.x = x;
+        note.y = y;
+        note.z = newZ;
+        note.beat = beat;
+        note.time = ChartTiming.beatToSeconds(chart, beat);
+        if (previousHoldGroup >= 0) rebuildHoldLinks(world, chart, note.trackId, previousHoldGroup);
+        updateChartTotalBeats(chart);
+        CachedChartState state = cacheChart(source.getServer(), chart);
+        synchronized (state) { state.revision++; state.dirty = true; }
+        queueChartSave(source.getServer(), state);
+        return 1;
+    }
+
+    private static int glueHoldNotes(net.minecraft.server.command.ServerCommandSource source, String noteId)
+            throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayerEntity player = source.getPlayerOrThrow();
+        if (!(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world)
+                || !player.getMainHandStack().isOf(Items.BREEZE_ROD)) return 0;
+        ChartManifest chart = loadActiveChart(player, source.getServer());
+        if (chart == null || chart.notes == null) return 0;
+        ChartManifest.Note selected = chart.notes.stream().filter(note -> note != null && noteId.equals(note.id)).findFirst().orElse(null);
+        if (selected == null || selected.type != 2) return 0;
+        java.util.List<ChartManifest.Note> connected = HoldNoteGroupMerger.connectedNotes(chart.notes, selected);
+        if (connected.size() < 2) return 0;
+        java.util.Set<Integer> previousGroups = new java.util.HashSet<>();
+        for (ChartManifest.Note member : connected) if (member.holdGroup >= 0) previousGroups.add(member.holdGroup);
+        for (int previousGroup : previousGroups) removeHoldLinks(world, chart.id, selected.trackId, previousGroup);
+        int group = connected.stream().mapToInt(member -> member.holdGroup).distinct().count() == 1
+                && connected.getFirst().holdGroup >= 0
+                ? connected.getFirst().holdGroup : HoldNoteGroupMerger.nextGroupId(chart.notes);
+        for (ChartManifest.Note member : connected) member.holdGroup = group;
+        rebuildHoldLinks(world, chart, selected.trackId, group);
+        CachedChartState state = cacheChart(source.getServer(), chart);
+        synchronized (state) { state.revision++; state.dirty = true; }
+        queueChartSave(source.getServer(), state);
+        return connected.size();
+    }
+
+    private static void rebuildHoldLinks(ServerWorld world, ChartManifest chart, int trackId, int holdGroup) {
+        removeHoldLinks(world, chart.id, trackId, holdGroup);
+        java.util.List<ChartManifest.Note> members = chart.notes.stream()
+                .filter(note -> note != null && note.type == 2 && note.trackId == trackId && note.holdGroup == holdGroup)
+                .sorted(java.util.Comparator.comparingDouble(note -> note.beat)).toList();
+        String tag = holdLinkTag(chart.id, trackId, holdGroup);
+        for (int firstIndex = 0; firstIndex < members.size(); firstIndex++) {
+            ChartManifest.Note first = members.get(firstIndex);
+            for (int secondIndex = firstIndex + 1; secondIndex < members.size(); secondIndex++) {
+                ChartManifest.Note second = members.get(secondIndex);
+                double dx = second.x - first.x;
+                double dy = second.y - first.y;
+                double dz = second.z - first.z;
+                if (dx * dx + dy * dy + dz * dz > 1.0000001) continue;
+                Vector3f direction = new Vector3f((float) dx, (float) dy, (float) dz);
+                float length = direction.length();
+                if (length < 0.001f) continue;
+                direction.normalize();
+                float thickness = 0.08f;
+                DisplayEntity.BlockDisplayEntity connector = EntityType.BLOCK_DISPLAY.create(world, SpawnReason.COMMAND);
+                if (connector == null) continue;
+                connector.setBlockState(Blocks.LIGHT_BLUE_STAINED_GLASS.getDefaultState());
+                connector.setPosition((first.x + second.x) * 0.5 + 0.5,
+                        (first.y + second.y) * 0.5 + 0.5, (first.z + second.z) * 0.5 + 0.5);
+                connector.setTransformation(new AffineTransformation(
+                        new Vector3f(-thickness * 0.5f, -length * 0.5f, -thickness * 0.5f),
+                        new Quaternionf().rotationTo(new Vector3f(0.0f, 1.0f, 0.0f), direction),
+                        new Vector3f(thickness, length, thickness), new Quaternionf()));
+                connector.setNoGravity(true);
+                connector.setInvulnerable(true);
+                connector.addCommandTag(tag);
+                world.spawnEntity(connector);
+            }
+        }
+    }
+
+    private static void removeHoldLinks(ServerWorld world, String chartId, int trackId, int holdGroup) {
+        String tag = holdLinkTag(chartId, trackId, holdGroup);
+        for (DisplayEntity.BlockDisplayEntity connector : world.getEntitiesByType(EntityType.BLOCK_DISPLAY,
+                entity -> entity.getCommandTags().contains(tag))) {
+            connector.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+        }
+    }
+
+    private static String holdLinkTag(String chartId, int trackId, int holdGroup) {
+        return "rhythmc_hold_link:" + chartId + ":" + trackId + ":" + holdGroup;
+    }
+
     private static int trackLength(MinecraftServer server, String id) {
         ChartManifest chart = CHART_CACHE_BY_ID.containsKey(id) ? CHART_CACHE_BY_ID.get(id).chart : null;
         if (chart == null) try { chart = cachedChart(server, id); } catch (IOException ignored) { }
@@ -2766,7 +2894,9 @@ private static void showSceneBoundary(MinecraftServer server) {
                 }
             }
             if (session.formal) {
+                session.advanceHoldPlayback(PlaybackCoordinates.beatAtSongTime(session.chart, session.timing, songTime), player);
                 session.playHiddenNoteJudgements(player, songTime);
+                session.updateHoldDisplays(player, songTime, updateDisplayPositions);
                 int preloadedThisTick = 0;
                 for (var iterator = session.displays.entrySet().iterator(); iterator.hasNext();) {
                     var entry = iterator.next();
@@ -2777,7 +2907,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                     display.setGlowing(true);
                     double noteTime = session.noteTimes.getOrDefault(note.id, Double.POSITIVE_INFINITY);
                     double relativeDistance = session.relativeDistance(note, songTime);
-                    if (noteTime <= songTime && session.hitNotes.add(note.id)) playHitSound(session, player, note);
+                    if (noteTime <= songTime && session.hitNotes.add(note.id) && !session.isGroupedHoldNote(note)) playHitSound(session, player, note);
                     if (relativeDistance <= 0.0) {
                         session.recycle(note, display); iterator.remove(); continue;
                     }
@@ -2805,7 +2935,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                     }
                     if (relativeDistance > PLAYBACK_APPROACH_DISTANCE) break;
                     session.nextNoteIndex++;
-                    if (session.shouldHide(note)) continue;
+                    if (session.shouldHide(note) || session.isGroupedHoldNote(note)) continue;
                     double displayZ = PLAYBACK_FRAME_Z - Math.max(0.0, relativeDistance);
                     double[] position = session.displayPosition(note, songTime, displayZ);
                     DisplayEntity.BlockDisplayEntity display = session.acquire(note, blockStateForType(note.type), position[0], position[1], position[2]);
@@ -3199,6 +3329,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
         PlaybackSession session = PLAYBACK_SESSIONS.remove(player.getUuid());
         if (session == null) return;
+        session.cancelHoldPlayback();
         cancelPlaybackSceneImports(session);
         cleanupPlaybackDisplayEntities(session.world, player.getUuid(), session.chart.id);
         try {
@@ -3206,6 +3337,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             session.resetClientTime(player);
             session.clearGlowTeam();
             for (DisplayEntity.BlockDisplayEntity display : session.displays.values()) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+            session.clearHoldDisplays();
             session.clearDisplayPools();
             session.clearTextDisplays();
             session.displays.clear();
@@ -3423,6 +3555,12 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final boolean formal;
         private final double rate;
         private final java.util.List<ChartManifest.Note> notes;
+        private final java.util.List<HoldInterval> holdIntervals;
+        private final Set<String> groupedHoldNoteIds = new java.util.HashSet<>();
+        private final HoldPlaybackStateMachine holdPlayback = new HoldPlaybackStateMachine();
+        private final Map<String, HoldInterval> holdIntervalsById = new java.util.HashMap<>();
+        private final Set<String> activeHoldIntervalIds = new java.util.HashSet<>();
+        private int nextHoldVisualIndex;
         private final java.util.List<JsonObject> effects;
         private final java.util.List<Double> effectTimes;
         private final java.util.List<String> effectTypes;
@@ -3442,6 +3580,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final long originalStatusEffectsCapturedAtTick;
         private int nextNoteIndex;
         private final Map<String, DisplayEntity.BlockDisplayEntity> displays = new java.util.HashMap<>();
+        private final Map<String, DisplayEntity.BlockDisplayEntity> holdDisplays = new java.util.HashMap<>();
         private final Map<String, DisplayEntity.TextDisplayEntity> textDisplays = new java.util.HashMap<>();
         private final java.util.ArrayDeque<DisplayEntity.TextDisplayEntity> textDisplayPool;
         private final Map<String, double[]> textDisplayAnchors = new java.util.HashMap<>();
@@ -3453,6 +3592,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final Map<String, Double> textDisplaySyncUntilSeconds = new java.util.HashMap<>();
         private final Set<String> activeChartPotionEffects = new java.util.HashSet<>();
         private final java.util.Set<String> hitNotes = new java.util.HashSet<>();
+        private double currentPlaybackBeat;
         private int nextEffectIndex;
         private int nextHiddenNoteIndex;
         private long lastDisplayUpdateTick = Long.MIN_VALUE;
@@ -3474,10 +3614,17 @@ private static void showSceneBoundary(MinecraftServer server) {
             double corrected = Math.max(0.0, songSeconds);
             startSeconds = corrected;
             startNanos = now;
+            currentPlaybackBeat = PlaybackCoordinates.beatAtSongTime(chart, timing, corrected);
+            holdPlayback.seek(currentPlaybackBeat);
+            reconcileActiveHolds(currentPlaybackBeat);
+            nextHoldVisualIndex = 0;
+            while (nextHoldVisualIndex < holdIntervals.size()
+                    && holdIntervals.get(nextHoldVisualIndex).endBeat() <= currentPlaybackBeat) nextHoldVisualIndex++;
             long rebuildStarted = System.nanoTime();
             cancelPlaybackSceneImports(this);
             for (DisplayEntity.BlockDisplayEntity display : displays.values()) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
             displays.clear();
+            clearHoldDisplays();
             clearDisplayPools();
             String ownerDisplayTag = "rhythmc_preview:" + ownerId;
             for (DisplayEntity.BlockDisplayEntity display : world.getEntitiesByType(EntityType.BLOCK_DISPLAY,
@@ -3566,6 +3713,17 @@ private static void showSceneBoundary(MinecraftServer server) {
                 noteTimes.put(note.id, noteTime);
 
             }
+            this.holdIntervals = HoldInterval.fromChart(chart);
+            for (HoldInterval interval : holdIntervals) {
+                holdIntervalsById.put(interval.id(), interval);
+                for (ChartManifest.Note note : interval.members()) {
+                    if (note.id != null) groupedHoldNoteIds.add(note.id);
+                }
+            }
+            double initialBeat = PlaybackCoordinates.beatAtSongTime(chart, timing, startSeconds);
+            this.currentPlaybackBeat = initialBeat;
+            holdPlayback.reset(holdIntervals, Math.nextDown(initialBeat));
+            reconcileActiveHolds(initialBeat);
             this.endSeconds = calculateEndSeconds();
             while (nextNoteIndex < notes.size() && noteTimes.getOrDefault(notes.get(nextNoteIndex).id, Double.POSITIVE_INFINITY) < startSeconds) {
                 hitNotes.add(notes.get(nextNoteIndex).id);
@@ -3582,15 +3740,151 @@ private static void showSceneBoundary(MinecraftServer server) {
                 double noteTime = noteTimes.getOrDefault(note.id, Double.POSITIVE_INFINITY);
                 if (noteTime > songTime) break;
                 nextHiddenNoteIndex++;
-                if (shouldHide(note) && hitNotes.add(note.id)) playHitSound(this, player, note);
+                if (shouldHide(note) && hitNotes.add(note.id) && !isGroupedHoldNote(note)) playHitSound(this, player, note);
             }
         }
+        private boolean isGroupedHoldNote(ChartManifest.Note note) {
+            return note != null && groupedHoldNoteIds.contains(note.id);
+        }
+        private void advanceHoldPlayback(double beat, ServerPlayerEntity player) {
+            currentPlaybackBeat = beat;
+            for (HoldPlaybackStateMachine.Transition transition : holdPlayback.update(beat)) {
+                if (transition.type() == HoldPlaybackStateMachine.TransitionType.STARTED) {
+                    activeHoldIntervalIds.add(transition.intervalId());
+                    playHoldBoundarySound(player, true);
+                } else if (transition.type() == HoldPlaybackStateMachine.TransitionType.ENDED) {
+                    activeHoldIntervalIds.remove(transition.intervalId());
+                    HoldInterval interval = holdIntervalsById.get(transition.intervalId());
+                    if (interval != null && interval.hasEndJudgementBoundary()) playHoldBoundarySound(player, false);
+                } else if (transition.type() == HoldPlaybackStateMachine.TransitionType.CANCELLED) {
+                    activeHoldIntervalIds.remove(transition.intervalId());
+                }
+            }
+        }
+        private void reconcileActiveHolds(double beat) {
+            activeHoldIntervalIds.clear();
+            for (HoldInterval interval : holdIntervals) {
+                if (beat >= interval.startBeat() && beat < interval.endBeat()) activeHoldIntervalIds.add(interval.id());
+            }
+        }
+        private void playHoldBoundarySound(ServerPlayerEntity player, boolean start) {
+            net.minecraft.sound.SoundEvent sound = start
+                    ? net.minecraft.sound.SoundEvents.BLOCK_STONE_PRESSURE_PLATE_CLICK_ON
+                    : net.minecraft.sound.SoundEvents.BLOCK_STONE_PRESSURE_PLATE_CLICK_OFF;
+            world.playSound(null, player.getX(), player.getY(), player.getZ(), sound,
+                    net.minecraft.sound.SoundCategory.PLAYERS,
+                    (float) Math.max(0.1, Math.min(5.0, config.noteJudgementVolumeMultiplier)), 1.0f);
+        }
+        private void updateHoldDisplays(ServerPlayerEntity player, double songTime, boolean updatePositions) {
+            double beat = PlaybackCoordinates.beatAtSongTime(chart, timing, songTime);
+            while (nextHoldVisualIndex < holdIntervals.size()) {
+                HoldInterval interval = holdIntervals.get(nextHoldVisualIndex);
+                ChartManifest.Note start = interval.members().getFirst();
+                double startTime = noteTimes.getOrDefault(start.id, Double.POSITIVE_INFINITY);
+                if (startTime - songTime > PLAYBACK_MAX_PRELOAD_SECONDS) break;
+                nextHoldVisualIndex++;
+                if (shouldHide(start)) continue;
+                double distance = relativeDistance(start, songTime);
+                if (!Double.isFinite(distance) || distance < 0 || distance > PLAYBACK_APPROACH_DISTANCE) continue;
+                createHoldDisplay(player, interval, songTime);
+            }
+            for (String intervalId : activeHoldIntervalIds) {
+                if (holdDisplays.containsKey(intervalId)) continue;
+                HoldInterval interval = holdIntervalsById.get(intervalId);
+                if (interval != null && !shouldHide(interval.members().getFirst())) createHoldDisplay(player, interval, songTime);
+            }
+            for (var iterator = holdDisplays.entrySet().iterator(); iterator.hasNext();) {
+                var entry = iterator.next();
+                HoldInterval interval = holdIntervalsById.get(entry.getKey());
+                if (interval == null || shouldHide(interval.members().getFirst()) || beat >= interval.endBeat()) {
+                    recycle(interval == null ? null : interval.members().getFirst(), entry.getValue());
+                    iterator.remove();
+                    continue;
+                }
+                if (updatePositions) updateHoldSpan(entry.getValue(), interval, songTime);
+            }
+        }
+        private void createHoldDisplay(ServerPlayerEntity player, HoldInterval interval, double songTime) {
+            ChartManifest.Note start = interval.members().getFirst();
+            double distance = relativeDistance(start, songTime);
+            double displayZ = PLAYBACK_FRAME_Z - Math.max(0.0, distance);
+            double[] position = displayPosition(start, songTime, displayZ);
+            DisplayEntity.BlockDisplayEntity display = acquire(start, blockStateForType(start.type), position[0], position[1], position[2]);
+            if (display == null) return;
+            display.addCommandTag("rhythmc_preview:" + player.getUuid());
+            display.setGlowing(true);
+            holdDisplays.put(interval.id(), display);
+            Team team = glowTeams.computeIfAbsent(start.type, this::createGlowTeam);
+            if (world.getScoreboard().getScoreHolderTeam(display.getNameForScoreboard()) != team) {
+                world.getScoreboard().addScoreHolderToTeam(display.getNameForScoreboard(), team);
+            }
+            updateHoldSpan(display, interval, songTime);
+        }
+        private void updateHoldSpan(DisplayEntity.BlockDisplayEntity display, HoldInterval interval, double songTime) {
+            ChartManifest.Note start = interval.members().getFirst();
+            ChartManifest.Note end = interval.members().getLast();
+            double startDistance = relativeDistance(start, songTime);
+            double endDistance = relativeDistance(end, songTime);
+            double[] startPosition = displayPosition(start, songTime, PLAYBACK_FRAME_Z - Math.max(0.0, startDistance));
+            double[] endPosition = displayPosition(end, songTime, PLAYBACK_FRAME_Z - Math.max(0.0, endDistance));
+            Vector3f direction = new Vector3f((float) (endPosition[0] - startPosition[0]),
+                    (float) (endPosition[1] - startPosition[1]), (float) (endPosition[2] - startPosition[2]));
+            float length = direction.length();
+            if (!Float.isFinite(length)) return;
+            if (length < 0.001f) {
+                length = 0.001f;
+                direction.set(0.0f, 1.0f, 0.0f);
+            }
+            direction.normalize();
+            float thickness = 0.12f;
+            Quaternionf rotation = new Quaternionf().rotationTo(new Vector3f(0.0f, 1.0f, 0.0f), direction);
+            display.setPosition((startPosition[0] + endPosition[0]) * 0.5,
+                    (startPosition[1] + endPosition[1]) * 0.5,
+                    (startPosition[2] + endPosition[2]) * 0.5);
+            display.setTransformation(new AffineTransformation(
+                    new Vector3f(-thickness * 0.5f, -length * 0.5f, -thickness * 0.5f), rotation,
+                    new Vector3f(thickness, length, thickness), new Quaternionf()));
+        }
+        private void clearHoldDisplays() {
+            for (Map.Entry<String, DisplayEntity.BlockDisplayEntity> entry : holdDisplays.entrySet()) {
+                HoldInterval interval = holdIntervalsById.get(entry.getKey());
+                recycleHoldDisplay(interval, entry.getValue());
+            }
+            holdDisplays.clear();
+        }
+        private void cancelHoldPlayback() {
+            holdPlayback.cancelAll();
+            activeHoldIntervalIds.clear();
+            clearHoldDisplays();
+        }
+        private void recycleHoldDisplay(HoldInterval interval, DisplayEntity.BlockDisplayEntity display) {
+            if (interval == null) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+            else recycle(interval.members().getFirst(), display);
+        }
         private void applyVisualState() {
+            holdPlayback.seek(currentPlaybackBeat);
+            activeHoldIntervalIds.clear();
+            for (HoldInterval interval : holdIntervals) {
+                if (currentPlaybackBeat < interval.startBeat() || currentPlaybackBeat >= interval.endBeat()) continue;
+                if (shouldHide(interval.members().getFirst())) holdPlayback.cancel(interval.id());
+                else activeHoldIntervalIds.add(interval.id());
+            }
+            nextHoldVisualIndex = 0;
+            while (nextHoldVisualIndex < holdIntervals.size()
+                    && holdIntervals.get(nextHoldVisualIndex).endBeat() <= currentPlaybackBeat) nextHoldVisualIndex++;
             for (var iterator = displays.entrySet().iterator(); iterator.hasNext();) {
                 var entry = iterator.next();
                 ChartManifest.Note note = notesById.get(entry.getKey());
                 if (note != null && shouldHide(note)) {
                     recycle(note, entry.getValue());
+                    iterator.remove();
+                }
+            }
+            for (var iterator = holdDisplays.entrySet().iterator(); iterator.hasNext();) {
+                var entry = iterator.next();
+                HoldInterval interval = holdIntervalsById.get(entry.getKey());
+                if (interval != null && shouldHide(interval.members().getFirst())) {
+                    recycle(interval.members().getFirst(), entry.getValue());
                     iterator.remove();
                 }
             }
@@ -3602,7 +3896,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             int end = Math.min(notes.size(), Math.max(nextNoteIndex + PLAYBACK_MAX_ACTIVE_DISPLAYS, start + PLAYBACK_MAX_ACTIVE_DISPLAYS));
             for (int index = start; index < end; index++) {
                 ChartManifest.Note note = notes.get(index);
-                if (restored >= PLAYBACK_MAX_PRELOADS_PER_TICK || shouldHide(note) || displays.containsKey(note.id)) continue;
+                if (restored >= PLAYBACK_MAX_PRELOADS_PER_TICK || shouldHide(note) || isGroupedHoldNote(note) || displays.containsKey(note.id)) continue;
                 double noteTime = noteTimes.getOrDefault(note.id, Double.POSITIVE_INFINITY);
                 if (!Double.isFinite(noteTime) || noteTime <= songTime) continue;
                 double relativeDistance = relativeDistance(note, songTime);
@@ -3677,6 +3971,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private void clearHiddenNotesForArenaSwitch() {
             clearHiddenNoteFilter();
             clearDisplayPools();
+            applyVisualState();
         }
         private void updateGlowTeam() {
             for (var entry : displays.entrySet()) {
@@ -4590,6 +4885,8 @@ private static void showSceneBoundary(MinecraftServer server) {
                 if (display == null) continue;
                 display.setBlockState(blockStateForType(note.type));
                 display.setPosition(note.x, note.y, note.z);
+                display.setCustomName(Text.literal("rhythmc_note_ref:" + task.chartId + ":" + note.id));
+                display.setCustomNameVisible(false);
                 display.setNoGravity(true);
                 display.setInvulnerable(true);
                 display.addCommandTag(noteTag(task.chartId, note.id));

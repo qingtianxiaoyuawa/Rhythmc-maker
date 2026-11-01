@@ -17,6 +17,7 @@ import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
+import net.fabricmc.fabric.api.event.player.UseEntityCallback;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.option.Perspective;
@@ -160,6 +161,48 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             selectedPlaybackBeat = currentBeat;
             sendCommand(client, "rhythmc_start_beat_set " + currentBeat);
             return ActionResult.FAIL;
+        });
+        UseEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
+            if (!world.isClient() || player != MinecraftClient.getInstance().player
+                    || !player.getStackInHand(hand).isOf(net.minecraft.item.Items.BREEZE_ROD)
+                    || !cn.frkovo.rhythmcmaker.ChartDimensionManager.isChartWorld(world.getRegistryKey())) return ActionResult.PASS;
+            ChartManifest chart = ClientChartAccess.resolveActiveChart();
+            if (chart == null || chart.notes == null) return ActionResult.FAIL;
+            String prefix = "rhythmc_note_ref:" + chart.id + ":";
+            Text customName = entity.getCustomName();
+            ChartManifest.Note note;
+            if (customName != null && customName.getString().startsWith(prefix)) {
+                String noteId = customName.getString().substring(prefix.length());
+                note = chart.notes.stream().filter(candidate -> candidate != null && noteId.equals(candidate.id))
+                        .findFirst().orElse(null);
+            } else if (entity instanceof net.minecraft.entity.decoration.DisplayEntity.BlockDisplayEntity display) {
+                note = chart.notes.stream().filter(candidate -> candidate != null
+                                && Math.abs(candidate.x - display.getX()) < 0.01
+                                && Math.abs(candidate.y - display.getY()) < 0.01
+                                && Math.abs(candidate.z - display.getZ()) < 0.01
+                                && matchesNoteType(candidate.type, display.getBlockState()))
+                        .findFirst().orElse(null);
+            } else {
+                return ActionResult.PASS;
+            }
+            if (note == null) return ActionResult.FAIL;
+            MinecraftClient.getInstance().setScreen(new NoteEditScreen(chart, note));
+            return ActionResult.SUCCESS;
+        });
+        UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
+            if (!world.isClient() || player != MinecraftClient.getInstance().player
+                    || !player.getStackInHand(hand).isOf(net.minecraft.item.Items.BREEZE_ROD)
+                    || !cn.frkovo.rhythmcmaker.ChartDimensionManager.isChartWorld(world.getRegistryKey())) return ActionResult.PASS;
+            ChartManifest chart = ClientChartAccess.resolveActiveChart();
+            if (chart == null || chart.notes == null) return ActionResult.PASS;
+            var position = hitResult.getBlockPos();
+            ChartManifest.Note note = chart.notes.stream().filter(candidate -> candidate != null
+                            && Math.floor(candidate.x) == position.getX() && Math.floor(candidate.y) == position.getY()
+                            && Math.floor(candidate.z) == position.getZ())
+                    .findFirst().orElse(null);
+            if (note == null) return ActionResult.PASS;
+            MinecraftClient.getInstance().setScreen(new NoteEditScreen(chart, note));
+            return ActionResult.SUCCESS;
         });
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             processEffectEditorSeek(client);
@@ -907,7 +950,15 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     }
     public static boolean isSceneOperationBusy() { return ClientSceneAccess.operationBusy(); }
     private static boolean isRhythmcScreen(net.minecraft.client.gui.screen.Screen screen) {
-        return screen instanceof RhythmcScreen || screen instanceof EffectTrackScreen;
+        return screen instanceof RhythmcScreen || screen instanceof EffectTrackScreen || screen instanceof NoteEditScreen;
+    }
+    private static boolean matchesNoteType(int noteType, net.minecraft.block.BlockState state) {
+        return switch (noteType) {
+            case 1 -> state.isOf(net.minecraft.block.Blocks.OBSERVER);
+            case 2 -> state.isOf(net.minecraft.block.Blocks.DIAMOND_BLOCK);
+            case 3 -> state.isOf(net.minecraft.block.Blocks.REDSTONE_BLOCK);
+            default -> state.isOf(net.minecraft.block.Blocks.TNT);
+        };
     }
     private static boolean isRhythmcMenuItem(Item item) {
         return item == RhythmcMaker.START_CHART_ITEM || item == RhythmcMaker.AWA_ITEM

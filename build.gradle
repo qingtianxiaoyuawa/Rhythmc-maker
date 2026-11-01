@@ -105,6 +105,22 @@ def updateModVersion = { String nextVersion ->
     propertiesFile.write(updated, "UTF-8")
 }
 
+tasks.register("holdPlaybackRegression", JavaExec) {
+    group = "verification"
+    description = "Runs deterministic Hold interval and playback-state regression checks."
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = "cn.frkovo.rhythmcmaker.chart.HoldPlaybackRegression"
+    dependsOn tasks.named("testClasses")
+}
+
+tasks.named("check") {
+    dependsOn tasks.named("holdPlaybackRegression")
+}
+
+tasks.named("test", Test) {
+    failOnNoDiscoveredTests = false
+}
+
 tasks.register("bumpPatchVersion") {
     group = "release"
     description = "Increments the c component of mod_version before deployment."
