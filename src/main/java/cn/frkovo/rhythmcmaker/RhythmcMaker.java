@@ -3754,6 +3754,10 @@ private static void showSceneBoundary(MinecraftServer server) {
                     } catch (RuntimeException ignored) {
                     }
                 }
+                if (requestedEffects.isEmpty()) {
+                    clearAllPotionEffects(player);
+                    return;
+                }
                 for (String id : PotionEffectClearPolicy.matchingActiveEffects(activeChartPotionEffects, requestedEffects, false, true)) {
                     clearPotionEffectValue(player, id);
                 }
@@ -3774,9 +3778,20 @@ private static void showSceneBoundary(MinecraftServer server) {
                 }
                 return;
             }
-            for (String id : PotionEffectClearPolicy.matchingActiveEffects(activeChartPotionEffects, Set.of(), true, !explicitList)) {
+            if (!explicitList) {
+                clearAllPotionEffects(player);
+                return;
+            }
+            for (String id : PotionEffectClearPolicy.matchingActiveEffects(activeChartPotionEffects, Set.of(), true, false)) {
                 clearPotionEffectValue(player, id);
             }
+        }
+        private void clearAllPotionEffects(ServerPlayerEntity player) {
+            for (net.minecraft.entity.effect.StatusEffectInstance activeEffect : new java.util.ArrayList<>(player.getStatusEffects())) {
+                player.removeStatusEffect(activeEffect.getEffectType());
+            }
+            activeChartPotionEffects.clear();
+            originalStatusEffectsById.clear();
         }
         private void clearPotionEffectValue(ServerPlayerEntity player, String type) {
             try {
@@ -3936,9 +3951,9 @@ private static void showSceneBoundary(MinecraftServer server) {
         private void applyTitle(ServerPlayerEntity player, JsonObject effect) {
             String title = effectString(effect, "title", effectString(effect, "text", ""));
             String subtitle = effectString(effect, "subtitle", "");
-            int fadeIn = Math.max(0, Math.min(200, effectInt(effect, "fadeIn", 10)));
-            int stay = Math.max(0, Math.min(600, effectInt(effect, "stay", 40)));
-            int fadeOut = Math.max(0, Math.min(200, effectInt(effect, "fadeOut", 10)));
+            int fadeIn = millisecondsToPotionTicks(Math.max(0, effectInt(effect, "fadeIn", 500)));
+            int stay = millisecondsToPotionTicks(Math.max(0, effectInt(effect, "stay", 2000)));
+            int fadeOut = millisecondsToPotionTicks(Math.max(0, effectInt(effect, "fadeOut", 500)));
             player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.TitleFadeS2CPacket(fadeIn, stay, fadeOut));
             if (!title.isBlank()) player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.TitleS2CPacket(EffectTextFormatter.getInstance().text(title, 0xFFFFFF)));
             if (!subtitle.isBlank()) player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.SubtitleS2CPacket(EffectTextFormatter.getInstance().text(subtitle, 0xFFFFFF)));
