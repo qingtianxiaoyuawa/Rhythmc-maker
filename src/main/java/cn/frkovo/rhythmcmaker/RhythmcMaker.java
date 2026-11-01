@@ -3428,7 +3428,6 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final java.util.List<String> effectTypes;
         private final Set<Integer> hiddenNoteTypes = new java.util.HashSet<>();
         private final Set<Integer> hiddenNoteTracks = new java.util.HashSet<>();
-        private boolean hideAllNotes;
         private final Map<HiddenNoteKey, java.util.ArrayDeque<DisplayEntity.BlockDisplayEntity>> displayPools = new java.util.HashMap<>();
         private final Map<Integer, Team> glowTeams = new java.util.HashMap<>();
         private Formatting observerGlowColor = Formatting.WHITE;
@@ -3621,7 +3620,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             if (restored > 0) updateGlowTeam();
         }
         private boolean shouldHide(ChartManifest.Note note) {
-            return hideAllNotes || hiddenNoteTypes.contains(note.type) || hiddenNoteTracks.contains(note.trackId);
+            return hiddenNoteTypes.contains(note.type) || hiddenNoteTracks.contains(note.trackId);
         }
         private void updateHiddenNotes(JsonObject effect) {
             if (effect == null) return;
@@ -3631,7 +3630,6 @@ private static void showSceneBoundary(MinecraftServer server) {
             com.google.gson.JsonElement tracks = effect.has("tracks") ? effect.get("tracks") : properties.get("tracks");
             hiddenNoteTypes.clear();
             hiddenNoteTracks.clear();
-            hideAllNotes = false;
             java.util.Set<Integer> selectedTypes = new java.util.HashSet<>();
             java.util.Set<Integer> selectedTracks = new java.util.HashSet<>();
             if (noteTypes != null && noteTypes.isJsonArray()) for (com.google.gson.JsonElement value : noteTypes.getAsJsonArray()) addHiddenNoteType(selectedTypes, value);
@@ -3640,17 +3638,12 @@ private static void showSceneBoundary(MinecraftServer server) {
             else if (tracks != null && tracks.isJsonPrimitive()) addHiddenTrack(selectedTracks, tracks);
             boolean legacyHiddenAction = hidden != null && hidden.isJsonPrimitive() && hidden.getAsJsonPrimitive().isBoolean();
             if (legacyHiddenAction && !hidden.getAsBoolean()) return;
-            if (selectedTypes.isEmpty() && selectedTracks.isEmpty()) {
-                hideAllNotes = true;
-                return;
-            }
             hiddenNoteTypes.addAll(selectedTypes);
             hiddenNoteTracks.addAll(selectedTracks);
         }
         private void clearHiddenNoteFilter() {
             hiddenNoteTypes.clear();
             hiddenNoteTracks.clear();
-            hideAllNotes = false;
         }
         private void addHiddenNoteType(java.util.Set<Integer> selectedTypes, com.google.gson.JsonElement value) {
             if (value == null || !value.isJsonPrimitive()) return;
