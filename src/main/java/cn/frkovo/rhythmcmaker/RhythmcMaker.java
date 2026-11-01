@@ -310,6 +310,7 @@ public final class RhythmcMaker implements ModInitializer {
         });
         UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
             if (!(world instanceof ServerWorld serverWorld) || !isEditorWorld(world) || !(player instanceof ServerPlayerEntity serverPlayer)) return ActionResult.PASS;
+            if (isNoteEditTool(serverPlayer.getStackInHand(hand))) return ActionResult.SUCCESS;
             if (isSceneOperationBusy(serverPlayer.getUuid())) return ActionResult.FAIL;
             if (rejectEditorTrackAdjustment(serverPlayer)) return ActionResult.FAIL;
             if (hasPlaybackSession(serverPlayer.getUuid())) return ActionResult.FAIL;
@@ -348,6 +349,7 @@ public final class RhythmcMaker implements ModInitializer {
             if (!(world instanceof ServerWorld) || !isEditorWorld(world) || !(player instanceof ServerPlayerEntity serverPlayer)) {
                 return ActionResult.PASS;
             }
+            if (isNoteEditTool(serverPlayer.getStackInHand(hand))) return ActionResult.SUCCESS;
             if (isSceneOperationBusy(serverPlayer.getUuid())) return ActionResult.FAIL;
             return rejectEditorTrackAdjustment(serverPlayer)
                     ? ActionResult.FAIL
@@ -598,7 +600,7 @@ public final class RhythmcMaker implements ModInitializer {
         player.getInventory().setStack(2, new ItemStack(Blocks.DIAMOND_BLOCK.asItem()));
         player.getInventory().setStack(3, new ItemStack(Blocks.TNT.asItem()));
         player.getInventory().setStack(4, menuStack(PLAY_ITEM));
-        player.getInventory().setStack(5, new ItemStack(Items.BREEZE_ROD));
+        player.getInventory().setStack(5, createNoteEditTool());
         player.getInventory().setStack(6, menuStack(CHART_SETTINGS_ITEM));
         player.getInventory().setStack(7, menuStack(MORE_SETTINGS_ITEM));
         player.getInventory().setStack(8, menuStack(QUICK_FUNCTIONS_ITEM));
@@ -1136,7 +1138,7 @@ public final class RhythmcMaker implements ModInitializer {
                                      double x, double y, double beat) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayerEntity player = source.getPlayerOrThrow();
         if (!(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world)
-                || !player.getMainHandStack().isOf(Items.BREEZE_ROD)) return 0;
+                || !isNoteEditTool(player.getMainHandStack())) return 0;
         ChartManifest chart = loadActiveChart(player, source.getServer());
         if (chart == null || chart.notes == null) return 0;
         ChartManifest.Note note = chart.notes.stream().filter(candidate -> candidate != null && noteId.equals(candidate.id)).findFirst().orElse(null);
@@ -1173,7 +1175,7 @@ public final class RhythmcMaker implements ModInitializer {
             throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayerEntity player = source.getPlayerOrThrow();
         if (!(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world)
-                || !player.getMainHandStack().isOf(Items.BREEZE_ROD)) return 0;
+                || !isNoteEditTool(player.getMainHandStack())) return 0;
         ChartManifest chart = loadActiveChart(player, source.getServer());
         if (chart == null || chart.notes == null) return 0;
         ChartManifest.Note selected = chart.notes.stream().filter(note -> note != null && noteId.equals(note.id)).findFirst().orElse(null);
@@ -4658,6 +4660,16 @@ private static void showSceneBoundary(MinecraftServer server) {
         return Math.max(0.0, end) + 0.1;
     }
     private static double effectiveNoteTime(ChartManifest.Note note, ChartManifest chart) { return note.time + chart.offsetMillis / 1000.0; }
+    public static ItemStack createNoteEditTool() {
+        ItemStack stack = new ItemStack(Items.BREEZE_ROD);
+        stack.set(DataComponentTypes.CUSTOM_NAME, Text.literal("修改音符"));
+        return stack;
+    }
+    public static boolean isNoteEditTool(ItemStack stack) {
+        if (!stack.isOf(Items.BREEZE_ROD)) return false;
+        Text customName = stack.get(DataComponentTypes.CUSTOM_NAME);
+        return customName != null && customName.getString().equals("修改音符");
+    }
     private static ItemStack menuStack(Item item) {
         return new ItemStack(item);
     }

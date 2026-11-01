@@ -113,7 +113,12 @@ public final class RhythmcMakerClient implements ClientModInitializer {
                 (drawContext, tickCounter) -> renderOperationProgress(drawContext));
         UseItemCallback.EVENT.register((player, world, hand) -> {
             if (!world.isClient()) return ActionResult.PASS;
-            Item item = player.getStackInHand(hand).getItem();
+            var stack = player.getStackInHand(hand);
+            if (RhythmcMaker.isNoteEditTool(stack)) {
+                return cn.frkovo.rhythmcmaker.ChartDimensionManager.isChartWorld(world.getRegistryKey())
+                        ? ActionResult.SUCCESS : ActionResult.PASS;
+            }
+            Item item = stack.getItem();
             if (ClientSceneAccess.operationBusy() && isRhythmcMenuItem(item)) return ActionResult.SUCCESS;
             MinecraftClient client = MinecraftClient.getInstance();
             if (item == RhythmcMaker.START_CHART_ITEM) client.setScreen(new ChartListScreen());
@@ -164,7 +169,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         });
         UseEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
             if (!world.isClient() || player != MinecraftClient.getInstance().player
-                    || !player.getStackInHand(hand).isOf(net.minecraft.item.Items.BREEZE_ROD)
+                    || !RhythmcMaker.isNoteEditTool(player.getStackInHand(hand))
                     || !cn.frkovo.rhythmcmaker.ChartDimensionManager.isChartWorld(world.getRegistryKey())) return ActionResult.PASS;
             ChartManifest chart = ClientChartAccess.resolveActiveChart();
             if (chart == null || chart.notes == null) return ActionResult.FAIL;
@@ -191,7 +196,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         });
         UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
             if (!world.isClient() || player != MinecraftClient.getInstance().player
-                    || !player.getStackInHand(hand).isOf(net.minecraft.item.Items.BREEZE_ROD)
+                    || !RhythmcMaker.isNoteEditTool(player.getStackInHand(hand))
                     || !cn.frkovo.rhythmcmaker.ChartDimensionManager.isChartWorld(world.getRegistryKey())) return ActionResult.PASS;
             ChartManifest chart = ClientChartAccess.resolveActiveChart();
             if (chart == null || chart.notes == null) return ActionResult.PASS;
