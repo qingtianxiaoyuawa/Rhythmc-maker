@@ -85,6 +85,7 @@ public final class EffectEditorImGuiView {
     private final List<EffectEditorLayout.KeyframePosition> keyframePositions = new ArrayList<>();
     private List<TimelineRow> cachedTimelineRows;
     private double cachedTimelineMaxBeat;
+    private long cachedTimelineRevision = Long.MIN_VALUE;
     private String contextTrackId;
     private double contextBeat;
     private String pendingDeleteTrack;
@@ -447,31 +448,41 @@ public final class EffectEditorImGuiView {
             ImGui.end();
             return;
         }
-        ImGui.textColored(0xFF66CCFF, "RhythMC Maker");
-        ImGui.sameLine();
-        ImGui.text("特效编辑器");
-        String chartInformation = chart == null ? "未加载谱面" : displayText(chartTitle()) + "  ·  BPM " + format(chart.bpm);
-        String saveStatus = dirty ? "● 未保存" : "已保存";
-        float controlsWidth = toolbarTextWidth("撤销") + toolbarTextWidth("恢复")
-                + toolbarTextWidth("保存") + toolbarTextWidth("关闭")
-                + ImGui.getStyle().getFramePaddingX() * 8.0f + ImGui.getStyle().getItemSpacingX() * 3.0f;
-        float controlsStart = width - ImGui.getStyle().getWindowPaddingX() - controlsWidth;
-        float informationStart = ImGui.getCursorPosX() + 12.0f;
-        ImGui.setCursorPosX(informationStart);
-        float informationRight = Math.max(informationStart,
-                Math.min(controlsStart - 8.0f, width - ImGui.getStyle().getWindowPaddingX() - 8.0f));
-        String information = chartInformation + "  ·  " + saveStatus;
-        float informationWidth = toolbarTextWidth(information);
-        float informationX = Math.max(informationStart, informationRight - informationWidth);
-        ImGui.setCursorPosX(informationStart);
-        ImGui.pushClipRect(ImGui.getWindowPosX() + informationStart, ImGui.getCursorScreenPosY(),
-                ImGui.getWindowPosX() + informationRight, ImGui.getCursorScreenPosY() + ImGui.getTextLineHeightWithSpacing(), true);
-        ImGui.setCursorPosX(informationX);
-        ImGui.text(information);
-        ImGui.popClipRect();
-        ImGui.setCursorPosX(controlsStart);
+        float toolbarWidth = Math.max(1.0f, ImGui.getWindowSizeX());
+        float toolbarHeight = Math.max(1.0f, ImGui.getWindowSizeY());
+        float windowPaddingX = ImGui.getStyle().getWindowPaddingX();
+        float windowPaddingY = ImGui.getStyle().getWindowPaddingY();
+        float itemSpacingX = ImGui.getStyle().getItemSpacingX();
+        float buttonHeight = ImGui.getFrameHeight();
+        float toolbarButtonY = Math.max(windowPaddingY, (toolbarHeight - buttonHeight) * 0.5f);
+        float toolbarTextY = Math.max(windowPaddingY, (toolbarHeight - ImGui.getTextLineHeight()) * 0.5f);
+        String makerTitle = "RhythMC Maker";
+        String editorTitle = "特效编辑器";
+        ImGui.setCursorPos(windowPaddingX, toolbarTextY);
+        ImGui.textColored(0xFF66CCFF, makerTitle);
+        ImGui.sameLine(0.0f, itemSpacingX);
+        ImGui.text(editorTitle);
+
         boolean canUndo = !undoHistory.isEmpty();
         boolean canRedo = !redoHistory.isEmpty();
+        float controlsWidth = toolbarButtonWidth("撤销") + toolbarButtonWidth("恢复")
+                + toolbarButtonWidth("保存") + toolbarButtonWidth("关闭") + itemSpacingX * 3.0f;
+        float controlsStart = Math.max(windowPaddingX, toolbarWidth - windowPaddingX - controlsWidth);
+        float informationStart = windowPaddingX + toolbarTextWidth(makerTitle) + itemSpacingX
+                + toolbarTextWidth(editorTitle) + itemSpacingX;
+        float informationRight = Math.max(informationStart, controlsStart - itemSpacingX);
+        float informationAvailableWidth = Math.max(0.0f, informationRight - informationStart);
+        String saveStatus = dirty ? "● 未保存" : "已保存";
+        String informationSuffix = (chart == null ? "" : "  ·  BPM " + format(chart.bpm)) + "  ·  " + saveStatus;
+        String chartTitle = chart == null ? "未加载谱面" : displayText(chartTitle());
+        String visibleChartTitle = truncateToolbarText(chartTitle,
+                Math.max(0.0f, informationAvailableWidth - toolbarTextWidth(informationSuffix)));
+        String information = visibleChartTitle + informationSuffix;
+        float informationX = Math.max(informationStart, informationRight - toolbarTextWidth(information));
+        ImGui.setCursorPos(informationX, toolbarTextY);
+        ImGui.text(information);
+
+        ImGui.setCursorPos(controlsStart, toolbarButtonY);
         ImGui.beginDisabled(!canUndo);
         if (ImGui.button("撤销##effect-undo")) undo();
         ImGui.endDisabled();
@@ -489,6 +500,22 @@ public final class EffectEditorImGuiView {
     private float toolbarTextWidth(String value) {
         ImGui.calcTextSize(toolbarTextSize, value);
         return toolbarTextSize.x;
+    }
+
+    private float toolbarButtonWidth(String value) {
+        return toolbarTextWidth(value) + ImGui.getStyle().getFramePaddingX() * 2.0f;
+    }
+
+    private String truncateToolbarText(String value, float availableWidth) {
+        if (availableWidth <= 0.0f) return "";
+        if (toolbarTextWidth(value) <= availableWidth) return value;
+        String ellipsis = "...";
+        if (toolbarTextWidth(ellipsis) > availableWidth) return "";
+        int end = value.length();
+        while (end > 0 && toolbarTextWidth(value.substring(0, end) + ellipsis) > availableWidth) {
+            end = value.offsetByCodePoints(end, -1);
+        }
+        return value.substring(0, end) + ellipsis;
     }
 
     private void drawEmptyState(float width, float height) {
@@ -1313,7 +1340,7 @@ public final class EffectEditorImGuiView {
     }
 
     private List<TimelineRow> buildTimelineRows() {
-        if (cachedTimelineRows != null) return cachedTimelineRows;
+        if (cachedTimelineRows != null && cachedTimelineRevision == layoutModel.revision()) return cachedTimelineRows;
         List<TimelineRow> rows = new ArrayList<>();
         cachedTimelineMaxBeat = Math.max(1.0, chart == null ? 1.0 : chart.totalBeats);
         List<EffectEditorLayout.Track> orderedTracks = new ArrayList<>(layoutModel.tracks());
@@ -1346,6 +1373,7 @@ public final class EffectEditorImGuiView {
         }
         if (timelineDragSnapshot != null) cachedTimelineMaxBeat = timelineDragMaximumBeat;
         cachedTimelineRows = List.copyOf(rows);
+        cachedTimelineRevision = layoutModel.revision();
         return cachedTimelineRows;
     }
 

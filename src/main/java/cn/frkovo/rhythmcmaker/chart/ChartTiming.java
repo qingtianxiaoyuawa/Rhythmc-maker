@@ -27,7 +27,27 @@ public final class ChartTiming {
     }
 
     public static Prepared prepare(ChartManifest chart) {
-        return prepare(chart.bpms, chart.bpm);
+        long signature = signature(chart);
+        if (chart.timingCacheInitialized && chart.timingCacheSignature == signature) return chart.timingCache;
+        chart.timingCache = prepare(chart.bpms, chart.bpm);
+        chart.timingCacheSignature = signature;
+        chart.timingCacheInitialized = true;
+        return chart.timingCache;
+    }
+
+    private static long signature(ChartManifest chart) {
+        long result = 17L;
+        result = 31L * result + Double.doubleToLongBits(chart.bpm);
+        List<ChartManifest.BpmEvent> events = chart.bpms;
+        result = 31L * result + (events == null ? 0 : events.size());
+        if (events != null) for (ChartManifest.BpmEvent event : events) {
+            if (event == null) result = 31L * result;
+            else {
+                result = 31L * result + Double.doubleToLongBits(event.beat);
+                result = 31L * result + Double.doubleToLongBits(event.bpm);
+            }
+        }
+        return result;
     }
 
     public static Prepared prepare(List<ChartManifest.BpmEvent> events, double fallbackBpm) {

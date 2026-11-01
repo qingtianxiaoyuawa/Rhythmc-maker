@@ -19,6 +19,7 @@ public final class EffectTrackLayoutModel {
     private final Map<String, Integer> trackIndexesById = new HashMap<>();
     private final Map<String, NavigableMap<Double, BitSet>> occupiedTracksByTypeBeat = new HashMap<>();
     private final BitSet occupiedTracksScratch = new BitSet();
+    private long revision;
 
     public EffectTrackLayoutModel(EffectEditorLayout saved) {
         if (saved != null && saved.tracks != null) {
@@ -26,12 +27,18 @@ public final class EffectTrackLayoutModel {
         }
     }
 
+    public long revision() {
+        return revision;
+    }
+
     public List<EffectEditorLayout.Track> tracks() {
         return List.copyOf(tracks);
     }
 
     public EffectEditorLayout.Track addTrack(String type) {
-        return addIndexedTrack(type);
+        EffectEditorLayout.Track track = addIndexedTrack(type);
+        revision++;
+        return track;
     }
 
     public void addEvent(String type, double beat, int denominator, String preferredTrack) {
@@ -39,6 +46,7 @@ public final class EffectTrackLayoutModel {
         String target = availableTrack(type, beat, preferredTrack, -1);
         positions.add(new EffectEditorLayout.Position(target, beat, denominator));
         addBeat(target, beat);
+        revision++;
     }
 
     public EffectEditorLayout.Position position(int index) {
@@ -64,11 +72,13 @@ public final class EffectTrackLayoutModel {
         position.trackId = target;
         position.beat = beat;
         addBeat(target, beat);
+        revision++;
     }
 
     public void removeEvent(int index) {
         EffectEditorLayout.Position position = positions.remove(index);
         removeBeat(position.trackId, position.beat);
+        revision++;
     }
 
     public void previewMove(int index, String type, double beat, String trackId, int denominator) {
@@ -81,6 +91,7 @@ public final class EffectTrackLayoutModel {
         position.beat = beat;
         position.denominator = denominator;
         addBeat(trackId, beat);
+        revision++;
     }
 
     public void removeTrack(String id) {
@@ -93,6 +104,7 @@ public final class EffectTrackLayoutModel {
         tracksByType.get(removed.type).removeIf(track -> id.equals(track.id));
         beatsByTrack.remove(id);
         rebuildTrackIndexes(removed.type);
+        revision++;
     }
 
     public EffectEditorLayout snapshot() {
@@ -112,6 +124,7 @@ public final class EffectTrackLayoutModel {
         beatsByTrack.clear();
         trackIndexesById.clear();
         occupiedTracksByTypeBeat.clear();
+        revision++;
         if (saved == null) return;
         if (saved.tracks != null) for (EffectEditorLayout.Track track : saved.tracks) addSavedTrack(track);
         if (saved.positions != null) {

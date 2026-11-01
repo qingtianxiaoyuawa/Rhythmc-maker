@@ -1,6 +1,7 @@
 package cn.frkovo.rhythmcmaker;
 
 import cn.frkovo.rhythmcmaker.chart.ChartManifest;
+import com.google.gson.Gson;
 import cn.frkovo.rhythmcmaker.chart.ChartStorage;
 import cn.frkovo.rhythmcmaker.chart.ChartTiming;
 import cn.frkovo.rhythmcmaker.chart.EditorTrackLayout;
@@ -10,6 +11,9 @@ import cn.frkovo.rhythmcmaker.client.playback.PotionEffectClearPolicy;
 import cn.frkovo.rhythmcmaker.client.playback.PotionDurationAtSeek;
 import cn.frkovo.rhythmcmaker.client.playback.TextDisplayDurationAtSeek;
 import cn.frkovo.rhythmcmaker.client.playback.PlaybackTimelineClock;
+import cn.frkovo.rhythmcmaker.client.playback.PlaybackDemandProfile;
+import cn.frkovo.rhythmcmaker.client.playback.PlaybackDiagnostics;
+import cn.frkovo.rhythmcmaker.client.playback.DisplayPose;
 import cn.frkovo.rhythmcmaker.client.playback.PersistentEffectStateFold;
 import cn.frkovo.rhythmcmaker.client.playback.TextDisplayEventFold;
 import cn.frkovo.rhythmcmaker.common.effect.EffectPayload;
@@ -95,6 +99,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 public final class RhythmcMaker implements ModInitializer {
     public static final String MOD_ID = "rhythmc_maker";
@@ -154,6 +159,7 @@ public final class RhythmcMaker implements ModInitializer {
     private static final Map<RegistryKey<World>, EditorNoteDisplaySweepTask> EDITOR_NOTE_DISPLAY_SWEEP_TASKS = new ConcurrentHashMap<>();
     private static final Map<RegistryKey<World>, ChartManifest> CHART_CACHE_BY_WORLD = new ConcurrentHashMap<>();
     private static final Map<String, CachedChartState> CHART_CACHE_BY_ID = new ConcurrentHashMap<>();
+    private static final Gson CHART_SNAPSHOT_GSON = new Gson();
     private static final ExecutorService CHART_PERSISTENCE_EXECUTOR = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "rhythmc-maker-chart-persistence");
         thread.setDaemon(true);
@@ -199,8 +205,9 @@ public final class RhythmcMaker implements ModInitializer {
 
     private static final int PLAYBACK_START_DELAY_TICKS = 0;
     private static final float EFFECT_PREVIEW_DISPLAY_VIEW_RANGE = 128.0f;
-    private static final int SCENE_IMPORT_BLOCKS_PER_TICK = 1024;
+    private static final int SCENE_IMPORT_BLOCKS_PER_TICK = 4096;
     private static final int SCENE_CAPTURE_BLOCKS_PER_TICK = 8192;
+    private static final int EDITOR_TRACK_REBUILD_SLOTS_PER_TICK = 32;
     private static final int SCENE_MIN_X = PLAYBACK_PLATFORM_X - SCENE_SIZE / 2;
     private static final int SCENE_MAX_X = SCENE_MIN_X + SCENE_SIZE - 1;
     private static final int SCENE_MIN_Y = PLAYBACK_PLATFORM_Y - SCENE_SIZE / 2;
@@ -232,6 +239,7 @@ public final class RhythmcMaker implements ModInitializer {
             LOGGER.info("Rhythmc maker dynamic chart dimensions are loaded on demand");
         });
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+            flushChartPersistence(server);
             for (UUID playerId : Set.copyOf(PLAYBACK_CHUNK_TICKETS_BY_PLAYER.keySet())) releasePlaybackChunkTickets(server, playerId);
         });
         registerOptionalWorldEditIntegration();
@@ -292,7 +300,10 @@ public final class RhythmcMaker implements ModInitializer {
             if (tick % SCENE_BORDER_INTERVAL_TICKS == 0) showSceneBoundary(server);
             if (tick - lastAutosaveTick < ticksForSeconds(config.autosaveIntervalSeconds)) return;
             lastAutosaveTick = server.getTicks();
-            for (CachedChartState state : CHART_CACHE_BY_ID.values()) if (state.dirty) queueChartSave(server, state);
+            for (CachedChartState state : CHART_CACHE_BY_ID.values()) {
+                synchronizeChartNoteDisplays(server, state);
+                if (state.dirty) queueChartSave(server, state);
+            }
         });
         UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
             if (!(world instanceof ServerWorld serverWorld) || !isEditorWorld(world) || !(player instanceof ServerPlayerEntity serverPlayer)) return ActionResult.PASS;
@@ -610,7 +621,7 @@ public final class RhythmcMaker implements ModInitializer {
         }
         ChartManifest chart;
         try {
-            chart = ChartStorage.find(source.getServer(), chartId);
+            chart = cachedChart(source.getServer(), chartId);
             if (chart == null) { player.sendMessage(Text.literal("找不到谱面：" + chartId), false); return 0; }
             cacheChart(source.getServer(), chart);
             if (IMPORTING_CHARTS.contains(chart.id)) { player.sendMessage(Text.literal("该谱面的场景仍在导入，请稍后重试"), true); return 0; }
@@ -1068,6 +1079,16 @@ public final class RhythmcMaker implements ModInitializer {
         current.effectEditorLayout = layout;
         updateChart(server, current);
     }
+    public static void invalidateChart(String chartId) {
+        if (chartId == null || chartId.isBlank()) return;
+        CHART_CACHE_BY_ID.remove(chartId);
+        CHART_CACHE_BY_WORLD.entrySet().removeIf(entry -> entry.getValue() != null && chartId.equals(entry.getValue().id));
+    }
+
+    public static boolean isChartImporting(String chartId) {
+        return chartId != null && IMPORTING_CHARTS.contains(chartId);
+    }
+
     public static boolean isEditorTrackAdjustmentPending(UUID playerId) {
         return EDITOR_TRACK_ADJUSTMENTS.contains(playerId);
     }
@@ -1111,41 +1132,154 @@ public final class RhythmcMaker implements ModInitializer {
             CHART_CACHE_BY_ID.clear();
             CHART_CACHE_BY_WORLD.clear();
         }
-        return CHART_CACHE_BY_ID.computeIfAbsent(chart.id, ignored -> new CachedChartState(chart));
+        CachedChartState state = CHART_CACHE_BY_ID.computeIfAbsent(chart.id, ignored -> new CachedChartState(chart));
+        synchronized (state) {
+            if (!hasChartContent(state.chart) && hasChartContent(chart)) state.chart = chart;
+        }
+        return state;
+    }
+
+    private static boolean hasChartContent(ChartManifest chart) {
+        return chart != null && ((chart.tracks != null && !chart.tracks.isEmpty())
+                || (chart.notes != null && !chart.notes.isEmpty())
+                || (chart.effects != null && !chart.effects.isEmpty()));
     }
 
     private static ChartManifest cachedChart(MinecraftServer server, String chartId) throws IOException {
         if (chartId == null || chartId.isBlank()) return null;
         CachedChartState cached = CHART_CACHE_BY_ID.get(chartId);
-        if (cached != null) return cached.chart;
+        if (cached != null && hasChartContent(cached.chart)) return cached.chart;
         ChartManifest chart = ChartStorage.find(server, chartId);
-        return chart == null ? null : cacheChart(server, chart).chart;
+        if (chart == null) return cached == null ? null : cached.chart;
+        CachedChartState state = cacheChart(server, chart);
+        synchronized (state) {
+            if (!state.dirty && hasChartContent(chart)) state.chart = chart;
+            return state.chart;
+        }
     }
 
     private static boolean queueChartSave(MinecraftServer server, CachedChartState state) {
         long revision;
+        ChartManifest snapshot;
         synchronized (state) {
             if (!state.dirty || state.saving) return false;
             state.saving = true;
             revision = state.revision;
+            snapshot = copyChart(state.chart);
         }
         CHART_PERSISTENCE_EXECUTOR.submit(() -> {
             try {
-                ChartStorage.update(server, state.chart);
-                server.execute(() -> {
-                    synchronized (state) {
-                        if (state.revision == revision) state.dirty = false;
-                        state.saving = false;
-                    }
-                });
+                ChartStorage.update(server, snapshot);
+                boolean savedCurrentRevision;
+                synchronized (state) {
+                    savedCurrentRevision = state.revision == revision;
+                    if (savedCurrentRevision) state.dirty = false;
+                    state.saving = false;
+                }
+                if (savedCurrentRevision) server.execute(() -> notifyAutoSaveSuccess(server, state.chart.id));
             } catch (IOException exception) {
-                server.execute(() -> {
-                    synchronized (state) { state.saving = false; }
-                    LOGGER.warn("Failed to persist chart {}", state.chart.id, exception);
-                });
+                synchronized (state) { state.saving = false; }
+                server.execute(() -> LOGGER.warn("Failed to persist chart {}", state.chart.id, exception));
             }
         });
         return true;
+    }
+
+    private static ChartManifest copyChart(ChartManifest chart) {
+        return CHART_SNAPSHOT_GSON.fromJson(CHART_SNAPSHOT_GSON.toJson(chart), ChartManifest.class);
+    }
+
+    private static void flushChartPersistence(MinecraftServer server) {
+        for (CachedChartState state : CHART_CACHE_BY_ID.values()) {
+            synchronizeChartNoteDisplays(server, state);
+            if (state.dirty) queueChartSave(server, state);
+        }
+        try {
+            CHART_PERSISTENCE_EXECUTOR.submit(() -> { }).get(30L, TimeUnit.SECONDS);
+        } catch (Exception exception) {
+            LOGGER.error("Timed out while flushing chart persistence", exception);
+        }
+        for (CachedChartState state : CHART_CACHE_BY_ID.values()) {
+            ChartManifest snapshot;
+            long revision;
+            synchronized (state) {
+                if (!state.dirty || state.saving) continue;
+                state.saving = true;
+                revision = state.revision;
+                snapshot = copyChart(state.chart);
+            }
+            try {
+                ChartStorage.update(server, snapshot);
+                synchronized (state) {
+                    if (state.revision == revision) state.dirty = false;
+                    state.saving = false;
+                }
+            } catch (IOException exception) {
+                synchronized (state) { state.saving = false; }
+                LOGGER.error("Failed to flush chart {}", snapshot.id, exception);
+            }
+        }
+    }
+
+    private static void synchronizeChartNoteDisplays(MinecraftServer server, CachedChartState state) {
+        ChartManifest chart;
+        synchronized (state) { chart = state.chart; }
+        if (chart == null || chart.id == null || chart.notes == null || chart.notes.isEmpty()) return;
+        java.util.Map<String, ChartManifest.Note> notesById = new java.util.HashMap<>();
+        for (ChartManifest.Note note : chart.notes) if (note != null && note.id != null && !note.id.isBlank()) notesById.put(note.id, note);
+        boolean changed = false;
+        String prefix = "rhythmc_note:" + chart.id + ":";
+        for (ServerWorld world : server.getWorlds()) {
+            if (!isEditorWorld(world)) continue;
+            ChartManifest worldChart = CHART_CACHE_BY_WORLD.get(world.getRegistryKey());
+            if (worldChart == null) worldChart = chartForWorld(world);
+            if (worldChart == null || !chart.id.equals(worldChart.id)) continue;
+            for (DisplayEntity.BlockDisplayEntity display : world.getEntitiesByType(EntityType.BLOCK_DISPLAY,
+                    entity -> entity.getCommandTags().stream().anyMatch(tag -> tag.startsWith(prefix)))) {
+                String noteId = display.getCommandTags().stream().filter(tag -> tag.startsWith(prefix)).findFirst()
+                        .map(tag -> tag.substring(prefix.length())).orElse("");
+                ChartManifest.Note note = notesById.get(noteId);
+                if (note == null) continue;
+                double x = display.getX();
+                double y = display.getY();
+                double z = display.getZ();
+                int type = noteTypeForBlockState(display.getBlockState());
+                if (note.x != x || note.y != y || note.z != z || note.type != type) {
+                    note.x = x;
+                    note.y = y;
+                    note.z = z;
+                    note.type = type;
+                    changed = true;
+                }
+            }
+            for (ChartManifest.Note note : chart.notes) {
+                if (note == null || hasFraction(note.x) || hasFraction(note.y) || hasFraction(note.z)) continue;
+                int type = noteTypeForBlockState(world.getBlockState(BlockPos.ofFloored(note.x, note.y, note.z)));
+                if (type >= 0 && note.type != type) {
+                    note.type = type;
+                    changed = true;
+                }
+            }
+        }
+        if (changed) synchronized (state) {
+            state.revision++;
+            state.dirty = true;
+        }
+    }
+
+    private static int noteTypeForBlockState(BlockState state) {
+        if (state == null) return -1;
+        if (state.isOf(Blocks.OBSERVER)) return 1;
+        if (state.isOf(Blocks.DIAMOND_BLOCK)) return 2;
+        if (state.isOf(Blocks.REDSTONE_BLOCK)) return 3;
+        if (state.isOf(Blocks.TNT)) return 0;
+        return -1;
+    }
+    private static void notifyAutoSaveSuccess(MinecraftServer server, String chartId) {
+        Text message = Text.literal("保存成功！").styled(style -> style.withColor(0xB7E66A));
+        for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+            if (chartId.equals(ACTIVE_CHARTS.get(player.getUuid()))) player.sendMessage(message, true);
+        }
     }
 
     private static final class CachedChartState {
@@ -1346,6 +1480,7 @@ public final class RhythmcMaker implements ModInitializer {
         int index = scenes.stream().mapToInt(scene -> scene.index).max().orElse(0) + 1;
         SceneEditStorage.Scene scene = new SceneEditStorage.Scene(index);
         scene.displayName = nextEffectArenaName(scenes);
+        scene.name = stableSceneName(chart == null ? chartId : chart.title, scene.displayName);
         if (iconId != null && iconId.matches("[a-z0-9_.-]+:[a-z0-9_./-]+")) scene.icon = iconId;
         scenes.add(scene);
         SceneEditStorage.save(server, chartId, scenes);
@@ -1362,6 +1497,13 @@ public final class RhythmcMaker implements ModInitializer {
         while (names.contains("effect_arena_" + suffix)) suffix++;
         return "effect_arena_" + suffix;
     }
+    private static String stableSceneName(String songTitle, String displayName) {
+        return sceneNamePart(songTitle) + "-" + sceneNamePart(displayName);
+    }
+    private static String sceneNamePart(String value) {
+        String normalized = value == null ? "" : value.trim().replaceAll("[^a-zA-Z0-9._-]+", "_");
+        return normalized.isBlank() ? "scene" : normalized;
+    }
     public static void saveSceneEditor(MinecraftServer server, String chartId, SceneEditStorage.Scene scene) throws IOException {
         java.util.List<SceneEditStorage.Scene> scenes = SceneEditStorage.list(server, chartId);
         for (int index = 0; index < scenes.size(); index++) if (scenes.get(index).index == scene.index) scenes.set(index, scene);
@@ -1373,7 +1515,6 @@ public final class RhythmcMaker implements ModInitializer {
         chart.sceneImportIncomplete = false;
         ChartDimensionManager.key(chart);
         java.util.List<SceneEditStorage.Scene> scenes = SceneEditStorage.list(server, chart.id);
-        SceneEditStorage.save(server, chart.id, scenes);
         java.util.List<SceneImportTask> pending = new java.util.ArrayList<>();
         int nextIndex = scenes.stream().mapToInt(scene -> scene.index).max().orElse(0) + 1;
         ImportedScene initial = completeScenes.stream().filter(ImportedScene::initial).findFirst().orElse(null);
@@ -1382,7 +1523,6 @@ public final class RhythmcMaker implements ModInitializer {
             initialScene.name = readSceneName(initial.info(), initialScene.name);
             initialScene.displayName = readSceneDisplayName(initial.info(), initialScene.displayName);
             chart.initialArena = initialScene.name;
-            SceneEditStorage.save(server, chart.id, scenes);
             SceneEditStorage.copySchematic(server, chart.id, initialScene.index, initial.schem());
             chart.sceneInitialized = true;
             pending.add(new SceneImportTask(chart, initial.schem(), PLAYBACK_PLATFORM_X, PLAYBACK_PLATFORM_Y, PLAYBACK_PLATFORM_Z));
@@ -1391,12 +1531,11 @@ public final class RhythmcMaker implements ModInitializer {
             if (importedScene.initial()) continue;
             int sceneIndex = nextIndex++;
             SceneEditStorage.Scene scene = new SceneEditStorage.Scene(sceneIndex);
-            scene.name = readSceneName(importedScene.info(), scene.name);
             scene.displayName = readSceneDisplayName(importedScene.info(), "场景" + sceneIndex);
+            scene.name = stableSceneName(chart.title, scene.displayName);
             scene.icon = readSceneIcon(importedScene.info());
             scene.saved = true;
             scenes.add(scene);
-            SceneEditStorage.save(server, chart.id, scenes);
             SceneEditStorage.copySchematic(server, chart.id, sceneIndex, importedScene.schem());
             pending.add(new SceneImportTask(chart, importedScene.schem(), scene.x, PLAYBACK_PLATFORM_Y, PLAYBACK_PLATFORM_Z));
         }
@@ -1419,9 +1558,11 @@ public final class RhythmcMaker implements ModInitializer {
         String importedInitialName = chart.initialArena;
         if (importedInitialName != null && !importedInitialName.isBlank()) {
             initialScene.displayName = importedInitialName;
+            initialScene.name = stableSceneName(chart.title, initialScene.displayName);
             chart.arenaBindings.put(importedInitialName, "scene-editor:" + initialScene.index);
         } else {
             initialScene.displayName = "initial_arena";
+            initialScene.name = stableSceneName(chart.title, initialScene.displayName);
         }
         chart.initialArena = initialScene.name;
         chart.arenaBindings.put(initialScene.name, "scene-editor:" + initialScene.index);
@@ -2524,8 +2665,8 @@ private static void showSceneBoundary(MinecraftServer server) {
     private static void ensurePlaybackChunksLoaded(ServerWorld world) {
         int centerChunkX = Math.floorDiv(PLAYBACK_PLATFORM_X, 16);
         int centerChunkZ = Math.floorDiv(PLAYBACK_PLATFORM_Z, 16);
-        for (int chunkX = centerChunkX - 4; chunkX <= centerChunkX + 4; chunkX++) {
-            for (int chunkZ = centerChunkZ - 4; chunkZ <= centerChunkZ + 4; chunkZ++) {
+        for (int chunkX = centerChunkX - 1; chunkX <= centerChunkX + 1; chunkX++) {
+            for (int chunkZ = centerChunkZ - 1; chunkZ <= centerChunkZ + 1; chunkZ++) {
                 ensurePlaybackChunkLoaded(world, new ChunkPos(chunkX, chunkZ));
             }
         }
@@ -2839,7 +2980,7 @@ private static void showSceneBoundary(MinecraftServer server) {
     }
 
     private static String effectType(JsonObject effect) {
-        return effectString(effect, "eventType", effectString(effect, "type", "PARTICLE")).trim().toUpperCase(java.util.Locale.ROOT);
+        return effectString(effect, "effectType", effectString(effect, "eventType", effectString(effect, "type", "PARTICLE"))).trim().toUpperCase(java.util.Locale.ROOT);
     }
     private static String effectString(JsonObject effect, String key, String fallback) {
         return EffectPayload.string(effect, key, fallback);
@@ -3068,7 +3209,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             session.clearDisplayPools();
             session.clearTextDisplays();
             session.displays.clear();
-            session.hiddenNoteKeys.clear();
+            session.clearHiddenNoteFilter();
             String tag = "rhythmc_preview:" + player.getUuid();
             for (DisplayEntity.BlockDisplayEntity display : session.world.getEntitiesByType(EntityType.BLOCK_DISPLAY,
                     entity -> entity.getCommandTags().contains(tag))) {
@@ -3223,7 +3364,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             }
             effectSession.clearDisplayPools();
             effectSession.displays.clear();
-            effectSession.hiddenNoteKeys.clear();
+            effectSession.clearHiddenNoteFilter();
             effectSession = null;
         }
     }
@@ -3272,6 +3413,8 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final float returnYaw, returnPitch;
         private final ChartManifest chart;
         private final ChartTiming.Prepared timing;
+        private final PlaybackDemandProfile demandProfile;
+        private final PlaybackDiagnostics diagnostics = new PlaybackDiagnostics();
         private boolean sceneChanged;
 
         private final Map<Integer, TrackPlayback.Prepared> trackProfiles = new java.util.HashMap<>();
@@ -3283,7 +3426,9 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final java.util.List<JsonObject> effects;
         private final java.util.List<Double> effectTimes;
         private final java.util.List<String> effectTypes;
-        private final Set<HiddenNoteKey> hiddenNoteKeys = new java.util.HashSet<>();
+        private final Set<Integer> hiddenNoteTypes = new java.util.HashSet<>();
+        private final Set<Integer> hiddenNoteTracks = new java.util.HashSet<>();
+        private boolean hideAllNotes;
         private final Map<HiddenNoteKey, java.util.ArrayDeque<DisplayEntity.BlockDisplayEntity>> displayPools = new java.util.HashMap<>();
         private final Map<Integer, Team> glowTeams = new java.util.HashMap<>();
         private Formatting observerGlowColor = Formatting.WHITE;
@@ -3299,7 +3444,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private int nextNoteIndex;
         private final Map<String, DisplayEntity.BlockDisplayEntity> displays = new java.util.HashMap<>();
         private final Map<String, DisplayEntity.TextDisplayEntity> textDisplays = new java.util.HashMap<>();
-        private final java.util.ArrayDeque<DisplayEntity.TextDisplayEntity> textDisplayPool = new java.util.ArrayDeque<>();
+        private final java.util.ArrayDeque<DisplayEntity.TextDisplayEntity> textDisplayPool;
         private final Map<String, double[]> textDisplayAnchors = new java.util.HashMap<>();
         private final Map<String, double[]> textDisplayLastPoses = new java.util.HashMap<>();
         private final Map<Integer, TrackPlayback.PoseBuffer> textDisplayPoseBuffers = new java.util.HashMap<>();
@@ -3310,6 +3455,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final Set<String> activeChartPotionEffects = new java.util.HashSet<>();
         private final java.util.Set<String> hitNotes = new java.util.HashSet<>();
         private int nextEffectIndex;
+        private int nextHiddenNoteIndex;
         private long lastDisplayUpdateTick = Long.MIN_VALUE;
         private long lastResyncNanos;
 
@@ -3329,6 +3475,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             double corrected = Math.max(0.0, songSeconds);
             startSeconds = corrected;
             startNanos = now;
+            long rebuildStarted = System.nanoTime();
             cancelPlaybackSceneImports(this);
             for (DisplayEntity.BlockDisplayEntity display : displays.values()) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
             displays.clear();
@@ -3340,6 +3487,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             }
             hitNotes.clear();
             nextNoteIndex = 0;
+            nextHiddenNoteIndex = 0;
             while (nextNoteIndex < notes.size() && noteTimes.getOrDefault(notes.get(nextNoteIndex).id, Double.POSITIVE_INFINITY) < corrected) {
                 hitNotes.add(notes.get(nextNoteIndex).id);
                 nextNoteIndex++;
@@ -3347,12 +3495,13 @@ private static void showSceneBoundary(MinecraftServer server) {
             rebuildPersistentEffectState(player, corrected);
             nextEffectIndex = 0;
             while (nextEffectIndex < effects.size() && effectSeconds(effects.get(nextEffectIndex)) <= corrected) nextEffectIndex++;
+            diagnostics.recordSeekRebuild(System.nanoTime() - rebuildStarted);
         }
         private void rebuildPersistentEffectState(ServerPlayerEntity player, double targetSeconds) {
             resetClientTime(player);
             clearTextDisplays();
             clearGlowTeam();
-            hiddenNoteKeys.clear();
+            clearHiddenNoteFilter();
             observerGlowColor = Formatting.WHITE;
             resetChartPotionEffects(player);
             for (int index = 0; index < effects.size(); index++) {
@@ -3386,6 +3535,8 @@ private static void showSceneBoundary(MinecraftServer server) {
             this.returnPitch = returnPitch;
             this.chart = chart;
             this.timing = ChartTiming.prepare(chart);
+            this.demandProfile = PlaybackDemandProfile.from(chart);
+            this.textDisplayPool = new java.util.ArrayDeque<>(demandProfile.recommendedTextPoolCapacity());
 
             if (chart.tracks != null) for (ChartManifest.Track track : chart.tracks) if (track != null) trackProfiles.put(track.id, TrackPlayback.prepare(track, chart.speedEvents));
             trackProfiles.computeIfAbsent(0, ignored -> TrackPlayback.prepare(null, chart.speedEvents));
@@ -3409,7 +3560,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 this.effectTypes.add(effectType(effect));
             }
             this.notes.removeIf(note -> note == null || note.id == null);
-            this.notes.sort(java.util.Comparator.comparingDouble(note -> note.time));
+            this.notes.sort(java.util.Comparator.comparingDouble(note -> effectiveNoteTime(note, chart)));
             for (ChartManifest.Note note : this.notes) {
                 notesById.put(note.id, note);
                 double noteTime = effectiveNoteTime(note, chart);
@@ -3427,10 +3578,12 @@ private static void showSceneBoundary(MinecraftServer server) {
                     chart.id, notes.size(), nextNoteIndex, firstDistance, displays.size());
         }
         private void playHiddenNoteJudgements(ServerPlayerEntity player, double songTime) {
-            for (ChartManifest.Note note : notes) {
-                if (!shouldHide(note)) continue;
+            while (nextHiddenNoteIndex < notes.size()) {
+                ChartManifest.Note note = notes.get(nextHiddenNoteIndex);
                 double noteTime = noteTimes.getOrDefault(note.id, Double.POSITIVE_INFINITY);
-                if (noteTime <= songTime && hitNotes.add(note.id)) playHitSound(this, player, note);
+                if (noteTime > songTime) break;
+                nextHiddenNoteIndex++;
+                if (shouldHide(note) && hitNotes.add(note.id)) playHitSound(this, player, note);
             }
         }
         private void applyVisualState() {
@@ -3446,7 +3599,10 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
         private void restoreVisibleNotes(ServerPlayerEntity player, double songTime) {
             int restored = 0;
-            for (ChartManifest.Note note : notes) {
+            int start = Math.max(0, nextNoteIndex - PLAYBACK_MAX_ACTIVE_DISPLAYS);
+            int end = Math.min(notes.size(), Math.max(nextNoteIndex + PLAYBACK_MAX_ACTIVE_DISPLAYS, start + PLAYBACK_MAX_ACTIVE_DISPLAYS));
+            for (int index = start; index < end; index++) {
+                ChartManifest.Note note = notes.get(index);
                 if (restored >= PLAYBACK_MAX_PRELOADS_PER_TICK || shouldHide(note) || displays.containsKey(note.id)) continue;
                 double noteTime = noteTimes.getOrDefault(note.id, Double.POSITIVE_INFINITY);
                 if (!Double.isFinite(noteTime) || noteTime <= songTime) continue;
@@ -3465,7 +3621,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             if (restored > 0) updateGlowTeam();
         }
         private boolean shouldHide(ChartManifest.Note note) {
-            return hiddenNoteKeys.contains(new HiddenNoteKey(note.trackId, note.type));
+            return hideAllNotes || hiddenNoteTypes.contains(note.type) || hiddenNoteTracks.contains(note.trackId);
         }
         private void updateHiddenNotes(JsonObject effect) {
             if (effect == null) return;
@@ -3473,27 +3629,51 @@ private static void showSceneBoundary(MinecraftServer server) {
             com.google.gson.JsonElement hidden = effect.has("hidden") ? effect.get("hidden") : properties.get("hidden");
             com.google.gson.JsonElement noteTypes = effect.has("noteTypes") ? effect.get("noteTypes") : properties.get("noteTypes");
             com.google.gson.JsonElement tracks = effect.has("tracks") ? effect.get("tracks") : properties.get("tracks");
+            hiddenNoteTypes.clear();
+            hiddenNoteTracks.clear();
+            hideAllNotes = false;
             java.util.Set<Integer> selectedTypes = new java.util.HashSet<>();
             java.util.Set<Integer> selectedTracks = new java.util.HashSet<>();
-            if (noteTypes != null && noteTypes.isJsonArray()) for (com.google.gson.JsonElement value : noteTypes.getAsJsonArray()) {
-                if (value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber()) selectedTypes.add(value.getAsInt());
-                else {
-                    String type = value.getAsString().toUpperCase(java.util.Locale.ROOT);
-                    selectedTypes.add(switch (type) { case "LOOK" -> 1; case "HOLD" -> 2; case "DODGE" -> 3; default -> 0; });
-                }
-            }
-            else if (noteTypes != null && noteTypes.isJsonPrimitive()) selectedTypes.add(noteTypes.getAsInt());
-            if (tracks != null && tracks.isJsonArray()) for (com.google.gson.JsonElement value : tracks.getAsJsonArray()) selectedTracks.add(value.getAsInt());
-            else if (tracks != null && tracks.isJsonPrimitive()) selectedTracks.add(tracks.getAsInt());
-            hiddenNoteKeys.clear();
+            if (noteTypes != null && noteTypes.isJsonArray()) for (com.google.gson.JsonElement value : noteTypes.getAsJsonArray()) addHiddenNoteType(selectedTypes, value);
+            else if (noteTypes != null && noteTypes.isJsonPrimitive()) addHiddenNoteType(selectedTypes, noteTypes);
+            if (tracks != null && tracks.isJsonArray()) for (com.google.gson.JsonElement value : tracks.getAsJsonArray()) addHiddenTrack(selectedTracks, value);
+            else if (tracks != null && tracks.isJsonPrimitive()) addHiddenTrack(selectedTracks, tracks);
             boolean legacyHiddenAction = hidden != null && hidden.isJsonPrimitive() && hidden.getAsJsonPrimitive().isBoolean();
             if (legacyHiddenAction && !hidden.getAsBoolean()) return;
-            if (selectedTypes.isEmpty() && selectedTracks.isEmpty()) return;
-            if (selectedTypes.isEmpty()) for (ChartManifest.Note note : notes) selectedTypes.add(note.type);
-            if (selectedTracks.isEmpty()) for (ChartManifest.Note note : notes) selectedTracks.add(note.trackId);
-            for (ChartManifest.Note note : notes) {
-                if (selectedTypes.contains(note.type) && selectedTracks.contains(note.trackId)) hiddenNoteKeys.add(hiddenNoteKey(note));
+            if (selectedTypes.isEmpty() && selectedTracks.isEmpty()) {
+                hideAllNotes = true;
+                return;
             }
+            hiddenNoteTypes.addAll(selectedTypes);
+            hiddenNoteTracks.addAll(selectedTracks);
+        }
+        private void clearHiddenNoteFilter() {
+            hiddenNoteTypes.clear();
+            hiddenNoteTracks.clear();
+            hideAllNotes = false;
+        }
+        private void addHiddenNoteType(java.util.Set<Integer> selectedTypes, com.google.gson.JsonElement value) {
+            if (value == null || !value.isJsonPrimitive()) return;
+            try {
+                if (value.getAsJsonPrimitive().isNumber()) {
+                    selectedTypes.add(value.getAsInt());
+                    return;
+                }
+                String type = value.getAsString().trim().toUpperCase(java.util.Locale.ROOT).replace('-', '_').replace(' ', '_');
+                selectedTypes.add(switch (type) {
+                    case "TAP", "NOTE", "CLICK", "NOTE_CLICK", "NOTE_TAP" -> 0;
+                    case "LOOK", "NOTE_LOOK" -> 1;
+                    case "HOLD", "NOTE_HOLD" -> 2;
+                    case "DODGE", "NOTE_DODGE", "NOTE_DO_NOT_CLICK", "DO_NOT_CLICK" -> 3;
+                    default -> -1;
+                });
+            } catch (RuntimeException ignored) {
+                selectedTypes.add(-1);
+            }
+        }
+        private void addHiddenTrack(java.util.Set<Integer> selectedTracks, com.google.gson.JsonElement value) {
+            if (value == null || !value.isJsonPrimitive()) return;
+            try { selectedTracks.add(value.getAsInt()); } catch (RuntimeException ignored) { }
         }
         private HiddenNoteKey hiddenNoteKey(ChartManifest.Note note) { return new HiddenNoteKey(note.trackId, note.type); }
         private void clearDisplayPools() {
@@ -3502,7 +3682,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             displayPools.clear();
         }
         private void clearHiddenNotesForArenaSwitch() {
-            hiddenNoteKeys.clear();
+            clearHiddenNoteFilter();
             clearDisplayPools();
         }
         private void updateGlowTeam() {
@@ -3932,8 +4112,11 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
         private DisplayEntity.TextDisplayEntity acquireTextDisplay(String id, double[] initialPosition) {
             DisplayEntity.TextDisplayEntity display = textDisplayPool.pollFirst();
-            if (display == null || display.isRemoved()) display = createTextDisplay(initialPosition);
-            else {
+            if (display == null || display.isRemoved()) {
+                diagnostics.recordPoolMiss();
+                display = createTextDisplay(initialPosition);
+            } else {
+                diagnostics.recordPoolHit();
                 display.setInterpolationDuration(0);
                 display.setInvisible(true);
                 display.setText(Text.empty());
@@ -3952,6 +4135,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             display.setBillboardMode(DisplayEntity.BillboardMode.FIXED);
             display.setInterpolationDuration(0);
             world.spawnEntity(display);
+            diagnostics.recordGeneratedEntity();
             return display;
         }
         private void releaseTextDisplay(String id, DisplayEntity.TextDisplayEntity display) {
@@ -3961,14 +4145,11 @@ private static void showSceneBoundary(MinecraftServer server) {
             display.setTextOpacity((byte) 0);
             display.setInterpolationDuration(0);
             textDisplayPool.addLast(display);
+            diagnostics.recordRecycledEntity();
         }
         private static boolean sameTextDisplayPose(double[] left, TrackPlayback.PoseBuffer right) {
-            return left != null && left.length == 9
-                    && Math.abs(left[0] - right.x()) <= 1.0E-5 && Math.abs(left[1] - right.y()) <= 1.0E-5
-                    && Math.abs(left[2] - right.z()) <= 1.0E-5 && Math.abs(left[3] - right.rotationX()) <= 1.0E-5
-                    && Math.abs(left[4] - right.rotationY()) <= 1.0E-5 && Math.abs(left[5] - right.rotationZ()) <= 1.0E-5
-                    && Math.abs(left[6] - right.scaleX()) <= 1.0E-5 && Math.abs(left[7] - right.scaleY()) <= 1.0E-5
-                    && Math.abs(left[8] - right.scaleZ()) <= 1.0E-5;
+            DisplayPose pose = DisplayPose.from(left);
+            return pose != null && pose.matches(right);
         }
 
         private static void setBufferedTextDisplayPose(DisplayEntity.TextDisplayEntity display, TrackPlayback.PoseBuffer pose) {
@@ -4641,7 +4822,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 iterator.remove();
                 continue;
             }
-            int budget = 8;
+            int budget = EDITOR_TRACK_REBUILD_SLOTS_PER_TICK;
             if (!task.foundationReady) {
                 restoreEditorTrackFoundation(world, task.x, task.newLength, task.laneCount);
                 task.foundationReady = true;

@@ -20,9 +20,13 @@ import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 final class ClientChartAccess {
     private static ChartManifest activeChart;
@@ -83,6 +87,9 @@ final class ClientChartAccess {
         ChartStorage.installImportedScenes(server, chart, scenes.stream().map(scene -> new ChartStorage.ImportedScene(scene.schem(), scene.info(), scene.initial())).toList());
     }
     static ChartManifest importRhythmc2(Path difficultyFile, Path stagedAudio, double bpm, String difficulty, double level) throws IOException { return ChartStorage.importRhythmc2(server(), difficultyFile, stagedAudio, bpm, difficulty, level); }
+    static ChartManifest importRhythmc2(MinecraftServer server, Path difficultyFile, Path stagedAudio, double bpm, String difficulty, double level) throws IOException { return ChartStorage.importRhythmc2(server, difficultyFile, stagedAudio, bpm, difficulty, level); }
+    static void installDefaultArenaScenes(MinecraftServer server, ChartManifest chart) throws IOException { cn.frkovo.rhythmcmaker.RhythmcMaker.installDefaultArenaScenes(server, chart, ChartStorage.arenaNames(chart)); }
+    static boolean isChartImporting(String chartId) { return cn.frkovo.rhythmcmaker.RhythmcMaker.isChartImporting(chartId); }
     static ChartManifest importRhythmc3(Path difficultyFile, Path manifestFile, Path stagedAudio, List<ImportedScene> scenes) throws IOException {
         return importRhythmc3(difficultyFile, manifestFile, null, stagedAudio, scenes);
     }
@@ -197,7 +204,7 @@ final class ClientChartAccess {
         if (result.error != null) {
             if (!result.request.equals(lastRefreshError)) {
                 lastRefreshError = result.request;
-                status("谱面刷新失败，已保留当前谱面：" + result.error);
+                status("谱面刷新失败，请查看日志（非特殊情况请忽略这条提示）");
             }
             return false;
         }
@@ -261,7 +268,8 @@ final class ClientChartAccess {
     static void saveConfig(cn.frkovo.rhythmcmaker.config.RhythmcMakerConfig config) throws IOException { cn.frkovo.rhythmcmaker.RhythmcMaker.updateConfig(server(), config); }
 
     static void update(ChartManifest chart) throws IOException {
-        cn.frkovo.rhythmcmaker.RhythmcMaker.updateChart(server(), chart);
+        MinecraftServer server = server();
+        runOnServer(server, () -> cn.frkovo.rhythmcmaker.RhythmcMaker.updateChart(server, chart));
     }
     static Path exportRhythmc3(ChartManifest chart) throws IOException {
         return Rhythmc3Exporter.export(server(), chart);
@@ -274,7 +282,42 @@ final class ClientChartAccess {
     }
 
     static void delete(ChartManifest chart) throws IOException {
-        ChartStorage.delete(server(), chart);
+        MinecraftServer server = server();
+        runOnServer(server, () -> {
+            ChartStorage.delete(server, chart);
+            cn.frkovo.rhythmcmaker.RhythmcMaker.invalidateChart(chart.id);
+        });
+    }
+
+    @FunctionalInterface
+    private interface ServerAction { void run() throws IOException; }
+
+    private static void runOnServer(MinecraftServer server, ServerAction action) throws IOException {
+        if (server.isOnThread()) {
+            action.run();
+            return;
+        }
+        CompletableFuture<Void> completion = new CompletableFuture<>();
+        server.execute(() -> {
+            try {
+                action.run();
+                completion.complete(null);
+            } catch (Throwable exception) {
+                completion.completeExceptionally(exception);
+            }
+        });
+        try {
+            completion.get(10, TimeUnit.SECONDS);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IOException("等待服务端操作被中断", exception);
+        } catch (TimeoutException exception) {
+            throw new IOException("服务端操作超时", exception);
+        } catch (ExecutionException exception) {
+            Throwable cause = exception.getCause();
+            if (cause instanceof IOException io) throw io;
+            throw new IOException("服务端操作失败", cause);
+        }
     }
 
     static int defaultDivisionsPerBeat() {
@@ -309,16 +352,19 @@ final class ClientChartAccess {
     }
 
     static void status(String message) {
+        if (containsPathInformation(message)) return;
         MinecraftClient client = MinecraftClient.getInstance();
-        if (client.player != null) client.player.sendMessage(Text.literal(statusText(message)), true);
+        if (client.player != null) client.player.sendMessage(Text.literal(message), true);
     }
 
     static void statusWarning(String message) {
+        if (containsPathInformation(message)) return;
         MinecraftClient client = MinecraftClient.getInstance();
-        if (client.player != null) client.player.sendMessage(Text.literal(statusText(message)).formatted(net.minecraft.util.Formatting.RED), true);
+        if (client.player != null) client.player.sendMessage(Text.literal(message).formatted(net.minecraft.util.Formatting.RED), true);
     }
 
-    private static String statusText(String message) {
-        return message.replaceAll("(?i)(?:[a-z]:[\\\\/]|\\\\\\\\|/(?:[a-z0-9_.-]+/)+)[^\\s]*", "[\\u8def\\u5f84\\u5df2\\u9690\\u85cf]");
+    private static boolean containsPathInformation(String message) {
+        if (message == null || message.isBlank()) return false;
+        return message.contains("\\") || message.contains("/") || message.contains("留当前谱面");
     }
 }
