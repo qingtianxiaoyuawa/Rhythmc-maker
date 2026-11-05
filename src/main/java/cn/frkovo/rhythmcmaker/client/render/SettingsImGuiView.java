@@ -81,7 +81,8 @@ public final class SettingsImGuiView {
     }
 
     private void sidebarButton(String label, int targetPage) {
-        if (ImGui.selectable(label, page == targetPage, 0, -1.0f, 38.0f)) page = targetPage;
+        float itemWidth = Math.max(1.0f, ImGui.getContentRegionAvailX());
+        if (ImGui.selectable(label, page == targetPage, 0, itemWidth, 38.0f)) page = targetPage;
     }
 
     private void renderPage() {
