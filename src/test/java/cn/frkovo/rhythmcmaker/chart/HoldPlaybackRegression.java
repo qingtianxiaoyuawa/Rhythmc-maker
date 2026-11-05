@@ -14,6 +14,15 @@ public final class HoldPlaybackRegression {
                 "fractional note coordinates require a display entity");
         require(!NoteEditRules.requiresDisplayEntity(1.0, 66.0, -4.0),
                 "integer note coordinates remain block represented");
+        ChartManifest.Note fractionalConnected = note("fractional-connected", 0.5, -1);
+        fractionalConnected.x = 0.5;
+        fractionalConnected.z = -1.0;
+        ChartManifest.Note fractionalNeighbor = note("fractional-neighbor", 1.5, -1);
+        fractionalNeighbor.x = 1.5;
+        fractionalNeighbor.z = -1.0;
+        List<ChartManifest.Note> fractionalCandidates = List.of(fractionalConnected, fractionalNeighbor);
+        require(HoldNoteGroupMerger.connectedNotes(fractionalCandidates, fractionalConnected).size() == 2,
+                "fractional display notes participate in hold connection resolution");
         ChartManifest.Note first = note("first", 1.0, 8);
         ChartManifest.Note middle = note("middle", 2.0, 8);
         ChartManifest.Note last = note("last", 4.0, 8);
@@ -63,6 +72,16 @@ public final class HoldPlaybackRegression {
         HoldInterval representativeInterval = HoldInterval.fromChart(chartWith(List.of(representative))).getFirst();
         require(representativeInterval.startBeat() == 1.0 && representativeInterval.endBeat() == 8.0,
                 "representative hold interval endpoints");
+        ChartManifest.Note representativeStart = note("representative-start", 1.0, 13);
+        representativeStart.holdStartBeat = 1.0;
+        representativeStart.holdEndBeat = 2.5;
+        representativeStart.holdStartX = 0.0;
+        representativeStart.holdEndX = 0.0;
+        representativeStart.holdStartZ = -4.0;
+        representativeStart.holdEndZ = -7.0;
+        HoldInterval singleRepresentative = HoldInterval.fromChart(chartWith(List.of(representativeStart))).getFirst();
+        require(singleRepresentative.durationBeats() == 1.5,
+                "representative hold duration is retained for playback reconstruction");
 
         HoldPlaybackStateMachine machine = new HoldPlaybackStateMachine();
         machine.reset(intervals, 0.0);

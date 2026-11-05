@@ -22,44 +22,50 @@ final class NoteTargetResolver {
 
     static NoteTarget resolve(MinecraftClient client, ChartManifest chart) {
         ChartManifest resolvedChart = ClientChartAccess.refreshActiveChartNow();
-        if (client.player == null || client.crosshairTarget == null || resolvedChart == null || resolvedChart.notes == null) return null;
+        if (client.player == null || resolvedChart == null || resolvedChart.notes == null) return null;
         chart = resolvedChart;
         HitResult target = client.crosshairTarget;
         if (target instanceof EntityHitResult entityHit) {
             ChartManifest.Note note = resolveTaggedEntity(entityHit.getEntity(), chart.notes, chart.id);
-            return note == null ? null : new NoteTarget(chart, note, entityHit.getEntity(), target);
+            if (note != null) return new NoteTarget(chart, note, entityHit.getEntity(), target);
         }
+        NoteTarget displayTarget = resolveDisplayTarget(client, chart, target);
+        if (displayTarget != null) return displayTarget;
         if (target instanceof BlockHitResult blockHit) {
             BlockPos hitPosition = blockHit.getBlockPos();
-            ChartManifest.Note note = chart.notes.stream().filter(candidate -> candidate != null && !cn.frkovo.rhythmcmaker.chart.NoteEditRules.requiresDisplayEntity(candidate.x, candidate.y, candidate.z)).filter(candidate -> BlockPos.ofFloored(candidate.x, candidate.y, candidate.z).equals(hitPosition)).findFirst().orElse(null);
+            ChartManifest.Note note = chart.notes.stream()
+                    .filter(candidate -> candidate != null
+                            && !cn.frkovo.rhythmcmaker.chart.NoteEditRules.requiresDisplayEntity(candidate.x, candidate.y, candidate.z))
+                    .filter(candidate -> BlockPos.ofFloored(candidate.x, candidate.y, candidate.z).equals(hitPosition))
+                    .findFirst().orElse(null);
             return note == null ? null : new NoteTarget(chart, note, null, target);
         }
-        if (target.getType() != HitResult.Type.MISS) return null;
+        return null;
+    }
+
+    private static NoteTarget resolveDisplayTarget(MinecraftClient client, ChartManifest chart, HitResult target) {
+        if (client.world == null || client.player == null) return null;
         Vec3d origin = client.gameRenderer.getCamera().getCameraPos();
         Vec3d direction = client.player.getRotationVec(1.0f);
         double maximumDistance = client.player.getBlockInteractionRange();
         double maximumDistanceSquared = 0.9 * 0.9;
         RayCandidate nearest = null;
-        java.util.Set<String> displayedNoteIds = new java.util.HashSet<>();
-        if (client.world != null) {
-            for (DisplayEntity.BlockDisplayEntity display : client.world.getEntitiesByType(EntityType.BLOCK_DISPLAY,
-                    new Box(origin, origin).expand(maximumDistance + 1.0),
-                    entity -> entity.getCommandTags().stream().anyMatch(tag -> tag.startsWith(NOTE_TAG_PREFIX + resolvedChart.id + ":")))) {
-                ChartManifest.Note note = resolveTaggedEntity(display, chart.notes, chart.id);
-                if (note == null) continue;
-                displayedNoteIds.add(note.id);
-                Vec3d displayCenter = display.getVisibilityBoundingBox().getCenter();
-                RayCandidate candidate = rayCandidate(note, display, displayCenter, origin, direction,
-                        maximumDistance, maximumDistanceSquared);
-                if (isCloser(candidate, nearest)) nearest = candidate;
-            }
+        for (DisplayEntity.BlockDisplayEntity display : client.world.getEntitiesByType(EntityType.BLOCK_DISPLAY,
+                new Box(origin, origin).expand(maximumDistance + 1.0),
+                entity -> hasNoteBinding(entity, chart.id))) {
+            ChartManifest.Note note = resolveTaggedEntity(display, chart.notes, chart.id);
+            if (note == null) continue;
+            RayCandidate candidate = rayCandidate(note, display, origin, direction, maximumDistance,
+                    maximumDistanceSquared);
+            if (isCloser(candidate, nearest)) nearest = candidate;
         }
         return nearest == null ? null : new NoteTarget(chart, nearest.note(), nearest.entity(), target);
     }
 
-    private static RayCandidate rayCandidate(ChartManifest.Note note, Entity entity, Vec3d center, Vec3d origin, Vec3d direction,
+    private static RayCandidate rayCandidate(ChartManifest.Note note, DisplayEntity.BlockDisplayEntity entity, Vec3d origin, Vec3d direction,
                                              double maximumDistance, double maximumDistanceSquared) {
-        Vec3d hit = entity.getBoundingBox().raycast(origin, origin.add(direction.multiply(maximumDistance))).orElse(null);
+        Vec3d hit = entity.getVisibilityBoundingBox()
+                .raycast(origin, origin.add(direction.multiply(maximumDistance))).orElse(null);
         if (hit == null) return null;
         double alongRay = hit.subtract(origin).dotProduct(direction);
         if (alongRay < 0.0 || alongRay > maximumDistance) return null;
@@ -80,12 +86,25 @@ final class NoteTargetResolver {
 
     private static ChartManifest.Note resolveTaggedEntity(Entity entity, List<ChartManifest.Note> notes, String chartId) {
         if (!(entity instanceof DisplayEntity.BlockDisplayEntity)) return null;
-        String prefix = NOTE_TAG_PREFIX + chartId + ":";
-        return entity.getCommandTags().stream()
-                .filter(tag -> tag.startsWith(prefix))
-                .map(tag -> tag.substring(prefix.length()))
-                .map(noteId -> notes.stream().filter(note -> note != null && noteId.equals(note.id)).findFirst().orElse(null))
+        String noteId = entity.getCommandTags().stream()
+                .filter(tag -> tag.startsWith(NOTE_TAG_PREFIX + chartId + ":"))
+                .map(tag -> tag.substring((NOTE_TAG_PREFIX + chartId + ":").length()))
                 .findFirst().orElse(null);
+        if (noteId == null && entity.getCustomName() != null) {
+            String reference = entity.getCustomName().getString();
+            String prefix = "rhythmc_note_ref:" + chartId + ":";
+            if (reference.startsWith(prefix)) noteId = reference.substring(prefix.length());
+        }
+        if (noteId == null || noteId.isBlank()) return null;
+        String resolvedNoteId = noteId;
+        return notes.stream().filter(note -> note != null && resolvedNoteId.equals(note.id)).findFirst().orElse(null);
+    }
+
+    private static boolean hasNoteBinding(Entity entity, String chartId) {
+        String prefix = NOTE_TAG_PREFIX + chartId + ":";
+        if (entity.getCommandTags().stream().anyMatch(tag -> tag.startsWith(prefix))) return true;
+        return entity.getCustomName() != null
+                && entity.getCustomName().getString().startsWith("rhythmc_note_ref:" + chartId + ":");
     }
 
 }

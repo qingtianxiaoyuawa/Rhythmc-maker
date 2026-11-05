@@ -4002,10 +4002,12 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
         private List<ChartManifest.Note> holdVisualNotes(HoldInterval interval) {
             ChartManifest.Note representative = interval.members().getFirst();
+            if (interval.members().size() > 1) return interval.members();
             if (representative.holdStartBeat == null || representative.holdEndBeat == null) return List.of(representative);
             ChartManifest.Note start = holdEndpointNote(representative, true);
             ChartManifest.Note end = holdEndpointNote(representative, false);
-            int count = Math.max(2, Math.min(64, (int) Math.ceil(interval.durationBeats()) + 1));
+            int divisions = Math.max(1, chart.divisionsPerBeat);
+            int count = Math.max(2, Math.min(256, (int) Math.ceil(interval.durationBeats() * divisions) + 1));
             List<ChartManifest.Note> visualNotes = new java.util.ArrayList<>(count);
             for (int index = 0; index < count; index++) {
                 double progress = index / (double) (count - 1);
@@ -5095,7 +5097,7 @@ display.setBlockState(blockStateForType(note.type));
                 } else {
                     display.setPosition(note.x, note.y, note.z);
                 }
-                display.setCustomName(Text.literal("rhythmc_note_ref:" + task.chartId + ":" + note.id));
+                display.setCustomName(Text.literal(noteReferenceName(task.chartId, note.id)));
                 display.setCustomNameVisible(false);
                 display.setNoGravity(true);
                 display.setInvulnerable(true);
@@ -5144,8 +5146,9 @@ display.setBlockState(blockStateForType(note.type));
         double startZ = editorHoldCoordinate(note.holdStartZ);
         double endZ = editorHoldCoordinate(note.holdEndZ);
         double centerX = (startX + endX) * 0.5;
-        double centerY = ((note.holdStartY == null ? note.y : note.holdStartY)
-                + (note.holdEndY == null ? note.y : note.holdEndY)) * 0.5;
+        double startY = editorHoldCoordinate(note.holdStartY == null ? note.y : note.holdStartY);
+        double endY = editorHoldCoordinate(note.holdEndY == null ? note.y : note.holdEndY);
+        double centerY = (startY + endY) * 0.5;
         double centerZ = (startZ + endZ) * 0.5;
         float scaleX = (float) Math.max(1.0, Math.abs(endX - startX) + 1.0);
         float scaleZ = (float) Math.max(1.0, Math.abs(endZ - startZ) + 1.0);
@@ -5160,8 +5163,8 @@ display.setBlockState(blockStateForType(note.type));
 
     private static void updateNoteWorldRepresentation(ServerWorld world, ChartManifest chart, ChartManifest.Note note,
                                                       double previousX, double previousY, double previousZ) {
-        boolean previousUsesDisplay = NoteEditRules.requiresDisplayEntity(previousX, previousY, previousZ);
-        boolean currentUsesDisplay = NoteEditRules.requiresDisplayEntity(note.x, note.y, note.z);
+        boolean previousUsesDisplay = NoteEditRules.requiresDisplayEntity(previousX, previousY, previousZ) || note.holdStartBeat != null;
+        boolean currentUsesDisplay = NoteEditRules.requiresDisplayEntity(note.x, note.y, note.z) || note.holdStartBeat != null;
         BlockPos previousPosition = BlockPos.ofFloored(previousX, previousY, previousZ);
         BlockPos currentPosition = BlockPos.ofFloored(note.x, note.y, note.z);
         DisplayEntity.BlockDisplayEntity display = world.getEntitiesByType(EntityType.BLOCK_DISPLAY,
@@ -5179,7 +5182,9 @@ display.setBlockState(blockStateForType(note.type));
                 display.setNoGravity(true);
                 display.setInvulnerable(true);
                 ensureEffectPreviewDisplayRange(display);
-display.setBlockState(blockStateForType(note.type));
+                display.setCustomName(Text.literal(noteReferenceName(chart.id, note.id)));
+                display.setCustomNameVisible(false);
+                display.setBlockState(blockStateForType(note.type));
                 if (note.holdStartX != null && note.holdEndX != null && note.holdStartZ != null && note.holdEndZ != null) {
                     applyEditorHoldTransformation(display, note);
                 } else {
@@ -5187,7 +5192,9 @@ display.setBlockState(blockStateForType(note.type));
                 }
                 world.spawnEntity(display);
             } else {
-display.setBlockState(blockStateForType(note.type));
+                display.setCustomName(Text.literal(noteReferenceName(chart.id, note.id)));
+                display.setCustomNameVisible(false);
+                display.setBlockState(blockStateForType(note.type));
                 if (note.holdStartX != null && note.holdEndX != null && note.holdStartZ != null && note.holdEndZ != null) {
                     applyEditorHoldTransformation(display, note);
                 } else {
@@ -5203,6 +5210,7 @@ display.setBlockState(blockStateForType(note.type));
         }
     }
     private static String noteTag(String chartId, String noteId) { return "rhythmc_note:" + chartId + ":" + noteId; }
+    private static String noteReferenceName(String chartId, String noteId) { return "rhythmc_note_ref:" + chartId + ":" + noteId; }
     private static long noteDisplayGeneration(ChartManifest chart) { return Math.max(1L, chart.noteDisplayRevision); }
     private static long prepareNoteDisplayGeneration(ServerWorld world, ChartManifest chart, int previousTrackLength, int previousLaneCount) {
         long previousRevision = chart.noteDisplayRevision;
