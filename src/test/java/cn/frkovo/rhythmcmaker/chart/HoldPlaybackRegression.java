@@ -6,6 +6,11 @@ import java.util.List;
 
 public final class HoldPlaybackRegression {
     public static void main(String[] args) {
+        require(cn.frkovo.rhythmcmaker.common.effect.parameter.EffectParameterSchema.getInstance().find("JUDGE_FRAME_COLOR") != null,
+                "reference judge frame color effect is registered");
+        require(cn.frkovo.rhythmcmaker.client.playback.PersistentEffectStateFold.latestEventIndexes(
+                List.of("JUDGE_FRAME_COLOR"), List.of(1.0), 1.0).equals(List.of(0)),
+                "judge frame color persists through seek rebuild");
         ChartManifest.Note editableNote = note("editable", 1.0, -1);
         ChartManifest.Note gluedNote = note("glued", 1.0, 4);
         require(NoteEditRules.canEdit(editableNote), "unglued notes remain editable");

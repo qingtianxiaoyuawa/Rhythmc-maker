@@ -3238,6 +3238,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         double z = effectDouble(effect, "z", PLAYBACK_PLATFORM_Z + 0.5);
         switch (type) {
             case "GLOW_COLOR" -> session.applyGlowColor(effect);
+            case "JUDGE_FRAME_COLOR" -> session.applyJudgeFrameColor(effect);
             case "HIDE_NOTES" -> {
                 session.updateHiddenNotes(effect);
                 session.applyVisualState();
@@ -3737,6 +3738,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final Map<HiddenNoteKey, java.util.ArrayDeque<DisplayEntity.BlockDisplayEntity>> displayPools = new java.util.HashMap<>();
         private final Map<Integer, Team> glowTeams = new java.util.HashMap<>();
         private Formatting observerGlowColor = Formatting.WHITE;
+        private String judgeFrameColor = "border";
         private Long clientTime;
         private long clientTimeExpiresAtNanos;
         private final Map<String, ChartManifest.Note> notesById = new java.util.HashMap<>();
@@ -3817,6 +3819,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             clearGlowTeam();
             clearHiddenNoteFilter();
             observerGlowColor = Formatting.WHITE;
+            judgeFrameColor = "border";
             resetChartPotionEffects(player);
             for (int index = 0; index < effects.size(); index++) {
                 JsonObject effect = effects.get(index);
@@ -4191,6 +4194,10 @@ private static void showSceneBoundary(MinecraftServer server) {
             Team observerTeam = glowTeams.get(1);
             if (observerTeam != null) observerTeam.setColor(observerGlowColor);
             updateGlowTeam();
+        }
+        private void applyJudgeFrameColor(JsonObject effect) {
+            String color = effectString(effect, "color", "border").trim();
+            judgeFrameColor = color.isBlank() ? "border" : color;
         }
         private void clearGlowTeam() {
             for (DisplayEntity.BlockDisplayEntity display : displays.values()) {
