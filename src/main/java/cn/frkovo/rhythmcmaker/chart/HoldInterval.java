@@ -16,7 +16,7 @@ public record HoldInterval(String id, int trackId, int holdGroup, double startBe
 
     public double durationBeats() { return endBeat - startBeat; }
 
-    public boolean hasEndJudgementBoundary() { return members.size() > 2; }
+    public boolean hasEndJudgementBoundary() { return endBeat > startBeat; }
 
     public static List<HoldInterval> fromChart(ChartManifest chart) {
         java.util.Map<GroupKey, java.util.List<ChartManifest.Note>> grouped = new java.util.HashMap<>();
@@ -31,9 +31,10 @@ public record HoldInterval(String id, int trackId, int holdGroup, double startBe
     }
 
     private static HoldInterval create(GroupKey key, List<ChartManifest.Note> members) {
-        if (members.size() < 2) return null;
+        if (members.isEmpty()) return null;
         List<ChartManifest.Note> ordered = members.stream().sorted(Comparator.comparingDouble(note -> note.beat)).toList();
         ChartManifest.Note first = ordered.get(0);
+        if (first.holdStartBeat != null && first.holdEndBeat != null) return new HoldInterval(key.trackId + ":" + key.holdGroup, key.trackId, key.holdGroup, first.holdStartBeat, first.holdEndBeat, ordered);
         ChartManifest.Note last = ordered.get(ordered.size() - 1);
         return new HoldInterval(key.trackId + ":" + key.holdGroup, key.trackId, key.holdGroup, first.beat, last.beat, ordered);
     }

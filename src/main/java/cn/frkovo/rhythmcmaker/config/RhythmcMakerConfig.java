@@ -57,7 +57,13 @@ public final class RhythmcMakerConfig {
         normalize();
         Path path = path(server);
         Files.createDirectories(path.getParent());
-
+        Path temporary = path.resolveSibling(path.getFileName() + ".tmp");
+        Files.writeString(temporary, GSON.toJson(this), StandardCharsets.UTF_8);
+        try {
+            Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException exception) {
+            Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING);
+        }
     }
 
     private static Path path(MinecraftServer server) {

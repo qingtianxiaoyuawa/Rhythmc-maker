@@ -34,6 +34,7 @@ import java.util.concurrent.TimeUnit;
 
 public final class ChartStorage {
     public static final String ROOT_FOLDER = "rhythmc maker";
+    public static final String TEMP_FOLDER = "temp";
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final Type CHART_TYPE = new TypeToken<ChartManifest>() {}.getType();
 
@@ -800,6 +801,11 @@ public final class ChartStorage {
         return legacy;
     }
 
+public static Path temporaryDirectory(MinecraftServer server) throws IOException {
+        Path directory = root(server).resolve(TEMP_FOLDER);
+        Files.createDirectories(directory);
+        return directory;
+    }
     public static Path chartDirectoryPath(MinecraftServer server, String chartId) throws IOException {
         return chartDirectory(server, chartId);
     }

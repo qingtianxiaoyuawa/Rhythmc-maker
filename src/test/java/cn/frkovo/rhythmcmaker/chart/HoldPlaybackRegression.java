@@ -6,6 +6,14 @@ import java.util.List;
 
 public final class HoldPlaybackRegression {
     public static void main(String[] args) {
+        ChartManifest.Note editableNote = note("editable", 1.0, -1);
+        ChartManifest.Note gluedNote = note("glued", 1.0, 4);
+        require(NoteEditRules.canEdit(editableNote), "unglued notes remain editable");
+        require(!NoteEditRules.canEdit(gluedNote), "glued notes are immutable until unglued");
+        require(NoteEditRules.requiresDisplayEntity(1.25, 66.0, -4.5),
+                "fractional note coordinates require a display entity");
+        require(!NoteEditRules.requiresDisplayEntity(1.0, 66.0, -4.0),
+                "integer note coordinates remain block represented");
         ChartManifest.Note first = note("first", 1.0, 8);
         ChartManifest.Note middle = note("middle", 2.0, 8);
         ChartManifest.Note last = note("last", 4.0, 8);
@@ -14,8 +22,8 @@ public final class HoldPlaybackRegression {
         ChartManifest chart = new ChartManifest();
         chart.notes = List.of(first, middle, last, otherTrack);
         List<HoldInterval> intervals = HoldInterval.fromChart(chart);
-        require(intervals.size() == 1, "track-isolated grouping");
-        HoldInterval interval = intervals.getFirst();
+        require(intervals.size() == 2, "track-isolated grouping");
+        HoldInterval interval = intervals.stream().filter(candidate -> candidate.trackId() == 0).findFirst().orElseThrow();
         require(interval.startBeat() == 1.0 && interval.endBeat() == 4.0, "hold endpoints");
         require(interval.durationBeats() == 3.0 && interval.members().size() == 3, "hold member preservation");
         ChartManifest.Note simultaneousFirst = note("simultaneous-first", 2.0, 9);
@@ -47,8 +55,14 @@ public final class HoldPlaybackRegression {
         for (ChartManifest.Note member : merged) member.holdGroup = mergedGroupId;
         require(HoldInterval.fromChart(chartWith(merged)).getFirst().members().size() == 3,
                 "merged group retains all timing members");
-        require(!HoldInterval.fromChart(chartWith(merged.subList(0, 2))).getFirst().hasEndJudgementBoundary(),
-                "two-member runtime groups do not have an end boundary");
+        require(HoldInterval.fromChart(chartWith(merged.subList(0, 2))).getFirst().hasEndJudgementBoundary(),
+                "two-member runtime groups retain an end boundary");
+        ChartManifest.Note representative = note("representative", 1.0, 12);
+        representative.holdStartBeat = 1.0;
+        representative.holdEndBeat = 8.0;
+        HoldInterval representativeInterval = HoldInterval.fromChart(chartWith(List.of(representative))).getFirst();
+        require(representativeInterval.startBeat() == 1.0 && representativeInterval.endBeat() == 8.0,
+                "representative hold interval endpoints");
 
         HoldPlaybackStateMachine machine = new HoldPlaybackStateMachine();
         machine.reset(intervals, 0.0);
