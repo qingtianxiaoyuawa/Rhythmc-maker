@@ -9,7 +9,7 @@ import net.minecraft.client.input.CharInput;
 import net.minecraft.client.input.KeyInput;
 import net.minecraft.text.Text;
 
-final class SettingsScreen extends Screen {
+public final class SettingsScreen extends Screen {
     private final SettingsImGuiView view = new SettingsImGuiView(this::closeSettings);
 
     SettingsScreen() {

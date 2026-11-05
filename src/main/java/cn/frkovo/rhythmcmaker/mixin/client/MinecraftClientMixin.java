@@ -3,6 +3,7 @@ package cn.frkovo.rhythmcmaker.mixin.client;
 import cn.frkovo.rhythmcmaker.client.EffectTrackScreen;
 import cn.frkovo.rhythmcmaker.client.NoteEditScreen;
 import cn.frkovo.rhythmcmaker.client.RhythmcMakerClient;
+import cn.frkovo.rhythmcmaker.client.SettingsScreen;
 import cn.frkovo.rhythmcmaker.client.render.ImGuiRuntime;
 import net.minecraft.client.MinecraftClient;
 import org.spongepowered.asm.mixin.Mixin;
@@ -53,7 +54,8 @@ abstract class MinecraftClientMixin {
             editor.presentPreview(MinecraftClient.getInstance());
             ImGuiRuntime.markRenderCallback();
             ImGuiRuntime.renderPendingDrawData();
-        } else if (MinecraftClient.getInstance().currentScreen instanceof NoteEditScreen) {
+        } else if (MinecraftClient.getInstance().currentScreen instanceof NoteEditScreen
+                || MinecraftClient.getInstance().currentScreen instanceof SettingsScreen) {
             ImGuiRuntime.markRenderCallback();
             ImGuiRuntime.renderPendingDrawData();
         }
