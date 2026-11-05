@@ -122,7 +122,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             MinecraftClient client = MinecraftClient.getInstance();
             if (item == RhythmcMaker.START_CHART_ITEM) client.setScreen(new ChartListScreen());
             else if (item == RhythmcMaker.AWA_ITEM) client.setScreen(new PlaceholderScreen("awa~", "awa-menu"));
-            else if (item == RhythmcMaker.SETTINGS_ITEM) client.setScreen(new PlaceholderScreen("设置"));
+            else if (item == RhythmcMaker.SETTINGS_ITEM) client.setScreen(new SettingsScreen());
             else if (item == RhythmcMaker.CHART_SETTINGS_ITEM) client.setScreen(new PlaceholderScreen("谱面设置", "chart-settings"));
             else if (item == RhythmcMaker.MORE_SETTINGS_ITEM) sendCommand(client, "rhythmc_more_options");
             else if (item == RhythmcMaker.QUICK_FUNCTIONS_ITEM) client.setScreen(new PlaceholderScreen("快捷功能", "quick-functions"));
@@ -139,7 +139,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
                 }
                 if (isShiftPressed(client)) {
                     syncPlaybackPreference();
-                    client.setScreen(new PlaybackSettingsScreen());
+                    client.setScreen(new SettingsScreen());
                     return ActionResult.SUCCESS;
                 }
                 if (playbackToggleCooldownTicks > 0) return ActionResult.SUCCESS;
@@ -185,7 +185,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             }
             if (ClientSceneAccess.operationBusy() && client.currentScreen != null && isRhythmcScreen(client.currentScreen)) client.setScreen(null);
             updateEditorSidebarSnapshot(client);
-            while (settingsKey.wasPressed()) if (!ClientSceneAccess.operationBusy()) client.setScreen(new PlaceholderScreen("设置"));
+            while (settingsKey.wasPressed()) if (!ClientSceneAccess.operationBusy()) client.setScreen(new SettingsScreen());
             boolean inPlaybackArea = client.player != null && isEditorDimension(client) && Math.abs(client.player.getX() - 200.5) < 2.0 && Math.abs(client.player.getY() - 66.0) < 2.0 && Math.abs(client.player.getZ() - 0.0) < 2.0;
             boolean inChartDimension = client.player != null && isEditorDimension(client);
             if (playbackToggleCooldownTicks > 0) playbackToggleCooldownTicks--;
@@ -693,7 +693,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
     }
 
     private static SidebarSnapshot hubSidebar() {
-        return new SidebarSnapshot("制谱器大厅", new String[] { ClientChartAccess.config().lobbySidebarContent });
+        return new SidebarSnapshot("制谱器大厅", ClientChartAccess.config().lobbySidebarContent.split("\\R", -1));
     }
 
     private static double sidebarRefreshIntervalSeconds() {

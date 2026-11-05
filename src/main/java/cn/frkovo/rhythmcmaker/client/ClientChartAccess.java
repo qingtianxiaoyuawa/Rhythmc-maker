@@ -28,7 +28,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-final class ClientChartAccess {
+public final class ClientChartAccess {
     private static ChartManifest activeChart;
     private static RegistryKey<World> activeChartWorld;
     private static MinecraftServer activeChartServer;
@@ -263,9 +263,9 @@ final class ClientChartAccess {
                                  FileTime modified, long size, String request, String error) {}
 
 
-    static cn.frkovo.rhythmcmaker.config.RhythmcMakerConfig config() { return cn.frkovo.rhythmcmaker.RhythmcMaker.currentConfig(); }
+    public static cn.frkovo.rhythmcmaker.config.RhythmcMakerConfig config() { return cn.frkovo.rhythmcmaker.RhythmcMaker.currentConfig(); }
 
-    static void saveConfig(cn.frkovo.rhythmcmaker.config.RhythmcMakerConfig config) throws IOException { cn.frkovo.rhythmcmaker.RhythmcMaker.updateConfig(server(), config); }
+    public static void saveConfig(cn.frkovo.rhythmcmaker.config.RhythmcMakerConfig config) throws IOException { cn.frkovo.rhythmcmaker.RhythmcMaker.updateConfig(server(), config); }
 
     static void update(ChartManifest chart) throws IOException {
         MinecraftServer server = server();
@@ -351,7 +351,7 @@ final class ClientChartAccess {
         };
     }
 
-    static void status(String message) {
+    public static void status(String message) {
         if (containsPathInformation(message)) return;
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player != null) client.player.sendMessage(Text.literal(message), true);
