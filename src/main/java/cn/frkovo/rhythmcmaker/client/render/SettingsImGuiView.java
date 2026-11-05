@@ -1,9 +1,9 @@
 package cn.frkovo.rhythmcmaker.client.render;
 
 import cn.frkovo.rhythmcmaker.client.ClientChartAccess;
-import cn.frkovo.rhythmcmaker.client.RhythmcMakerClient;
 import cn.frkovo.rhythmcmaker.config.RhythmcMakerConfig;
 import imgui.ImGui;
+import imgui.flag.ImGuiCol;
 import imgui.flag.ImGuiCond;
 import imgui.flag.ImGuiInputTextFlags;
 import imgui.flag.ImGuiWindowFlags;
@@ -29,8 +29,6 @@ public final class SettingsImGuiView {
     private static final double MAX_NOTE_VOLUME = 5.0;
     private static final int MIN_BEAT_SCORE = 1;
     private static final int MAX_BEAT_SCORE = 32;
-    private static final double MIN_PITCH = 1.0;
-    private static final double MAX_PITCH = 1000.0;
 
     private final Runnable closeAction;
     private final RhythmcMakerConfig config;
@@ -40,7 +38,6 @@ public final class SettingsImGuiView {
     private final ImInt beatScore = new ImInt();
     private final ImDouble musicVolume = new ImDouble();
     private final ImDouble noteVolume = new ImDouble();
-    private final ImDouble pitch = new ImDouble();
     private final ImString lobbyContent;
     private int page = PAGE_EDITOR;
 
@@ -52,12 +49,16 @@ public final class SettingsImGuiView {
     }
 
     public void render(MinecraftClient client) {
-        int width = Math.max(760, client.getWindow().getScaledWidth() - 96);
-        int height = Math.max(460, client.getWindow().getScaledHeight() - 72);
-        ImGui.setNextWindowPos(48.0f, 36.0f, ImGuiCond.Always);
+        float displayWidth = client.getWindow().getWidth();
+        float displayHeight = client.getWindow().getHeight();
+        float width = Math.min(displayWidth - 24.0f, Math.max(420.0f, displayWidth * 0.86f));
+        float height = Math.min(displayHeight - 24.0f, Math.max(300.0f, displayHeight * 0.86f));
+        ImGui.setNextWindowPos((displayWidth - width) * 0.5f, (displayHeight - height) * 0.5f, ImGuiCond.Always);
         ImGui.setNextWindowSize(width, height, ImGuiCond.Always);
+        ImGui.setNextWindowBgAlpha(0.94f);
         int flags = ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoSavedSettings;
         if (ImGui.begin("设置##rhythmc-settings", flags)) {
+            ImGui.pushStyleColor(ImGuiCol.ChildBg, 0xD91B2430);
             ImGui.text("RhythMC Maker 设置");
             ImGui.separator();
             float sidebarWidth = Math.min(190.0f, Math.max(150.0f, width * 0.22f));
@@ -68,15 +69,13 @@ public final class SettingsImGuiView {
             sidebarButton("帮助", PAGE_HELP);
             ImGui.endChild();
             ImGui.sameLine();
-            ImGui.beginChild("settings-content", 0.0f, -1.0f, true);
-            renderPage();
-            ImGui.endChild();
             if (ImGui.beginChild("settings-content", 0.0f, -1.0f, true)) {
                 renderPage();
                 ImGui.endChild();
             }
             ImGui.separator();
             if (ImGui.button("关闭##settings-close")) closeAction.run();
+            ImGui.popStyleColor();
         }
         ImGui.end();
     }
@@ -121,18 +120,6 @@ public final class SettingsImGuiView {
             save();
         }
         ImGui.text("输入框支持换行，HUD 会按换行显示；文本不会自动折行。");
-        ImGui.separator();
-        ImGui.text("播放模式");
-        if (ImGui.radioButton("正式播放##formal", "formal".equals(config.playbackMode))) {
-            config.playbackMode = "formal";
-            save();
-        }
-        ImGui.sameLine();
-        if (ImGui.radioButton("滚动播放##scroll", "scroll".equals(config.playbackMode))) {
-            config.playbackMode = "scroll";
-            save();
-        }
-        renderDouble("全局音高 / 速度 (%)", pitch, MIN_PITCH, MAX_PITCH, 1.0, "%.1f");
     }
 
     private void renderHelpPage() {
@@ -195,10 +182,6 @@ public final class SettingsImGuiView {
         else if (label.startsWith("制谱器流速")) config.playerSpeed = value;
         else if (label.startsWith("音乐音量")) config.musicVolumeMultiplier = value;
         else if (label.startsWith("音符判定")) config.noteJudgementVolumeMultiplier = value;
-        else if (label.startsWith("全局音高")) {
-            config.playbackPitchPercent = value;
-            RhythmcMakerClient.setPlaybackPitchPercent(value);
-        }
         save();
     }
 
@@ -209,7 +192,6 @@ public final class SettingsImGuiView {
         beatScore.set(config.defaultDivisionsPerBeat);
         musicVolume.set(config.musicVolumeMultiplier);
         noteVolume.set(config.noteJudgementVolumeMultiplier);
-        pitch.set(config.playbackPitchPercent);
         lobbyContent.set(config.lobbySidebarContent);
     }
 
