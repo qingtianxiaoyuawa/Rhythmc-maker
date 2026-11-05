@@ -917,7 +917,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         ChartManifest chart = ClientChartAccess.resolveActiveChart();
         NoteTarget target = NoteTargetResolver.resolve(client, chart);
         if (target == null) return false;
-        client.setScreen(new NoteEditScreen(chart, target.note()));
+        client.setScreen(new NoteEditScreen(target.chart(), target.note()));
         return true;
     }
     private static boolean isRhythmcScreen(net.minecraft.client.gui.screen.Screen screen) {

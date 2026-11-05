@@ -76,8 +76,7 @@ public final class NoteEditScreen extends Screen {
             }
             if (!operationStatus.isBlank()) ImGui.textColored(operationStatusColor, operationStatus);
             if (note.holdGroup >= 0) {
-                ImGui.text("该音符已粘合，位置、时机和类型均已锁定");
-                ImGui.text("请先解除粘合后再编辑");
+                ImGui.text("该 Hold 可编辑起点，终点保持不变");
                 ImGui.beginDisabled(holdOperationPending);
                 if (ImGui.button("解除粘合")) {
                     holdOperationPending = true;
@@ -88,8 +87,7 @@ public final class NoteEditScreen extends Screen {
                     client.player.networkHandler.sendChatCommand("rhythmc_note_unglue " + note.id);
                 }
                 ImGui.endDisabled();
-                if (ImGui.button("关闭")) client.setScreen(null);
-            } else {
+            }
             ImGui.text("相对位置 X");
             ImDouble x = new ImDouble(note.x);
             if (ImGui.inputDouble("##note-x", x, 0.0, 0.0, "%.3f")) update(client, x.get(), note.y, note.beat);
@@ -151,7 +149,6 @@ public final class NoteEditScreen extends Screen {
                 ImGui.text(connectableCount == 0 ? "当前没有可粘合的钻石音符" : "当前可粘合：" + connectableCount + " 个钻石音符");
             }
             if (ImGui.button("关闭")) client.setScreen(null);
-            }
             ImGui.end();
         } finally {
             ImGuiRuntime.endFrame();

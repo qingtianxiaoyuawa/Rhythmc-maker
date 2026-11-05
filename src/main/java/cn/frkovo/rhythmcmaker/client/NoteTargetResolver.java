@@ -27,12 +27,12 @@ final class NoteTargetResolver {
         HitResult target = client.crosshairTarget;
         if (target instanceof EntityHitResult entityHit) {
             ChartManifest.Note note = resolveTaggedEntity(entityHit.getEntity(), chart.notes, chart.id);
-            return note == null ? null : new NoteTarget(note, entityHit.getEntity(), target);
+            return note == null ? null : new NoteTarget(chart, note, entityHit.getEntity(), target);
         }
         if (target instanceof BlockHitResult blockHit) {
             BlockPos hitPosition = blockHit.getBlockPos();
             ChartManifest.Note note = chart.notes.stream().filter(candidate -> candidate != null && !cn.frkovo.rhythmcmaker.chart.NoteEditRules.requiresDisplayEntity(candidate.x, candidate.y, candidate.z)).filter(candidate -> BlockPos.ofFloored(candidate.x, candidate.y, candidate.z).equals(hitPosition)).findFirst().orElse(null);
-            return note == null ? null : new NoteTarget(note, null, target);
+            return note == null ? null : new NoteTarget(chart, note, null, target);
         }
         if (target.getType() != HitResult.Type.MISS) return null;
         Vec3d origin = client.gameRenderer.getCamera().getCameraPos();
@@ -54,7 +54,7 @@ final class NoteTargetResolver {
                 if (isCloser(candidate, nearest)) nearest = candidate;
             }
         }
-        return nearest == null ? null : new NoteTarget(nearest.note(), nearest.entity(), target);
+        return nearest == null ? null : new NoteTarget(chart, nearest.note(), nearest.entity(), target);
     }
 
     private static RayCandidate rayCandidate(ChartManifest.Note note, Entity entity, Vec3d center, Vec3d origin, Vec3d direction,

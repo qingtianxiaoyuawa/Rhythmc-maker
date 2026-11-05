@@ -1190,10 +1190,6 @@ private static void flushActiveChart(MinecraftServer server, ServerPlayerEntity 
         if (chart == null || chart.notes == null) return 0;
         ChartManifest.Note note = chart.notes.stream().filter(candidate -> candidate != null && noteId.equals(candidate.id)).findFirst().orElse(null);
         if (note == null) return 0;
-        if (!NoteEditRules.canEdit(note)) {
-            player.sendMessage(Text.literal("请先解除粘合，才能修改音符信息"), true);
-            return 0;
-        }
         double oldX = note.x;
         double oldY = note.y;
         double oldZ = note.z;
@@ -1204,6 +1200,12 @@ private static void flushActiveChart(MinecraftServer server, ServerPlayerEntity 
         note.z = newZ;
         note.beat = beat;
         note.time = ChartTiming.beatToSeconds(chart, beat);
+        if (note.holdGroup >= 0 && note.holdStartBeat != null) {
+            note.holdStartBeat = beat;
+            note.holdStartX = x;
+            note.holdStartY = y;
+            note.holdStartZ = newZ;
+        }
         updateNoteWorldRepresentation(world, chart, note, oldX, oldY, oldZ);
         invalidateTrackSnapUndo(player.getUuid());
         if (previousHoldGroup >= 0) rebuildHoldLinks(world, chart, note.trackId, previousHoldGroup);
@@ -1344,10 +1346,6 @@ private static Path holdBackupPath(MinecraftServer server, String chartId, int g
         if (chart == null || chart.notes == null || (type < 0 || type > 3)) return 0;
         ChartManifest.Note note = chart.notes.stream().filter(candidate -> candidate != null && noteId.equals(candidate.id)).findFirst().orElse(null);
         if (note == null || note.type == type) return 0;
-        if (!NoteEditRules.canEdit(note)) {
-            player.sendMessage(Text.literal("请先解除粘合，才能修改音符信息"), true);
-            return 0;
-        }
         int oldType = note.type;
         double relativeY = note.y - noteHeightBase(oldType);
         double oldX = note.x;
@@ -3750,7 +3748,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final long originalStatusEffectsCapturedAtTick;
         private int nextNoteIndex;
         private final Map<String, DisplayEntity.BlockDisplayEntity> displays = new java.util.HashMap<>();
-        private final Map<String, DisplayEntity.BlockDisplayEntity> holdDisplays = new java.util.HashMap<>();
+        private final Map<String, java.util.List<DisplayEntity.BlockDisplayEntity>> holdDisplays = new java.util.HashMap<>();
         private final Map<String, DisplayEntity.TextDisplayEntity> textDisplays = new java.util.HashMap<>();
         private final java.util.ArrayDeque<DisplayEntity.TextDisplayEntity> textDisplayPool;
         private final Map<String, double[]> textDisplayAnchors = new java.util.HashMap<>();
@@ -3956,65 +3954,70 @@ private static void showSceneBoundary(MinecraftServer server) {
                 if (shouldHide(start)) continue;
                 double distance = relativeDistance(start, songTime);
                 if (!Double.isFinite(distance) || distance < 0 || distance > PLAYBACK_APPROACH_DISTANCE) continue;
-                createHoldDisplay(player, interval, songTime);
+                createHoldDisplays(player, interval, songTime);
             }
             for (String intervalId : activeHoldIntervalIds) {
                 if (holdDisplays.containsKey(intervalId)) continue;
                 HoldInterval interval = holdIntervalsById.get(intervalId);
-                if (interval != null && !shouldHide(interval.members().getFirst())) createHoldDisplay(player, interval, songTime);
+                if (interval != null && !shouldHide(interval.members().getFirst())) createHoldDisplays(player, interval, songTime);
             }
             for (var iterator = holdDisplays.entrySet().iterator(); iterator.hasNext();) {
                 var entry = iterator.next();
                 HoldInterval interval = holdIntervalsById.get(entry.getKey());
                 if (interval == null || shouldHide(interval.members().getFirst()) || beat >= interval.endBeat()) {
-                    recycle(interval == null ? null : interval.members().getFirst(), entry.getValue());
+                    recycleHoldDisplays(interval, entry.getValue());
                     iterator.remove();
                     continue;
                 }
-                if (updatePositions) updateHoldSpan(entry.getValue(), interval, songTime);
+                if (updatePositions) {
+                    List<ChartManifest.Note> visualNotes = holdVisualNotes(interval);
+                    List<DisplayEntity.BlockDisplayEntity> displays = entry.getValue();
+                    for (int index = 0; index < displays.size(); index++) {
+                        applyNotePose(displays.get(index), visualNotes.get(index), songTime,
+                                PLAYBACK_FRAME_Z - Math.max(0.0, relativeDistance(visualNotes.get(index), songTime)));
+                    }
+                }
             }
         }
-        private void createHoldDisplay(ServerPlayerEntity player, HoldInterval interval, double songTime) {
-            ChartManifest.Note start = interval.members().getFirst();
-            double distance = relativeDistance(start, songTime);
-            double displayZ = PLAYBACK_FRAME_Z - Math.max(0.0, distance);
-            double[] position = displayPosition(start, songTime, displayZ);
-            DisplayEntity.BlockDisplayEntity display = acquire(start, blockStateForType(start.type), position[0], position[1], position[2]);
-            if (display == null) return;
-            display.addCommandTag("rhythmc_preview:" + player.getUuid());
-            display.setGlowing(true);
-            holdDisplays.put(interval.id(), display);
-            Team team = glowTeams.computeIfAbsent(start.type, this::createGlowTeam);
-            if (world.getScoreboard().getScoreHolderTeam(display.getNameForScoreboard()) != team) {
-                world.getScoreboard().addScoreHolderToTeam(display.getNameForScoreboard(), team);
-            }
-            updateHoldSpan(display, interval, songTime);
-        }
-        private void updateHoldSpan(DisplayEntity.BlockDisplayEntity display, HoldInterval interval, double songTime) {
+        private void createHoldDisplays(ServerPlayerEntity player, HoldInterval interval, double songTime) {
             ChartManifest.Note representative = interval.members().getFirst();
+            List<ChartManifest.Note> visualNotes = holdVisualNotes(interval);
+            List<DisplayEntity.BlockDisplayEntity> displays = new java.util.ArrayList<>(visualNotes.size());
+            Team team = glowTeams.computeIfAbsent(representative.type, this::createGlowTeam);
+            for (ChartManifest.Note visualNote : visualNotes) {
+                double distance = relativeDistance(visualNote, songTime);
+                double displayZ = PLAYBACK_FRAME_Z - Math.max(0.0, distance);
+                double[] position = displayPosition(visualNote, songTime, displayZ);
+                DisplayEntity.BlockDisplayEntity display = acquire(visualNote, blockStateForType(visualNote.type), position[0], position[1], position[2]);
+                if (display == null) continue;
+                applyNotePose(display, visualNote, songTime, displayZ);
+                display.addCommandTag("rhythmc_preview:" + player.getUuid());
+                display.setGlowing(true);
+                if (world.getScoreboard().getScoreHolderTeam(display.getNameForScoreboard()) != team) {
+                    world.getScoreboard().addScoreHolderToTeam(display.getNameForScoreboard(), team);
+                }
+                displays.add(display);
+            }
+            if (!displays.isEmpty()) holdDisplays.put(interval.id(), displays);
+        }
+        private List<ChartManifest.Note> holdVisualNotes(HoldInterval interval) {
+            ChartManifest.Note representative = interval.members().getFirst();
+            if (representative.holdStartBeat == null || representative.holdEndBeat == null) return List.of(representative);
             ChartManifest.Note start = holdEndpointNote(representative, true);
             ChartManifest.Note end = holdEndpointNote(representative, false);
-            double startDistance = relativeDistance(start, songTime);
-            double endDistance = relativeDistance(end, songTime);
-            double[] startPosition = displayPosition(start, songTime, PLAYBACK_FRAME_Z - Math.max(0.0, startDistance));
-            double[] endPosition = displayPosition(end, songTime, PLAYBACK_FRAME_Z - Math.max(0.0, endDistance));
-            Vector3f direction = new Vector3f((float) (endPosition[0] - startPosition[0]),
-                    (float) (endPosition[1] - startPosition[1]), (float) (endPosition[2] - startPosition[2]));
-            float length = direction.length();
-            if (!Float.isFinite(length)) return;
-            if (length < 0.001f) {
-                length = 0.001f;
-                direction.set(0.0f, 1.0f, 0.0f);
+            int count = Math.max(2, Math.min(64, (int) Math.ceil(interval.durationBeats()) + 1));
+            List<ChartManifest.Note> visualNotes = new java.util.ArrayList<>(count);
+            for (int index = 0; index < count; index++) {
+                double progress = index / (double) (count - 1);
+                ChartManifest.Note visual = copyNote(representative);
+                visual.beat = start.beat + (end.beat - start.beat) * progress;
+                visual.x = start.x + (end.x - start.x) * progress;
+                visual.y = start.y + (end.y - start.y) * progress;
+                visual.z = start.z + (end.z - start.z) * progress;
+                visual.time = ChartTiming.beatToSeconds(chart, visual.beat);
+                visualNotes.add(visual);
             }
-            direction.normalize();
-            float thickness = 0.12f;
-            Quaternionf rotation = new Quaternionf().rotationTo(new Vector3f(0.0f, 1.0f, 0.0f), direction);
-            display.setPosition((startPosition[0] + endPosition[0]) * 0.5,
-                    (startPosition[1] + endPosition[1]) * 0.5,
-                    (startPosition[2] + endPosition[2]) * 0.5);
-            display.setTransformation(new AffineTransformation(
-                    new Vector3f(-thickness * 0.5f, -length * 0.5f, -thickness * 0.5f), rotation,
-                    new Vector3f(thickness, length, thickness), new Quaternionf()));
+            return visualNotes;
         }
         private ChartManifest.Note holdEndpointNote(ChartManifest.Note representative, boolean start) {
             if (representative.holdStartBeat == null || representative.holdEndBeat == null) return representative;
@@ -4030,12 +4033,12 @@ private static void showSceneBoundary(MinecraftServer server) {
                 endpoint.y = representative.holdEndY == null ? representative.y : representative.holdEndY;
                 endpoint.z = representative.holdEndZ == null ? representative.z : representative.holdEndZ;
             }
+            endpoint.time = ChartTiming.beatToSeconds(chart, endpoint.beat);
             return endpoint;
         }
         private void clearHoldDisplays() {
-            for (Map.Entry<String, DisplayEntity.BlockDisplayEntity> entry : holdDisplays.entrySet()) {
-                HoldInterval interval = holdIntervalsById.get(entry.getKey());
-                recycleHoldDisplay(interval, entry.getValue());
+            for (Map.Entry<String, List<DisplayEntity.BlockDisplayEntity>> entry : holdDisplays.entrySet()) {
+                recycleHoldDisplays(holdIntervalsById.get(entry.getKey()), entry.getValue());
             }
             holdDisplays.clear();
         }
@@ -4044,9 +4047,11 @@ private static void showSceneBoundary(MinecraftServer server) {
             activeHoldIntervalIds.clear();
             clearHoldDisplays();
         }
-        private void recycleHoldDisplay(HoldInterval interval, DisplayEntity.BlockDisplayEntity display) {
-            if (interval == null) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
-            else recycle(interval.members().getFirst(), display);
+        private void recycleHoldDisplays(HoldInterval interval, List<DisplayEntity.BlockDisplayEntity> displays) {
+            for (DisplayEntity.BlockDisplayEntity display : displays) {
+                if (interval == null) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+                else recycle(interval.members().getFirst(), display);
+            }
         }
         private void applyVisualState() {
             holdPlayback.seek(currentPlaybackBeat);
@@ -4071,7 +4076,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 var entry = iterator.next();
                 HoldInterval interval = holdIntervalsById.get(entry.getKey());
                 if (interval != null && shouldHide(interval.members().getFirst())) {
-                    recycle(interval.members().getFirst(), entry.getValue());
+                    recycleHoldDisplays(interval, entry.getValue());
                     iterator.remove();
                 }
             }
@@ -5086,13 +5091,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 if (display == null) continue;
 display.setBlockState(blockStateForType(note.type));
                 if (note.holdStartX != null && note.holdEndX != null && note.holdStartZ != null && note.holdEndZ != null) {
-                    double centerX = (note.holdStartX + note.holdEndX) * 0.5;
-                    double centerY = (note.holdStartY + note.holdEndY) * 0.5;
-                    double centerZ = (note.holdStartZ + note.holdEndZ) * 0.5;
-                    float scaleX = (float) Math.max(1.0, Math.abs(note.holdEndX - note.holdStartX) + 1.0);
-                    float scaleZ = (float) Math.max(1.0, Math.abs(note.holdEndZ - note.holdStartZ) + 1.0);
-                    display.setPosition(centerX, centerY, centerZ);
-                    display.setTransformation(new AffineTransformation(new Vector3f(-0.5f, -0.5f, -0.5f), new Quaternionf(), new Vector3f(scaleX, 1.0f, scaleZ), new Quaternionf()));
+                    applyEditorHoldTransformation(display, note);
                 } else {
                     display.setPosition(note.x, note.y, note.z);
                 }
@@ -5135,6 +5134,30 @@ display.setBlockState(blockStateForType(note.type));
         }
     }
     private static boolean hasFraction(double value) { return Math.abs(value - Math.rint(value)) > 0.000001; }
+    private static void applyEditorHoldTransformation(DisplayEntity.BlockDisplayEntity display, ChartManifest.Note note) {
+        if (note.holdStartX == null || note.holdEndX == null || note.holdStartZ == null || note.holdEndZ == null) {
+            display.setPosition(note.x, note.y, note.z);
+            return;
+        }
+        double startX = editorHoldCoordinate(note.holdStartX);
+        double endX = editorHoldCoordinate(note.holdEndX);
+        double startZ = editorHoldCoordinate(note.holdStartZ);
+        double endZ = editorHoldCoordinate(note.holdEndZ);
+        double centerX = (startX + endX) * 0.5;
+        double centerY = ((note.holdStartY == null ? note.y : note.holdStartY)
+                + (note.holdEndY == null ? note.y : note.holdEndY)) * 0.5;
+        double centerZ = (startZ + endZ) * 0.5;
+        float scaleX = (float) Math.max(1.0, Math.abs(endX - startX) + 1.0);
+        float scaleZ = (float) Math.max(1.0, Math.abs(endZ - startZ) + 1.0);
+        display.setPosition(centerX, centerY, centerZ);
+        display.setTransformation(new AffineTransformation(new Vector3f(-0.5f, -0.5f, -0.5f),
+                new Quaternionf(), new Vector3f(scaleX, 1.0f, scaleZ), new Quaternionf()));
+    }
+
+    private static double editorHoldCoordinate(double coordinate) {
+        return hasFraction(coordinate) ? coordinate : coordinate + 0.5;
+    }
+
     private static void updateNoteWorldRepresentation(ServerWorld world, ChartManifest chart, ChartManifest.Note note,
                                                       double previousX, double previousY, double previousZ) {
         boolean previousUsesDisplay = NoteEditRules.requiresDisplayEntity(previousX, previousY, previousZ);
@@ -5158,13 +5181,7 @@ display.setBlockState(blockStateForType(note.type));
                 ensureEffectPreviewDisplayRange(display);
 display.setBlockState(blockStateForType(note.type));
                 if (note.holdStartX != null && note.holdEndX != null && note.holdStartZ != null && note.holdEndZ != null) {
-                    double centerX = (note.holdStartX + note.holdEndX) * 0.5;
-                    double centerY = (note.holdStartY + note.holdEndY) * 0.5;
-                    double centerZ = (note.holdStartZ + note.holdEndZ) * 0.5;
-                    float scaleX = (float) Math.max(1.0, Math.abs(note.holdEndX - note.holdStartX) + 1.0);
-                    float scaleZ = (float) Math.max(1.0, Math.abs(note.holdEndZ - note.holdStartZ) + 1.0);
-                    display.setPosition(centerX, centerY, centerZ);
-                    display.setTransformation(new AffineTransformation(new Vector3f(-0.5f, -0.5f, -0.5f), new Quaternionf(), new Vector3f(scaleX, 1.0f, scaleZ), new Quaternionf()));
+                    applyEditorHoldTransformation(display, note);
                 } else {
                     display.setPosition(note.x, note.y, note.z);
                 }
@@ -5172,13 +5189,7 @@ display.setBlockState(blockStateForType(note.type));
             } else {
 display.setBlockState(blockStateForType(note.type));
                 if (note.holdStartX != null && note.holdEndX != null && note.holdStartZ != null && note.holdEndZ != null) {
-                    double centerX = (note.holdStartX + note.holdEndX) * 0.5;
-                    double centerY = (note.holdStartY + note.holdEndY) * 0.5;
-                    double centerZ = (note.holdStartZ + note.holdEndZ) * 0.5;
-                    float scaleX = (float) Math.max(1.0, Math.abs(note.holdEndX - note.holdStartX) + 1.0);
-                    float scaleZ = (float) Math.max(1.0, Math.abs(note.holdEndZ - note.holdStartZ) + 1.0);
-                    display.setPosition(centerX, centerY, centerZ);
-                    display.setTransformation(new AffineTransformation(new Vector3f(-0.5f, -0.5f, -0.5f), new Quaternionf(), new Vector3f(scaleX, 1.0f, scaleZ), new Quaternionf()));
+                    applyEditorHoldTransformation(display, note);
                 } else {
                     display.setPosition(note.x, note.y, note.z);
                 }
