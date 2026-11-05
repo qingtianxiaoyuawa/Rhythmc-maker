@@ -144,6 +144,22 @@ public final class ClientChartAccess {
         return activeChart;
     }
 
+    static ChartManifest refreshActiveChartNow() {
+        ChartManifest current = resolveActiveChart();
+        if (current == null) return null;
+        try {
+            ChartManifest fresh = ChartStorage.find(server(), current.id);
+            if (fresh != null) {
+                activeChart = fresh;
+                var attributes = ChartStorage.manifestAttributes(server(), fresh.id);
+                activeChartModifiedTime = attributes.lastModifiedTime();
+                activeChartFileSize = attributes.size();
+            }
+        } catch (IOException ignored) {
+        }
+        return activeChart;
+    }
+
     static boolean refreshActiveChartIfChanged() {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player == null || client.getServer() == null) return false;

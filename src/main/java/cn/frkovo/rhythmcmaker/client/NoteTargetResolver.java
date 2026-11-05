@@ -21,7 +21,9 @@ final class NoteTargetResolver {
     }
 
     static NoteTarget resolve(MinecraftClient client, ChartManifest chart) {
-        if (client.player == null || client.crosshairTarget == null || chart == null || chart.notes == null) return null;
+        ChartManifest resolvedChart = ClientChartAccess.refreshActiveChartNow();
+        if (client.player == null || client.crosshairTarget == null || resolvedChart == null || resolvedChart.notes == null) return null;
+        chart = resolvedChart;
         HitResult target = client.crosshairTarget;
         if (target instanceof EntityHitResult entityHit) {
             ChartManifest.Note note = resolveTaggedEntity(entityHit.getEntity(), chart.notes, chart.id);
@@ -42,7 +44,7 @@ final class NoteTargetResolver {
         if (client.world != null) {
             for (DisplayEntity.BlockDisplayEntity display : client.world.getEntitiesByType(EntityType.BLOCK_DISPLAY,
                     new Box(origin, origin).expand(maximumDistance + 1.0),
-                    entity -> entity.getCommandTags().stream().anyMatch(tag -> tag.startsWith(NOTE_TAG_PREFIX + chart.id + ":")))) {
+                    entity -> entity.getCommandTags().stream().anyMatch(tag -> tag.startsWith(NOTE_TAG_PREFIX + resolvedChart.id + ":")))) {
                 ChartManifest.Note note = resolveTaggedEntity(display, chart.notes, chart.id);
                 if (note == null) continue;
                 displayedNoteIds.add(note.id);

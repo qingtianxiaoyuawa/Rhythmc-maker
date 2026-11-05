@@ -344,6 +344,7 @@ public final class RhythmcMaker implements ModInitializer {
             note.beat = PlaybackCoordinates.editorBeatAtBlockZ(chart, target.getZ());
             note.time = ChartTiming.beatToSeconds(chart, note.beat);
             chart.notes.add(note);
+            invalidateTrackSnapUndo(serverPlayer.getUuid());
             try { saveChart(serverWorld.getServer(), chart); } catch (IOException ignored) { }
             return ActionResult.SUCCESS;
         });
@@ -395,7 +396,7 @@ public final class RhythmcMaker implements ModInitializer {
             }
             // A stale note block left by a previous layout must remain breakable.
             if (!containsNote(chart, serverWorld, pos)) return true;
-            removeNote(chart, serverWorld, pos);
+            removeNote(chart, serverWorld, pos, serverPlayer.getUuid());
             return true;
         });
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
@@ -982,7 +983,6 @@ public final class RhythmcMaker implements ModInitializer {
                 ChartManifest.Note retained = copyNote(note);
                 if (fractional) {
                     task.changed.add(new TrackSnapChangedNote(retained.id, retained.z, retained.beat, retained.time));
-                    retained.id = UUID.randomUUID().toString();
                     retained.z = targetZ;
                     retained.beat = PlaybackCoordinates.editorBeatAtBlockZ(task.chart, targetZ);
                     retained.time = ChartTiming.beatToSeconds(task.chart, retained.beat);
@@ -1205,6 +1205,7 @@ private static void flushActiveChart(MinecraftServer server, ServerPlayerEntity 
         note.beat = beat;
         note.time = ChartTiming.beatToSeconds(chart, beat);
         updateNoteWorldRepresentation(world, chart, note, oldX, oldY, oldZ);
+        invalidateTrackSnapUndo(player.getUuid());
         if (previousHoldGroup >= 0) rebuildHoldLinks(world, chart, note.trackId, previousHoldGroup);
         updateChartTotalBeats(chart);
         CachedChartState state = cacheChart(source.getServer(), chart);
@@ -1256,6 +1257,7 @@ private static int glueHoldNotes(net.minecraft.server.command.ServerCommandSourc
         representative.holdBackupId = backup.getFileName().toString();
         chart.notes.removeIf(note -> note != null && connected.stream().anyMatch(member -> member.id.equals(note.id)));
         chart.notes.add(representative);
+        invalidateTrackSnapUndo(player.getUuid());
         CachedChartState state = cacheChart(source.getServer(), chart);
         synchronized (state) { state.revision++; state.dirty = true; }
         refreshNoteDisplays(world, chart);
@@ -1285,6 +1287,7 @@ private static int glueHoldNotes(net.minecraft.server.command.ServerCommandSourc
         removeNoteDisplay(world, noteTag(chart.id, selected.id));
         chart.notes.remove(selected);
         chart.notes.addAll(restored);
+        invalidateTrackSnapUndo(player.getUuid());
         deleteHoldBackup(backup);
         CachedChartState state = cacheChart(source.getServer(), chart);
         synchronized (state) { state.revision++; state.dirty = true; }
@@ -1358,6 +1361,7 @@ private static Path holdBackupPath(MinecraftServer server, String chartId, int g
         updateNoteWorldRepresentation(world, chart, note, oldX, oldY, note.z);
         if (previousHoldGroup >= 0 && type != 2) rebuildHoldLinks(world, chart, note.trackId, previousHoldGroup);
         if (type == 2 && note.holdGroup >= 0) rebuildHoldLinks(world, chart, note.trackId, note.holdGroup);
+        invalidateTrackSnapUndo(player.getUuid());
         CachedChartState state = cacheChart(source.getServer(), chart);
         synchronized (state) { state.revision++; state.dirty = true; }
         queueChartSave(source.getServer(), state);
@@ -2694,6 +2698,7 @@ private static Path holdBackupPath(MinecraftServer server, String chartId, int g
         }
         chart.totalBeats = chart.notes.stream().filter(java.util.Objects::nonNull)
                 .mapToDouble(note -> note.beat).max().orElse(0.0);
+        invalidateTrackSnapUndo(playerId);
         try { saveChart(server, chart); } catch (IOException exception) { LOGGER.warn("Failed to sync WorldEdit note", exception); }
     }
 
@@ -4888,7 +4893,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             && Math.round(note.y) == pos.getY()
             && Math.round(note.z) == pos.getZ();
     }
-    private static void removeNote(ChartManifest chart, ServerWorld world, BlockPos pos) {
+    private static void removeNote(ChartManifest chart, ServerWorld world, BlockPos pos, UUID playerId) {
         chart.notes.removeIf(note -> {
             // Fractional notes are represented by BlockDisplay entities and can visually overlap
             // a block grid position. Breaking a newly placed block must not delete that note.
@@ -4896,6 +4901,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             if (matches) removeNoteDisplay(world, noteTag(chart.id, note.id));
             return matches;
         });
+        invalidateTrackSnapUndo(playerId);
         try { saveChart(world.getServer(), chart); } catch (IOException ignored) { }
     }
     private static void repositionNotes(ChartManifest chart) {
