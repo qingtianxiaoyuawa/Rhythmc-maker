@@ -144,8 +144,6 @@ public final class RhythmcMakerClient implements ClientModInitializer {
                 syncPlaybackPreference();
                 beginPlayback(client);
             }
-            else if (item == RhythmcMaker.INCREASE_BEATS_ITEM) sendCommand(client, "rhythmc_beats 1");
-            else if (item == RhythmcMaker.DECREASE_BEATS_ITEM) sendCommand(client, "rhythmc_beats -1");
             else return ActionResult.PASS;
             return ActionResult.SUCCESS;
         });
@@ -928,8 +926,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
                 || item == RhythmcMaker.MORE_OPTIONS_RETURN_ITEM || item == RhythmcMaker.EXPORT_ITEM
                 || item == RhythmcMaker.SCENE_EDIT_ITEM
                 || item == RhythmcMaker.EFFECT_TRACK_ITEM || item == RhythmcMaker.SAVE_SCENE_ITEM
-                || item == RhythmcMaker.PLAY_ITEM
-                || item == RhythmcMaker.INCREASE_BEATS_ITEM || item == RhythmcMaker.DECREASE_BEATS_ITEM;
+                || item == RhythmcMaker.PLAY_ITEM;
     }
     private static void renderOperationProgress(DrawContext drawContext) {
         MinecraftClient client = MinecraftClient.getInstance();

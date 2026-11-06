@@ -65,7 +65,7 @@ final class NoteTargetResolver {
 
     private static RayCandidate rayCandidate(ChartManifest.Note note, DisplayEntity entity, Vec3d origin, Vec3d direction,
                                              double maximumDistance, double maximumDistanceSquared) {
-        Vec3d hit = entity.getVisibilityBoundingBox()
+        Vec3d hit = entity.getVisibilityBoundingBox().expand(0.2)
                 .raycast(origin, origin.add(direction.multiply(maximumDistance))).orElse(null);
         if (hit == null) return null;
         double alongRay = hit.subtract(origin).dotProduct(direction);
@@ -86,7 +86,6 @@ final class NoteTargetResolver {
     private record RayCandidate(ChartManifest.Note note, Entity entity, double distanceSquared, double alongRay) {}
 
     private static ChartManifest.Note resolveTaggedEntity(Entity entity, List<ChartManifest.Note> notes, String chartId) {
-        if (!(entity instanceof DisplayEntity)) return null;
         String noteId = entity.getCommandTags().stream()
                 .filter(tag -> tag.startsWith(NOTE_TAG_PREFIX + chartId + ":"))
                 .map(tag -> tag.substring((NOTE_TAG_PREFIX + chartId + ":").length()))

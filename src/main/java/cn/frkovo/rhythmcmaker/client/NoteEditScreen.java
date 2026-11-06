@@ -17,8 +17,8 @@ import java.util.Locale;
 
 public final class NoteEditScreen extends Screen {
     private static final float WINDOW_WIDTH = 420.0f;
-    private final ChartManifest chart;
-    private final ChartManifest.Note note;
+    private ChartManifest chart;
+    private ChartManifest.Note note;
     private final boolean showOnRight;
     private boolean firstFrame = true;
     private boolean beatPartsInitialized;
@@ -26,6 +26,7 @@ public final class NoteEditScreen extends Screen {
     private int operationStatusColor = 0xFFFFFFFF;
     private long operationStatusUntilNanos;
     private int pendingHoldGroup = -1;
+    private String pendingHoldRepresentativeId;
     private boolean holdOperationPending;
     private final imgui.type.ImInt beatWhole = new imgui.type.ImInt();
     private final imgui.type.ImInt beatNumerator = new imgui.type.ImInt();
@@ -76,7 +77,7 @@ public final class NoteEditScreen extends Screen {
             }
             if (!operationStatus.isBlank()) ImGui.textColored(operationStatusColor, operationStatus);
             if (note.holdGroup >= 0) {
-                ImGui.text("该 Hold 可编辑起点，终点保持不变");
+                ImGui.text("移动或调整 Beat 会整体移动 Hold 并保持原时长");
                 ImGui.beginDisabled(holdOperationPending);
                 if (ImGui.button("解除粘合")) {
                     holdOperationPending = true;
@@ -134,6 +135,7 @@ public final class NoteEditScreen extends Screen {
                             ? connected.getFirst().holdGroup : HoldNoteGroupMerger.nextGroupId(chart.notes);
                     holdOperationPending = true;
                     pendingHoldGroup = group;
+                    pendingHoldRepresentativeId = connected.stream().min(java.util.Comparator.comparingDouble(member -> member.beat)).map(member -> member.id).orElse(note.id);
                     operationStatus = "正在粘合 " + connected.size() + " 个钻石音符…";
                     operationStatusColor = 0xFFFFFF66;
                     operationStatusUntilNanos = System.nanoTime() + 5_000_000_000L;
@@ -170,21 +172,12 @@ public final class NoteEditScreen extends Screen {
 
     private void update(MinecraftClient client, double x, double y, double beat) {
         if (client.player == null || !Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(beat) || beat < 0.0) return;
-        note.x = x;
-        note.y = y;
-        note.beat = beat;
-        note.z = -3.0 - beat * Math.max(1, Math.min(32, chart.divisionsPerBeat));
-        note.time = cn.frkovo.rhythmcmaker.chart.ChartTiming.beatToSeconds(chart, beat);
         client.player.networkHandler.sendChatCommand("rhythmc_note_edit " + note.id + " "
                 + String.format(Locale.ROOT, "%.9f %.9f %.9f", x, y, beat));
     }
 
     private void updateType(MinecraftClient client, int type) {
         if (type == note.type || client.player == null) return;
-        double relativeY = note.y - noteHeightBase(note.type);
-        note.type = type;
-        note.y = relativeY + noteHeightBase(type);
-        if (type != 2) note.holdGroup = -1;
         operationStatus = "正在更新音符类型…";
         operationStatusColor = 0xFFFFFF66;
         operationStatusUntilNanos = System.nanoTime() + 5_000_000_000L;
@@ -193,28 +186,39 @@ public final class NoteEditScreen extends Screen {
 
     public void showServerStatus(String message, boolean success) {
         operationStatus = message;
+        ChartManifest refreshed = ClientChartAccess.refreshActiveChartNow();
+        if (refreshed != null) chart = refreshed;
+        if (chart.notes == null) return;
         if (message.startsWith("已粘合 ") && success) {
-            java.util.List<ChartManifest.Note> connected = HoldNoteGroupMerger.connectedNotes(chart.notes, note);
-            int group = pendingHoldGroup >= 0 ? pendingHoldGroup : HoldNoteGroupMerger.nextGroupId(chart.notes);
-            for (ChartManifest.Note member : connected) member.holdGroup = group;
-            note.holdGroup = group;
+            ChartManifest.Note representative = chart.notes.stream()
+                    .filter(candidate -> candidate != null && pendingHoldRepresentativeId != null
+                            && pendingHoldRepresentativeId.equals(candidate.id))
+                    .findFirst().orElse(null);
+            if (representative != null) note = representative;
             holdOperationPending = false;
             pendingHoldGroup = -1;
+            pendingHoldRepresentativeId = null;
         } else if (message.startsWith("已解除粘合") && success) {
-            for (ChartManifest.Note member : chart.notes) {
-                if (member != null && member.trackId == note.trackId && member.holdGroup == pendingHoldGroup) member.holdGroup = -1;
-            }
-            note.holdGroup = -1;
+            ChartManifest.Note restored = chart.notes.stream()
+                    .filter(candidate -> candidate != null && candidate.id.equals(note.id))
+                    .findFirst().orElse(null);
+            if (restored != null) note = restored;
             holdOperationPending = false;
             pendingHoldGroup = -1;
+            pendingHoldRepresentativeId = null;
         } else if (message.startsWith("粘合失败")) {
             holdOperationPending = false;
             pendingHoldGroup = -1;
+            pendingHoldRepresentativeId = null;
+        } else if (message.startsWith("音符已更新") || message.startsWith("音符类型已改为 ")) {
+            ChartManifest.Note updated = chart.notes.stream()
+                    .filter(candidate -> candidate != null && candidate.id.equals(note.id))
+                    .findFirst().orElse(null);
+            if (updated != null) note = updated;
         }
         operationStatusColor = success ? 0xFF66FF66 : 0xFF7777FF;
         operationStatusUntilNanos = System.nanoTime() + 2_500_000_000L;
     }
-
     private static String noteTypeName(int type) {
         return switch (type) {
             case 1 -> "侦测器音符";

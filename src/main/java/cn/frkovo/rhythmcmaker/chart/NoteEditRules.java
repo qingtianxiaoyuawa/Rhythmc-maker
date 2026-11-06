@@ -22,6 +22,30 @@ public final class NoteEditRules {
         return hasFraction(x) || hasFraction(y) || hasFraction(z);
     }
 
+    public static boolean usesDisplayEntity(ChartManifest.Note note) {
+        return note != null && (note.holdStartBeat != null || requiresDisplayEntity(note.x, note.y, note.z));
+    }
+
+    public static boolean hasBlockRepresentationAt(ChartManifest.Note note, int type, double x, double y, double z) {
+        return note != null && note.type == type && note.holdStartBeat == null
+                && !requiresDisplayEntity(note.x, note.y, note.z)
+                && Math.abs(note.x - x) < FRACTION_EPSILON
+                && Math.abs(note.y - y) < FRACTION_EPSILON
+                && Math.abs(note.z - z) < FRACTION_EPSILON;
+    }
+
+    public static double editorDisplayCoordinate(double coordinate) {
+        return hasFraction(coordinate) ? coordinate : coordinate + 0.5;
+    }
+
+    public static double editorDisplayCenter(double start, double end) {
+        return (editorDisplayCoordinate(start) + editorDisplayCoordinate(end)) * 0.5;
+    }
+
+    public static double editorDisplaySpan(double start, double end) {
+        return Math.max(1.0, Math.abs(editorDisplayCoordinate(end) - editorDisplayCoordinate(start)) + 1.0);
+    }
+
     private static boolean hasFraction(double value) {
         return Math.abs(value - Math.rint(value)) > FRACTION_EPSILON;
     }

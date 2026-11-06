@@ -13,9 +13,43 @@ public final class HoldPlaybackRegression {
                 "judge frame color persists through seek rebuild");
         ChartManifest.Note editableNote = note("editable", 1.0, -1);
         ChartManifest.Note gluedNote = note("glued", 1.0, 4);
+        gluedNote.holdStartBeat = 1.0;
+        gluedNote.holdEndBeat = 4.0;
+        gluedNote.holdStartX = gluedNote.x;
+        gluedNote.holdEndX = gluedNote.x;
+        gluedNote.holdStartY = gluedNote.y;
+        gluedNote.holdEndY = gluedNote.y;
+        gluedNote.holdStartZ = gluedNote.z;
+        gluedNote.holdEndZ = gluedNote.z - 3.0;
         require(NoteEditRules.canEdit(editableNote), "unglued notes remain editable");
         require(NoteEditRules.canOpenEditor(gluedNote), "glued representative holds can open the editor");
+        require(NoteEditRules.usesDisplayEntity(gluedNote), "glued Hold representatives never retain block representation");
+        require(!NoteEditRules.hasBlockRepresentationAt(gluedNote, 2, 0.0, 65.0, -3.0), "glued Hold representatives are not mistaken for old note blocks");
+        require(NoteEditRules.hasBlockRepresentationAt(editableNote, editableNote.type, editableNote.x, editableNote.y, editableNote.z), "exact note block break identity matches");
+        require(!NoteEditRules.hasBlockRepresentationAt(editableNote, editableNote.type + 1, editableNote.x, editableNote.y, editableNote.z), "breaking another block type cannot delete a note");
         require(!NoteEditRules.canBreakRepresentation(gluedNote), "glued representative holds remain protected from direct breaking");
+        ChartManifest layoutChart = new ChartManifest();
+        layoutChart.bpm = 120.0;
+        layoutChart.divisionsPerBeat = 2;
+        layoutChart.notes.add(gluedNote);
+        EditorTrackLayout.of(5, 8).applyTo(layoutChart);
+        EditorNoteLayout.repositionNotes(layoutChart);
+        require(gluedNote.z == PlaybackCoordinates.editorWorldZAtBeat(layoutChart, gluedNote.beat) - 0.5, "layout changes reposition Hold representative by beat");
+        require(gluedNote.holdStartZ == PlaybackCoordinates.editorWorldZAtBeat(layoutChart, gluedNote.holdStartBeat) - 0.5, "layout changes reposition Hold start by beat");
+        require(gluedNote.holdEndZ == PlaybackCoordinates.editorWorldZAtBeat(layoutChart, gluedNote.holdEndBeat) - 0.5, "layout changes reposition Hold end by beat");
+        ChartManifest.Note restoredHoldNote = note("restore-hold", 2.0, 2);
+        restoredHoldNote.x = 2.0;
+        restoredHoldNote.y = 2.0;
+        java.util.List<ChartManifest.Note> restoredHoldNotes = new java.util.ArrayList<>(java.util.List.of(restoredHoldNote));
+        HoldNoteGroupMerger.translateNotes(restoredHoldNotes, layoutChart, 1.5, -1.0, 2.0);
+        require(restoredHoldNote.x == 3.5 && restoredHoldNote.y == 1.0 && restoredHoldNote.beat == 4.0,
+                "ungluing a moved Hold restores notes with the same translation");
+        require(restoredHoldNote.z == PlaybackCoordinates.editorWorldZAtBeat(layoutChart, 4.0) - 0.5,
+                "unglued backup z is recalculated from its shifted beat");
+        require(NoteEditRules.editorDisplayCenter(0.0, -3.0) == -1.0, "hold model centers use visible integer block centers");
+        require(NoteEditRules.editorDisplaySpan(0.0, -3.0) == 4.0, "hold model spans touch both outer block faces");
+        require(NoteEditRules.editorDisplayCenter(0.0, -3.5) == -1.5, "mixed fractional hold coordinates remain centered");
+        require(NoteEditRules.editorDisplaySpan(0.0, -3.5) == 5.0, "mixed fractional hold span follows rendered centers");
         require(NoteEditRules.requiresDisplayEntity(1.25, 66.0, -4.5),
                 "fractional note coordinates require a display entity");
         require(!NoteEditRules.requiresDisplayEntity(1.0, 66.0, -4.0),

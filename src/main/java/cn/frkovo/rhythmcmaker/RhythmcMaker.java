@@ -8,6 +8,7 @@ import cn.frkovo.rhythmcmaker.chart.ChartTiming;
 import cn.frkovo.rhythmcmaker.chart.HoldInterval;
 import cn.frkovo.rhythmcmaker.chart.HoldNoteGroupMerger;
 import cn.frkovo.rhythmcmaker.chart.EditorTrackLayout;
+import cn.frkovo.rhythmcmaker.chart.EditorNoteLayout;
 import cn.frkovo.rhythmcmaker.chart.PlaybackCoordinates;
 import cn.frkovo.rhythmcmaker.chart.TrackPlayback;
 import cn.frkovo.rhythmcmaker.client.playback.HoldPlaybackStateMachine;
@@ -119,15 +120,9 @@ public final class RhythmcMaker implements ModInitializer {
     public static final Item SCENE_EDIT_ITEM = registerMenuItem("scene_edit", "场景编辑（右键打开）");
     public static final Item EFFECT_TRACK_ITEM = registerMenuItem("effect_track", "特效编辑器（右键打开）");
     public static final Item SAVE_SCENE_ITEM = registerMenuItem("save_scene", "保存场景（右键保存并返回）");
-    public static final Item QUICK_FUNCTIONS_ITEM = registerMenuItem("quick_functions", "快捷功能（右键打开）");
     public static final Item CHART_MENU_ITEM = registerMenuItem("chart_menu", "谱面菜单");
-    public static final Item CHART_SETTINGS_ITEM = registerMenuItem("chart_settings", "谱面设置");
     public static final Item MORE_OPTIONS_RETURN_ITEM = registerMenuItem("more_options_return", "返回（右键打开）");
-    public static final Item CHART_INFO_ITEM = registerMenuItem("chart_info", "谱面信息（右键打开）");
     public static final Item PLAY_ITEM = registerMenuItem("play", "播放");
-    public static final Item INCREASE_BEATS_ITEM = registerMenuItem("increase_beats", "增加小节拍数");
-    public static final Item DECREASE_BEATS_ITEM = registerMenuItem("decrease_beats", "减少小节拍数");
-    public static final Item BEAT_SCORE_ITEM = registerMenuItem("chunk_score", "修改制谱器轨道");
     public static final Item EXPORT_ITEM = registerMenuItem("export", "导出（右键打开）");
     private static final Map<UUID, String> ACTIVE_CHARTS = new ConcurrentHashMap<>();
     private static final Map<UUID, Integer> ACTIVE_CHART_LANES = new ConcurrentHashMap<>();
@@ -347,7 +342,7 @@ public final class RhythmcMaker implements ModInitializer {
             chart.notes.add(note);
             invalidateTrackSnapUndo(serverPlayer.getUuid());
             try { saveChart(serverWorld.getServer(), chart); } catch (IOException ignored) { }
-            refreshNoteDisplays(serverWorld, chart);
+            updateNoteWorldRepresentation(serverWorld, chart, note, note.x, note.y, note.z, note.type);
             return ActionResult.SUCCESS;
         });
         UseItemCallback.EVENT.register((player, world, hand) -> {
@@ -396,10 +391,16 @@ public final class RhythmcMaker implements ModInitializer {
                 serverPlayer.sendMessage(Text.literal("请先解除粘合，再破坏该音符"), true);
                 return false;
             }
-            // A stale note block left by a previous layout must remain breakable.
-            if (!containsNote(chart, serverWorld, pos)) return true;
-            removeNote(chart, serverWorld, pos, serverPlayer.getUuid());
             return true;
+        });
+        PlayerBlockBreakEvents.AFTER.register((world, player, pos, state, blockEntity) -> {
+            if (!(world instanceof ServerWorld serverWorld) || !isEditorWorld(world)
+                    || !(player instanceof ServerPlayerEntity serverPlayer) || !isNoteBlock(state.getBlock())) return;
+            ChartManifest chart = loadActiveChart(serverPlayer, serverWorld.getServer());
+            int brokenType = noteTypeForBlockState(state);
+            boolean exactNoteBlock = chart != null && chart.notes != null && chart.notes.stream()
+                    .anyMatch(note -> NoteEditRules.hasBlockRepresentationAt(note, brokenType, pos.getX(), pos.getY(), pos.getZ()));
+            if (exactNoteBlock) removeNote(chart, serverWorld, pos, brokenType, serverPlayer.getUuid());
         });
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
             ServerPlayerEntity player = handler.getPlayer();
@@ -898,6 +899,7 @@ public final class RhythmcMaker implements ModInitializer {
 
         int previousBeat = currentBeat(player, chart, previousDivisions);
         Map<String, BlockPos> oldNotePositions = captureNotePositions(chart);
+        java.util.List<ChartManifest.Note> originalNotes = copyNotes(chart.notes);
         ServerWorld editor = null;
         try { editor = source.getServer().getWorld(ChartDimensionManager.key(chart)); } catch (IOException ignored) { }
         try {
@@ -910,11 +912,11 @@ public final class RhythmcMaker implements ModInitializer {
                 EDITOR_AREA_TASKS.remove(editor.getRegistryKey());
                 EDITOR_NOTE_REFRESH_TASKS.remove(editor.getRegistryKey());
                 EDITOR_NOTE_DISPLAY_SWEEP_TASKS.remove(editor.getRegistryKey());
-                clearNoteBlocks(editor, oldNotePositions);
             }
             EditorTrackLayout.of(targetLaneCount, targetDivisions).applyTo(chart);
             ACTIVE_CHART_LANES.put(player.getUuid(), targetLaneCount);
             repositionNotes(chart);
+            if (editor != null) clearNoteBlocks(editor, chart, oldNotePositions);
             chart.trackLength = calculateTrackLength(chart);
             saveChart(source.getServer(), chart);
             invalidateTrackSnapUndo(player.getUuid());
@@ -931,6 +933,7 @@ public final class RhythmcMaker implements ModInitializer {
             EDITOR_TRACK_ADJUSTMENTS.remove(player.getUuid());
             EDITOR_TRACK_ADJUSTMENT_NOTICES.remove(player.getUuid());
             EditorTrackLayout.of(previousLaneCount, previousDivisions).applyTo(chart);
+            chart.notes = originalNotes;
             ACTIVE_CHART_LANES.put(player.getUuid(), previousLaneCount);
             repositionNotes(chart);
             chart.trackLength = calculateTrackLength(chart);
@@ -1051,7 +1054,7 @@ public final class RhythmcMaker implements ModInitializer {
     private static void finishTrackSnapUndoTask(MinecraftServer server, UUID playerId, TrackSnapUndoTask task) {
         if (!TRACK_SNAP_UNDO_TASKS.remove(playerId, task)) return;
         try {
-            clearNoteBlocks(task.world, captureNotePositions(task.chart));
+            clearCurrentNoteBlocks(task.world, task.chart);
             java.util.List<ChartManifest.Note> restored = new java.util.ArrayList<>();
             java.util.Set<String> snappedNoteIds = task.undo.snappedNoteIds;
             for (ChartManifest.Note note : task.undo.originalNotes) {
@@ -1190,30 +1193,39 @@ private static void flushActiveChart(MinecraftServer server, ServerPlayerEntity 
         ChartManifest chart = loadActiveChart(player, source.getServer());
         if (chart == null || chart.notes == null) return 0;
         ChartManifest.Note note = chart.notes.stream().filter(candidate -> candidate != null && noteId.equals(candidate.id)).findFirst().orElse(null);
-        if (note == null) return 0;
+        if (note == null || !Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(beat) || beat < 0.0) return 0;
         double oldX = note.x;
         double oldY = note.y;
         double oldZ = note.z;
+        double oldBeat = note.beat;
         int previousHoldGroup = note.holdGroup;
-        double newZ = -3.0 - beat * divisionsPerBeat(chart);
+        double newZ = PlaybackCoordinates.editorWorldZAtBeat(chart, beat) - 0.5;
         note.x = x;
         note.y = y;
         note.z = newZ;
         note.beat = beat;
         note.time = ChartTiming.beatToSeconds(chart, beat);
         if (note.holdGroup >= 0 && note.holdStartBeat != null) {
+            double beatDelta = beat - oldBeat;
+            double xDelta = x - oldX;
+            double yDelta = y - oldY;
             note.holdStartBeat = beat;
             note.holdStartX = x;
             note.holdStartY = y;
             note.holdStartZ = newZ;
+            note.holdEndBeat = Math.max(beat, note.holdEndBeat == null ? beat : note.holdEndBeat + beatDelta);
+            note.holdEndX = (note.holdEndX == null ? oldX : note.holdEndX) + xDelta;
+            note.holdEndY = (note.holdEndY == null ? oldY : note.holdEndY) + yDelta;
+            note.holdEndZ = PlaybackCoordinates.editorWorldZAtBeat(chart, note.holdEndBeat) - 0.5;
         }
-        updateNoteWorldRepresentation(world, chart, note, oldX, oldY, oldZ);
+        updateNoteWorldRepresentation(world, chart, note, oldX, oldY, oldZ, note.type);
         invalidateTrackSnapUndo(player.getUuid());
         if (previousHoldGroup >= 0) rebuildHoldLinks(world, chart, note.trackId, previousHoldGroup);
         updateChartTotalBeats(chart);
         CachedChartState state = cacheChart(source.getServer(), chart);
         synchronized (state) { state.revision++; state.dirty = true; }
         queueChartSave(source.getServer(), state);
+        player.sendMessage(Text.literal("音符已更新"), true);
         return 1;
     }
 
@@ -1240,11 +1252,16 @@ private static int glueHoldNotes(net.minecraft.server.command.ServerCommandSourc
         int group = HoldNoteGroupMerger.nextGroupId(chart.notes);
         Path backup = holdBackupPath(source.getServer(), chart.id, group);
         writeHoldBackup(backup, connected);
+        Set<String> connectedIds = connected.stream().map(member -> member.id).collect(java.util.stream.Collectors.toSet());
         for (ChartManifest.Note member : connected) {
             removeNoteDisplay(world, noteTag(chart.id, member.id));
             if (!hasFraction(member.x) && !hasFraction(member.y) && !hasFraction(member.z)) {
                 BlockPos position = BlockPos.ofFloored(member.x, member.y, member.z);
-                if (noteTypeForBlockState(world.getBlockState(position)) >= 0) world.setBlockState(position, Blocks.AIR.getDefaultState(), 3);
+                boolean occupiedByOtherNote = chart.notes.stream().anyMatch(candidate -> candidate != null
+                        && !connectedIds.contains(candidate.id) && isBlockNoteAt(candidate, position));
+                if (!occupiedByOtherNote && noteTypeForBlockState(world.getBlockState(position)) == member.type) {
+                    world.setBlockState(position, Blocks.AIR.getDefaultState(), 3);
+                }
             }
         }
         ChartManifest.Note representative = copyNote(first);
@@ -1263,7 +1280,7 @@ private static int glueHoldNotes(net.minecraft.server.command.ServerCommandSourc
         invalidateTrackSnapUndo(player.getUuid());
         CachedChartState state = cacheChart(source.getServer(), chart);
         synchronized (state) { state.revision++; state.dirty = true; }
-        refreshNoteDisplays(world, chart);
+        updateNoteWorldRepresentation(world, chart, representative, representative.x, representative.y, representative.z, representative.type);
         queueChartSave(source.getServer(), state);
         player.sendMessage(Text.literal("已粘合 " + connected.size() + " 个钻石音符"), true);
         return connected.size();
@@ -1287,6 +1304,11 @@ private static int glueHoldNotes(net.minecraft.server.command.ServerCommandSourc
         java.lang.reflect.Type noteListType = new com.google.gson.reflect.TypeToken<java.util.List<ChartManifest.Note>>() {}.getType();
         java.util.List<ChartManifest.Note> restored = readHoldBackup(backup, noteListType);
         if (restored == null || restored.isEmpty()) return 0;
+        ChartManifest.Note originalStart = restored.stream().min(java.util.Comparator.comparingDouble(note -> note.beat)).orElseThrow();
+        double xOffset = (selected.holdStartX == null ? selected.x : selected.holdStartX) - originalStart.x;
+        double yOffset = (selected.holdStartY == null ? selected.y : selected.holdStartY) - originalStart.y;
+        double beatOffset = (selected.holdStartBeat == null ? selected.beat : selected.holdStartBeat) - originalStart.beat;
+        HoldNoteGroupMerger.translateNotes(restored, chart, xOffset, yOffset, beatOffset);
         removeNoteDisplay(world, noteTag(chart.id, selected.id));
         chart.notes.remove(selected);
         chart.notes.addAll(restored);
@@ -1294,7 +1316,9 @@ private static int glueHoldNotes(net.minecraft.server.command.ServerCommandSourc
         deleteHoldBackup(backup);
         CachedChartState state = cacheChart(source.getServer(), chart);
         synchronized (state) { state.revision++; state.dirty = true; }
-        refreshNoteDisplays(world, chart);
+        for (ChartManifest.Note restoredNote : restored) {
+            updateNoteWorldRepresentation(world, chart, restoredNote, restoredNote.x, restoredNote.y, restoredNote.z, restoredNote.type);
+        }
         queueChartSave(source.getServer(), state);
         player.sendMessage(Text.literal("已解除粘合，共 " + restored.size() + " 个钻石音符"), true);
         return restored.size();
@@ -1351,13 +1375,14 @@ private static Path holdBackupPath(MinecraftServer server, String chartId, int g
         double relativeY = note.y - noteHeightBase(oldType);
         double oldX = note.x;
         double oldY = note.y;
+        double oldZ = note.z;
         double newY = relativeY + noteHeightBase(type);
         int previousHoldGroup = note.holdGroup;
         if (previousHoldGroup >= 0) removeHoldLinks(world, chart.id, note.trackId, previousHoldGroup);
         note.type = type;
         note.y = newY;
         if (type != 2) note.holdGroup = -1;
-        updateNoteWorldRepresentation(world, chart, note, oldX, oldY, note.z);
+        updateNoteWorldRepresentation(world, chart, note, oldX, oldY, oldZ, oldType);
         if (previousHoldGroup >= 0 && type != 2) rebuildHoldLinks(world, chart, note.trackId, previousHoldGroup);
         if (type == 2 && note.holdGroup >= 0) rebuildHoldLinks(world, chart, note.trackId, note.holdGroup);
         invalidateTrackSnapUndo(player.getUuid());
@@ -3963,7 +3988,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 nextHoldVisualIndex++;
                 if (shouldHide(start)) continue;
                 double distance = relativeDistance(start, songTime);
-                if (!Double.isFinite(distance) || distance < 0 || distance > PLAYBACK_APPROACH_DISTANCE) continue;
+                if (!Double.isFinite(distance) || distance < 0.0 || distance > PLAYBACK_APPROACH_DISTANCE) continue;
                 createHoldDisplays(player, interval, songTime);
             }
             for (String intervalId : activeHoldIntervalIds) {
@@ -3979,14 +4004,21 @@ private static void showSceneBoundary(MinecraftServer server) {
                     iterator.remove();
                     continue;
                 }
-                if (updatePositions) {
-                    List<ChartManifest.Note> visualNotes = holdVisualNotes(interval);
-                    List<DisplayEntity.BlockDisplayEntity> displays = entry.getValue();
-                    for (int index = 0; index < displays.size(); index++) {
-                        applyNotePose(displays.get(index), visualNotes.get(index), songTime,
-                                PLAYBACK_FRAME_Z - Math.max(0.0, relativeDistance(visualNotes.get(index), songTime)));
+                List<ChartManifest.Note> visualNotes = holdVisualNotes(interval);
+                List<DisplayEntity.BlockDisplayEntity> displays = entry.getValue();
+                for (int index = 0; index < displays.size() && index < visualNotes.size(); index++) {
+                    DisplayEntity.BlockDisplayEntity display = displays.get(index);
+                    if (display == null) continue;
+                    ChartManifest.Note visualNote = visualNotes.get(index);
+                    double distance = relativeDistance(visualNote, songTime);
+                    if (!Double.isFinite(distance) || distance <= 0.0) {
+                        recycle(visualNote, display);
+                        displays.set(index, null);
+                        continue;
                     }
+                    if (updatePositions) applyNotePose(display, visualNote, songTime, PLAYBACK_FRAME_Z - distance);
                 }
+                if (displays.stream().allMatch(java.util.Objects::isNull)) iterator.remove();
             }
         }
         private void createHoldDisplays(ServerPlayerEntity player, HoldInterval interval, double songTime) {
@@ -3996,10 +4028,17 @@ private static void showSceneBoundary(MinecraftServer server) {
             Team team = glowTeams.computeIfAbsent(representative.type, this::createGlowTeam);
             for (ChartManifest.Note visualNote : visualNotes) {
                 double distance = relativeDistance(visualNote, songTime);
-                double displayZ = PLAYBACK_FRAME_Z - Math.max(0.0, distance);
+                if (!Double.isFinite(distance) || distance <= 0.0) {
+                    displays.add(null);
+                    continue;
+                }
+                double displayZ = PLAYBACK_FRAME_Z - distance;
                 double[] position = displayPosition(visualNote, songTime, displayZ);
                 DisplayEntity.BlockDisplayEntity display = acquire(visualNote, blockStateForType(visualNote.type), position[0], position[1], position[2]);
-                if (display == null) continue;
+                if (display == null) {
+                    displays.add(null);
+                    continue;
+                }
                 applyNotePose(display, visualNote, songTime, displayZ);
                 display.addCommandTag("rhythmc_preview:" + player.getUuid());
                 display.setGlowing(true);
@@ -4008,7 +4047,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 }
                 displays.add(display);
             }
-            if (!displays.isEmpty()) holdDisplays.put(interval.id(), displays);
+            if (displays.stream().anyMatch(java.util.Objects::nonNull)) holdDisplays.put(interval.id(), displays);
         }
         private List<ChartManifest.Note> holdVisualNotes(HoldInterval interval) {
             ChartManifest.Note representative = interval.members().getFirst();
@@ -4061,6 +4100,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
         private void recycleHoldDisplays(HoldInterval interval, List<DisplayEntity.BlockDisplayEntity> displays) {
             for (DisplayEntity.BlockDisplayEntity display : displays) {
+                if (display == null) continue;
                 if (interval == null) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
                 else recycle(interval.members().getFirst(), display);
             }
@@ -4909,16 +4949,12 @@ private static void showSceneBoundary(MinecraftServer server) {
     }
 
     private static boolean isBlockNoteAt(ChartManifest.Note note, BlockPos pos) {
-        return !hasFraction(note.x) && !hasFraction(note.y) && !hasFraction(note.z)
-            && Math.round(note.x) == pos.getX()
-            && Math.round(note.y) == pos.getY()
-            && Math.round(note.z) == pos.getZ();
+        return note != null && note.holdStartBeat == null && !hasFraction(note.x) && !hasFraction(note.y) && !hasFraction(note.z)
+            && note.x == pos.getX() && note.y == pos.getY() && note.z == pos.getZ();
     }
-    private static void removeNote(ChartManifest chart, ServerWorld world, BlockPos pos, UUID playerId) {
+    private static void removeNote(ChartManifest chart, ServerWorld world, BlockPos pos, int brokenType, UUID playerId) {
         chart.notes.removeIf(note -> {
-            // Fractional notes are represented by BlockDisplay entities and can visually overlap
-            // a block grid position. Breaking a newly placed block must not delete that note.
-            boolean matches = isBlockNoteAt(note, pos);
+            boolean matches = note != null && note.type == brokenType && isBlockNoteAt(note, pos);
             if (matches) removeNoteDisplay(world, noteTag(chart.id, note.id));
             return matches;
         });
@@ -4926,14 +4962,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         try { saveChart(world.getServer(), chart); } catch (IOException ignored) { }
     }
     private static void repositionNotes(ChartManifest chart) {
-        if (chart.notes == null) return;
-        ChartTiming.Prepared timing = ChartTiming.prepare(chart);
-        for (ChartManifest.Note note : chart.notes) {
-            double beat = Double.isFinite(note.beat) ? Math.max(0.0, note.beat) : timing.secondsToBeat(note.time);
-            note.beat = beat;
-            note.time = timing.beatToSeconds(beat);
-            note.z = PlaybackCoordinates.editorWorldZAtBeat(chart, beat) - 0.5;
-        }
+        EditorNoteLayout.repositionNotes(chart);
     }
     private static Map<String, BlockPos> captureNotePositions(ChartManifest chart) {
         Map<String, BlockPos> positions = new java.util.HashMap<>();
@@ -4944,13 +4973,32 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
         return positions;
     }
-    private static void clearNoteBlocks(ServerWorld world, Map<String, BlockPos> positions) {
-        for (BlockPos pos : positions.values()) {
-            if (isNoteBlock(world.getBlockState(pos).getBlock())) world.setBlockState(pos, Blocks.AIR.getDefaultState(), 3);
+    private static void clearNoteBlocks(ServerWorld world, ChartManifest chart, Map<String, BlockPos> positions) {
+        for (Map.Entry<String, BlockPos> entry : positions.entrySet()) {
+            BlockPos position = entry.getValue();
+            boolean occupied = chart.notes.stream().anyMatch(note -> note != null && note.holdStartBeat == null && isBlockNoteAt(note, position));
+            if (!occupied && isNoteBlock(world.getBlockState(position).getBlock())) world.setBlockState(position, Blocks.AIR.getDefaultState(), 3);
+        }
+    }
+    private static void clearCurrentNoteBlocks(ServerWorld world, ChartManifest chart) {
+        Map<String, BlockPos> positions = captureNotePositions(chart);
+        for (Map.Entry<String, BlockPos> entry : positions.entrySet()) {
+            ChartManifest.Note note = chart.notes.stream().filter(candidate -> candidate != null
+                    && entry.getKey().equals(candidate.id) && candidate.holdStartBeat == null).findFirst().orElse(null);
+            if (note != null && noteTypeForBlockState(world.getBlockState(entry.getValue())) == note.type) {
+                world.setBlockState(entry.getValue(), Blocks.AIR.getDefaultState(), 3);
+            }
         }
     }
     private static void clearChartNoteBlocks(ServerWorld world, ChartManifest chart) {
-        clearNoteBlocks(world, captureNotePositions(chart));
+        Map<String, BlockPos> positions = captureNotePositions(chart);
+        for (Map.Entry<String, BlockPos> entry : positions.entrySet()) {
+            ChartManifest.Note note = chart.notes.stream().filter(candidate -> candidate != null
+                    && entry.getKey().equals(candidate.id) && candidate.holdStartBeat == null).findFirst().orElse(null);
+            if (note != null && noteTypeForBlockState(world.getBlockState(entry.getValue())) == note.type) {
+                world.setBlockState(entry.getValue(), Blocks.AIR.getDefaultState(), 3);
+            }
+        }
     }
     private static void cleanupStaleNoteDisplays(ServerWorld world, ChunkPos chunkPos) {
         ChartManifest chart = chartForWorld(world);
@@ -5098,27 +5146,9 @@ private static void showSceneBoundary(MinecraftServer server) {
             int budget = 64;
             while (budget-- > 0 && task.cursor < task.notes.size()) {
                 ChartManifest.Note note = task.notes.get(task.cursor++);
-                if (note == null) continue;
-                if (note.holdStartBeat == null && !hasFraction(note.x) && !hasFraction(note.y) && !hasFraction(note.z)) {
-                    world.setBlockState(BlockPos.ofFloored(note.x, note.y, note.z), blockStateForType(note.type), 3);
-                    continue;
-                }
-                DisplayEntity.BlockDisplayEntity display = EntityType.BLOCK_DISPLAY.create(world, SpawnReason.COMMAND);
-                if (display == null) continue;
-display.setBlockState(blockStateForType(note.type));
-                if (note.holdStartX != null && note.holdEndX != null && note.holdStartZ != null && note.holdEndZ != null) {
-                    applyEditorHoldTransformation(display, note);
-                } else {
-                    display.setPosition(note.x, note.y, note.z);
-                }
-                display.setCustomName(Text.literal(noteReferenceName(task.chartId, note.id)));
-                display.setCustomNameVisible(false);
-                display.setNoGravity(true);
-                display.setInvulnerable(true);
-                display.addCommandTag(noteTag(task.chartId, note.id));
-                display.addCommandTag(noteDisplayGenerationTag(task.chartId, task.generation));
-                ensureEffectPreviewDisplayRange(display);
-                world.spawnEntity(display);
+                if (note == null || note.id == null || note.id.isBlank() || task.chart.notes == null
+                        || task.chart.notes.stream().noneMatch(current -> current != null && note.id.equals(current.id))) continue;
+                updateNoteWorldRepresentation(world, task.chart, note, note.x, note.y, note.z, note.type);
             }
             if (task.cursor >= task.notes.size()) {
                 removeStaleNoteDisplays(world, task.chartId, task.generation);
@@ -5129,11 +5159,13 @@ display.setBlockState(blockStateForType(note.type));
     private static final class EditorNoteRefreshTask {
         private final String chartId;
         private final long generation;
+        private final ChartManifest chart;
         private final java.util.List<ChartManifest.Note> notes;
         private int cursor;
         private EditorNoteRefreshTask(ChartManifest chart, long generation) {
             this.chartId = chart.id;
             this.generation = generation;
+            this.chart = chart;
             this.notes = new java.util.ArrayList<>(chart.notes == null ? java.util.List.of() : chart.notes);
         }
     }
@@ -5176,50 +5208,51 @@ display.setBlockState(blockStateForType(note.type));
     }
 
     private static void updateNoteWorldRepresentation(ServerWorld world, ChartManifest chart, ChartManifest.Note note,
-                                                      double previousX, double previousY, double previousZ) {
-        boolean previousUsesDisplay = NoteEditRules.requiresDisplayEntity(previousX, previousY, previousZ) || note.holdStartBeat != null;
-        boolean currentUsesDisplay = NoteEditRules.requiresDisplayEntity(note.x, note.y, note.z) || note.holdStartBeat != null;
+                                                      double previousX, double previousY, double previousZ, int previousType) {
+        boolean previousUsesDisplay = note.holdStartBeat != null || NoteEditRules.requiresDisplayEntity(previousX, previousY, previousZ);
+        boolean currentUsesDisplay = NoteEditRules.usesDisplayEntity(note);
         BlockPos previousPosition = BlockPos.ofFloored(previousX, previousY, previousZ);
         BlockPos currentPosition = BlockPos.ofFloored(note.x, note.y, note.z);
-        DisplayEntity.BlockDisplayEntity display = world.getEntitiesByType(EntityType.BLOCK_DISPLAY,
-                entity -> entity.getCommandTags().contains(noteTag(chart.id, note.id))).stream().findFirst().orElse(null);
-        if (!previousUsesDisplay && (currentUsesDisplay || !previousPosition.equals(currentPosition))
-                && noteTypeForBlockState(world.getBlockState(previousPosition)) >= 0) {
+        boolean samePosition = previousPosition.equals(currentPosition);
+        boolean otherAtPreviousPosition = chart.notes.stream().anyMatch(candidate -> candidate != null
+                && !note.id.equals(candidate.id) && isBlockNoteAt(candidate, previousPosition));
+        if (!previousUsesDisplay && (currentUsesDisplay || !samePosition)
+                && noteTypeForBlockState(world.getBlockState(previousPosition)) == previousType && !otherAtPreviousPosition) {
             world.setBlockState(previousPosition, Blocks.AIR.getDefaultState(), 3);
         }
+        List<? extends DisplayEntity.BlockDisplayEntity> taggedDisplays = world.getEntitiesByType(EntityType.BLOCK_DISPLAY,
+                entity -> entity.getCommandTags().contains(noteTag(chart.id, note.id)));
         if (currentUsesDisplay) {
-            if (display == null) {
+            DisplayEntity.BlockDisplayEntity display = taggedDisplays.isEmpty() ? null : taggedDisplays.getFirst();
+            for (int index = 1; index < taggedDisplays.size(); index++) taggedDisplays.get(index).remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+            boolean newDisplay = display == null;
+            if (newDisplay) {
                 display = EntityType.BLOCK_DISPLAY.create(world, SpawnReason.COMMAND);
                 if (display == null) return;
                 display.addCommandTag(noteTag(chart.id, note.id));
-                display.addCommandTag(noteDisplayGenerationTag(chart.id, noteDisplayGeneration(chart)));
                 display.setNoGravity(true);
                 display.setInvulnerable(true);
                 ensureEffectPreviewDisplayRange(display);
-                display.setCustomName(Text.literal(noteReferenceName(chart.id, note.id)));
-                display.setCustomNameVisible(false);
-                display.setBlockState(blockStateForType(note.type));
-                if (note.holdStartX != null && note.holdEndX != null && note.holdStartZ != null && note.holdEndZ != null) {
-                    applyEditorHoldTransformation(display, note);
-                } else {
-                    display.setPosition(note.x, note.y, note.z);
-                }
-                world.spawnEntity(display);
-            } else {
-                display.setCustomName(Text.literal(noteReferenceName(chart.id, note.id)));
-                display.setCustomNameVisible(false);
-                display.setBlockState(blockStateForType(note.type));
-                if (note.holdStartX != null && note.holdEndX != null && note.holdStartZ != null && note.holdEndZ != null) {
-                    applyEditorHoldTransformation(display, note);
-                } else {
-                    display.setPosition(note.x, note.y, note.z);
-                }
-                display.addCommandTag(noteDisplayGenerationTag(chart.id, noteDisplayGeneration(chart)));
             }
+            display.setCustomName(Text.literal(noteReferenceName(chart.id, note.id)));
+            display.setCustomNameVisible(false);
+            display.setBlockState(blockStateForType(note.type));
+            if (note.holdStartX != null && note.holdEndX != null && note.holdStartZ != null && note.holdEndZ != null) applyEditorHoldTransformation(display, note);
+            else {
+                display.setTransformation(AffineTransformation.identity());
+                display.setPosition(note.x, note.y, note.z);
+            }
+            String generation = noteDisplayGenerationTag(chart.id, noteDisplayGeneration(chart));
+            if (!display.getCommandTags().contains(generation)) display.addCommandTag(generation);
+            if (newDisplay) world.spawnEntity(display);
             return;
         }
-        if (display != null) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
-        if (world.getBlockState(currentPosition).isAir() || previousPosition.equals(currentPosition)) {
+        for (DisplayEntity.BlockDisplayEntity display : taggedDisplays) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+        boolean otherAtCurrentPosition = chart.notes.stream().anyMatch(candidate -> candidate != null
+                && !note.id.equals(candidate.id) && isBlockNoteAt(candidate, currentPosition));
+        int currentBlockType = noteTypeForBlockState(world.getBlockState(currentPosition));
+        boolean replaceOwnBlock = samePosition && currentBlockType == previousType;
+        if (!otherAtCurrentPosition && (world.getBlockState(currentPosition).isAir() || replaceOwnBlock)) {
             world.setBlockState(currentPosition, blockStateForType(note.type), 3);
         }
     }

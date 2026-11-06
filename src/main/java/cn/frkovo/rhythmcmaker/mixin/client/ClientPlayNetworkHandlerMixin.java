@@ -18,6 +18,7 @@ abstract class ClientPlayNetworkHandlerMixin {
         String value = packet.text().getString();
         if (value.startsWith("已粘合 ")) screen.showServerStatus(value, true);
         else if (value.startsWith("粘合失败")) screen.showServerStatus(value, false);
+        else if (value.startsWith("音符已更新")) screen.showServerStatus(value, true);
         else if (value.startsWith("音符类型已改为 ")) screen.showServerStatus(value, true);
         else if (value.startsWith("已解除粘合")) screen.showServerStatus(value, true);
     }

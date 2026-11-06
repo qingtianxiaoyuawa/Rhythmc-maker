@@ -34,6 +34,20 @@ public final class HoldNoteGroupMerger {
         return new ArrayList<>(connected);
     }
 
+    public static void translateNotes(List<ChartManifest.Note> notes, ChartManifest chart,
+                                     double xOffset, double yOffset, double beatOffset) {
+        if (notes == null || chart == null) return;
+        ChartTiming.Prepared timing = ChartTiming.prepare(chart);
+        for (ChartManifest.Note note : notes) {
+            if (note == null) continue;
+            note.x += xOffset;
+            note.y += yOffset;
+            note.beat = Math.max(0.0, note.beat + beatOffset);
+            note.time = timing.beatToSeconds(note.beat);
+            note.z = PlaybackCoordinates.editorWorldZAtBeat(chart, note.beat) - 0.5;
+        }
+    }
+
     public static int nextGroupId(List<ChartManifest.Note> notes) {
         return notes.stream().filter(java.util.Objects::nonNull).mapToInt(note -> note.holdGroup).max().orElse(-1) + 1;
     }

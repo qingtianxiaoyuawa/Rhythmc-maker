@@ -74,7 +74,6 @@ public final class ChartMenuScreen extends Screen {
         ImGui.text("轨道高度"); ImGui.textDisabled("高度设置后续加入（当前高度保持不变）"); if (ImGui.button("确认修改##track")) {
             if (!EditorTrackLayout.isSupportedDivisionsPerBeat(divisions.get()) || !EditorTrackLayout.isSupportedLaneCount(lanes.get())) return;
             EditorTrackLayout layout = EditorTrackLayout.of(lanes.get(), divisions.get());
-            ClientChartAccess.applyLocalLayout(layout);
             PlaceholderScreen.invalidateTrackSnapState();
             RhythmcMakerClient.sendChartCommand("rhythmc_layout_set " + layout.divisionsPerBeat() + " " + layout.laneCount());
             ClientChartAccess.status("正在应用制谱器轨道：" + layout.laneCount() + " × " + layout.divisionsPerBeat());
