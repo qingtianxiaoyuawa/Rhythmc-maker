@@ -1,11 +1,18 @@
 package cn.frkovo.rhythmcmaker.chart;
 
 import cn.frkovo.rhythmcmaker.client.playback.HoldPlaybackStateMachine;
+import cn.frkovo.rhythmcmaker.client.playback.HoldVisualPreloadRules;
 
 import java.util.List;
 
 public final class HoldPlaybackRegression {
     public static void main(String[] args) {
+        require(HoldVisualPreloadRules.shouldWaitForApproach(30.0, 25.0),
+                "hold preload index waits until the interval enters the visual approach distance");
+        require(!HoldVisualPreloadRules.shouldWaitForApproach(25.0, 25.0),
+                "hold interval becomes preloadable at the approach boundary");
+        require(!HoldVisualPreloadRules.shouldWaitForApproach(Double.NaN, 25.0),
+                "invalid hold distance does not stall the preload index");
         require(cn.frkovo.rhythmcmaker.common.effect.parameter.EffectParameterSchema.getInstance().find("JUDGE_FRAME_COLOR") != null,
                 "reference judge frame color effect is registered");
         require(cn.frkovo.rhythmcmaker.client.playback.PersistentEffectStateFold.latestEventIndexes(

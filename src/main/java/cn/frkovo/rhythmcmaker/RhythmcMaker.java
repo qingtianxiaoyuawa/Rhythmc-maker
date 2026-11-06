@@ -4020,10 +4020,14 @@ private static void showSceneBoundary(MinecraftServer server) {
                 ChartManifest.Note start = interval.members().getFirst();
                 double startTime = noteTimes.getOrDefault(start.id, Double.POSITIVE_INFINITY);
                 if (startTime - songTime > PLAYBACK_MAX_PRELOAD_SECONDS) break;
-                nextHoldVisualIndex++;
-                if (shouldHide(start)) continue;
+                if (shouldHide(start)) {
+                    nextHoldVisualIndex++;
+                    continue;
+                }
                 double distance = relativeDistance(start, songTime);
-                if (!Double.isFinite(distance) || distance < 0.0 || distance > PLAYBACK_APPROACH_DISTANCE) continue;
+                if (cn.frkovo.rhythmcmaker.client.playback.HoldVisualPreloadRules.shouldWaitForApproach(distance, PLAYBACK_APPROACH_DISTANCE)) break;
+                nextHoldVisualIndex++;
+                if (!Double.isFinite(distance) || distance < 0.0) continue;
                 createHoldDisplays(player, interval, songTime);
             }
             for (String intervalId : activeHoldIntervalIds) {
