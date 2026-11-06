@@ -18,6 +18,18 @@ public final class NoteEditRules {
         return hasFraction(x) || hasFraction(y) || hasFraction(z);
     }
 
+    public static double editorRelativeY(double absoluteY, int type) {
+        return absoluteY - editorHeightBase(type);
+    }
+
+    public static double editorAbsoluteY(double relativeY, int type) {
+        return relativeY + editorHeightBase(type);
+    }
+
+    public static double editorHeightBase(int type) {
+        return type == 2 ? 65.0 : 66.0;
+    }
+
     public static boolean usesDisplayEntity(ChartManifest.Note note) {
         return note != null && requiresDisplayEntity(note.x, note.y, note.z);
     }

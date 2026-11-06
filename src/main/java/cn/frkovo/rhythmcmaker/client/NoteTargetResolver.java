@@ -51,29 +51,28 @@ final class NoteTargetResolver {
         Vec3d origin = client.gameRenderer.getCamera().getCameraPos();
         Vec3d direction = client.player.getRotationVec(1.0f);
         double maximumDistance = client.player.getBlockInteractionRange();
-        double maximumDistanceSquared = 0.9 * 0.9;
         RayCandidate nearest = null;
         for (DisplayEntity display : client.world.getEntitiesByClass(DisplayEntity.class,
                 new Box(origin, origin).expand(maximumDistance + 1.0),
                 entity -> hasNoteBinding(entity, chart.id))) {
             ChartManifest.Note note = resolveTaggedEntity(display, chart);
             if (note == null) continue;
-            RayCandidate candidate = rayCandidate(note, display, origin, direction, maximumDistance,
-                    maximumDistanceSquared);
+            RayCandidate candidate = rayCandidate(note, display, origin, direction, maximumDistance);
             if (isCloser(candidate, nearest)) nearest = candidate;
         }
         return nearest == null ? null : new NoteTarget(chart, nearest.note(), nearest.entity(), target);
     }
 
     private static RayCandidate rayCandidate(ChartManifest.Note note, DisplayEntity entity, Vec3d origin, Vec3d direction,
-                                             double maximumDistance, double maximumDistanceSquared) {
-        Vec3d hit = entity.getVisibilityBoundingBox().expand(0.2)
+                                             double maximumDistance) {
+        Box modelBounds = entity.getVisibilityBoundingBox();
+        Vec3d hit = modelBounds
                 .raycast(origin, origin.add(direction.multiply(maximumDistance))).orElse(null);
         if (hit == null) return null;
         double alongRay = hit.subtract(origin).dotProduct(direction);
         if (alongRay < 0.0 || alongRay > maximumDistance) return null;
         double distanceSquared = hit.squaredDistanceTo(origin.add(direction.multiply(alongRay)));
-        return distanceSquared <= maximumDistanceSquared ? new RayCandidate(note, entity, distanceSquared, alongRay) : null;
+        return new RayCandidate(note, entity, distanceSquared, alongRay);
     }
 
     private static boolean isCloser(RayCandidate candidate, RayCandidate current) {

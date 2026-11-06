@@ -1,6 +1,7 @@
 package cn.frkovo.rhythmcmaker.client;
 
 import cn.frkovo.rhythmcmaker.chart.ChartManifest;
+import cn.frkovo.rhythmcmaker.chart.NoteEditRules;
 import cn.frkovo.rhythmcmaker.client.render.ImGuiRuntime;
 import imgui.ImGui;
 import imgui.flag.ImGuiCond;
@@ -72,12 +73,12 @@ public final class NoteEditScreen extends Screen {
             }
             }
             if (!operationStatus.isBlank()) ImGui.textColored(operationStatusColor, operationStatus);
-            ImGui.text("相对位置 X");
+            ImGui.text("X 相对坐标");
             ImDouble x = new ImDouble(note.x);
-            if (ImGui.inputDouble("##note-x", x, 0.0, 0.0, "%.3f")) update(client, x.get(), note.y, note.beat);
-            ImGui.text("相对位置 Y");
-            ImDouble y = new ImDouble(note.y - noteHeightBase(note.type));
-            if (ImGui.inputDouble("##note-y", y, 0.0, 0.0, "%.3f")) update(client, note.x, y.get() + noteHeightBase(note.type), note.beat);
+            if (ImGui.inputDouble("##note-x", x, 0.0, 0.0, "%.3f")) update(client, x.get(), NoteEditRules.editorRelativeY(note.y, note.type), note.beat);
+            ImGui.text("Y 相对坐标");
+            ImDouble y = new ImDouble(NoteEditRules.editorRelativeY(note.y, note.type));
+            if (ImGui.inputDouble("##note-y", y, 0.0, 0.0, "%.3f")) update(client, note.x, y.get(), note.beat);
             ImGui.text("时机 Beat");
             if (!beatPartsInitialized) {
                 BeatParts parts = beatParts(note.beat);
@@ -105,7 +106,7 @@ public final class NoteEditScreen extends Screen {
                     || beatWhole.get() < 0 || beatWhole.get() > 1_000_000) {
                 ImGui.textColored(0xFF7777FF, "Beat 需满足 n≥0、1≤b≤32、0≤a<b。");
             } else if (beatUpdated) {
-                update(client, note.x, note.y, beatWhole.get() + beatNumerator.get() / (double) beatDenominator.get());
+                updateBeat(client, beatWhole.get() + beatNumerator.get() / (double) beatDenominator.get());
             }
             if (ImGui.button("\u5220\u9664\u97f3\u7b26")) {
                 if (client.player != null) client.player.networkHandler.sendChatCommand("rhythmc_note_delete " + note.id);
@@ -136,6 +137,12 @@ public final class NoteEditScreen extends Screen {
         if (client.player == null || !Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(beat) || beat < 0.0) return;
         client.player.networkHandler.sendChatCommand("rhythmc_note_edit " + note.id + " "
                 + String.format(Locale.ROOT, "%.9f %.9f %.9f", x, y, beat));
+    }
+
+    private void updateBeat(MinecraftClient client, double beat) {
+        if (client.player == null || !Double.isFinite(beat) || beat < 0.0) return;
+        client.player.networkHandler.sendChatCommand("rhythmc_note_timing " + note.id + " "
+                + String.format(Locale.ROOT, "%.9f", beat));
     }
 
     private void updateType(MinecraftClient client, int type) {
@@ -170,9 +177,6 @@ public final class NoteEditScreen extends Screen {
         };
     }
 
-    private static double noteHeightBase(int type) {
-        return type == 2 ? 65.0 : 66.0;
-    }
 
     private static BeatParts beatParts(double value) {
         double safeValue = Math.max(0.0, Double.isFinite(value) ? value : 0.0);

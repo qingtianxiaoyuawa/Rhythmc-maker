@@ -43,6 +43,10 @@ public final class HoldPlaybackRegression {
                 "fractional note coordinates require a display entity");
         require(!NoteEditRules.requiresDisplayEntity(1.0, 66.0, -4.0),
                 "integer note coordinates remain block represented");
+        require(NoteEditRules.editorRelativeY(66.75, 0) == 0.75, "editor Y is displayed relative to the note platform");
+        require(NoteEditRules.editorAbsoluteY(0.75, 0) == 66.75, "relative editor Y restores the absolute chart position");
+        require(NoteEditRules.editorAbsoluteY(NoteEditRules.editorRelativeY(65.0, 2), 2) == 65.0,
+                "editing coordinates does not shift Hold endpoints");
         ChartManifest.Note first = note("first", 1.0, 8);
         ChartManifest.Note middle = note("middle", 2.0, 8);
         ChartManifest.Note last = note("last", 4.0, 8);

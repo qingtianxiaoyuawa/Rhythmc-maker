@@ -339,7 +339,7 @@ public final class RhythmcMaker implements ModInitializer {
                 cancelPendingHoldGroup(serverPlayer.getUuid());
             }
             if (hand == net.minecraft.util.Hand.MAIN_HAND && stack.isOf(HOLD_GROUP_NOTE_ITEM)) {
-                return placeHoldGroupEndpoint(serverPlayer, serverWorld, chart, target);
+                return placeHoldGroupEndpoint(serverPlayer, serverWorld, hand, chart, target);
             }
             if (!isNoteItem(stack)) return ActionResult.FAIL;
             if (!isValidNotePosition(target, chart, serverWorld)) return ActionResult.FAIL;
@@ -347,6 +347,7 @@ public final class RhythmcMaker implements ModInitializer {
             if (!isAllowedNoteTypeAtHeight(target.getY(), type)) return ActionResult.FAIL;
             if (containsNote(chart, serverWorld, target)) return ActionResult.FAIL;
             serverWorld.setBlockState(target, blockStateForType(type));
+            playNotePlacementFeedback(serverPlayer, serverWorld, hand, target, type);
             ChartManifest.Note note = new ChartManifest.Note();
             note.id = UUID.randomUUID().toString();
             note.type = type;
@@ -457,6 +458,12 @@ return true;
                                     com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "x"),
                                     com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "y"),
                                     com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "beat"))))))));
+            dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_note_timing")
+                .then(net.minecraft.server.command.CommandManager.argument("noteId", com.mojang.brigadier.arguments.StringArgumentType.word())
+                    .then(net.minecraft.server.command.CommandManager.argument("beat", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg(0.0, 1000000.0))
+                        .executes(context -> editChartNoteTiming(context.getSource(),
+                            com.mojang.brigadier.arguments.StringArgumentType.getString(context, "noteId"),
+                            com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "beat"))))));
             dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_note_type")
                 .then(net.minecraft.server.command.CommandManager.argument("noteId", com.mojang.brigadier.arguments.StringArgumentType.word())
                     .then(net.minecraft.server.command.CommandManager.argument("type", com.mojang.brigadier.arguments.IntegerArgumentType.integer(0, 3))
@@ -1189,7 +1196,7 @@ private static void flushActiveChart(MinecraftServer server, ServerPlayerEntity 
         ChartManifest.Note note = chart.notes.stream().filter(candidate -> candidate != null && noteId.equals(candidate.id)).findFirst().orElse(null);
         if (note == null || !Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(beat) || beat < 0.0
                 || !HoldGroupRules.isEndpoint(chart, note)) return 0;
-        double absoluteY = y + noteHeightBase(note.type);
+        double absoluteY = NoteEditRules.editorAbsoluteY(y, note.type);
         ChartManifest.Note pairedEndpoint = HoldGroupRules.otherEndpoint(chart, note);
         if (note.holdGroup >= 0 && (pairedEndpoint == null || Math.abs(absoluteY - 65.0) > 0.000001
                 || (note == HoldGroupRules.members(chart, note.trackId, note.holdGroup).getFirst()
@@ -1229,11 +1236,11 @@ private static void flushActiveChart(MinecraftServer server, ServerPlayerEntity 
         ChartManifest.Note note = chart.notes.stream().filter(candidate -> candidate != null && noteId.equals(candidate.id)).findFirst().orElse(null);
         if (note == null || note.type == type || note.holdGroup >= 0) return 0;
         int oldType = note.type;
-        double relativeY = note.y - noteHeightBase(oldType);
+        double relativeY = NoteEditRules.editorRelativeY(note.y, oldType);
         double oldX = note.x;
         double oldY = note.y;
         double oldZ = note.z;
-        double newY = relativeY + noteHeightBase(type);
+        double newY = NoteEditRules.editorAbsoluteY(relativeY, type);
         note.type = type;
         note.y = newY;
         if (type != 2) note.holdGroup = -1;
@@ -1243,6 +1250,38 @@ private static void flushActiveChart(MinecraftServer server, ServerPlayerEntity 
         synchronized (state) { state.revision++; state.dirty = true; }
         queueChartSave(source.getServer(), state);
         player.sendMessage(Text.literal("音符类型已改为 " + noteTypeName(type)), true);
+        return 1;
+    }
+
+    private static int editChartNoteTiming(net.minecraft.server.command.ServerCommandSource source, String noteId, double beat)
+            throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayerEntity player = source.getPlayerOrThrow();
+        if (!(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world)
+                || !isNoteEditTool(player.getMainHandStack()) || !Double.isFinite(beat) || beat < 0.0) return 0;
+        ChartManifest chart = loadActiveChart(player, source.getServer());
+        if (chart == null || chart.notes == null) return 0;
+        ChartManifest.Note note = chart.notes.stream()
+                .filter(candidate -> candidate != null && noteId.equals(candidate.id)).findFirst().orElse(null);
+        if (note == null || !HoldGroupRules.isEndpoint(chart, note)) return 0;
+        ChartManifest.Note pairedEndpoint = HoldGroupRules.otherEndpoint(chart, note);
+        if (note.holdGroup >= 0 && (pairedEndpoint == null
+                || (note == HoldGroupRules.members(chart, note.trackId, note.holdGroup).getFirst()
+                    ? beat >= pairedEndpoint.beat : beat <= pairedEndpoint.beat))) {
+            player.sendMessage(Text.literal("Hold 音符组头尾 Beat 顺序无效"), true);
+            return 0;
+        }
+        double oldZ = note.z;
+        note.beat = beat;
+        note.time = ChartTiming.beatToSeconds(chart, beat);
+        note.z = PlaybackCoordinates.editorWorldZAtBeat(chart, beat) - 0.5;
+        updateNoteWorldRepresentation(world, chart, note, note.x, note.y, oldZ, note.type);
+        if (note.holdGroup >= 0) rebuildEditorHoldDisplays(world, chart, note.trackId, note.holdGroup);
+        invalidateTrackSnapUndo(player.getUuid());
+        updateChartTotalBeats(chart);
+        CachedChartState state = cacheChart(source.getServer(), chart);
+        synchronized (state) { state.revision++; state.dirty = true; }
+        queueChartSave(source.getServer(), state);
+        player.sendMessage(Text.literal("音符已更新"), true);
         return 1;
     }
 
@@ -1285,7 +1324,8 @@ private static void flushActiveChart(MinecraftServer server, ServerPlayerEntity 
         return 1;
     }
 
-    private static ActionResult placeHoldGroupEndpoint(ServerPlayerEntity player, ServerWorld world, ChartManifest chart, BlockPos target) {
+    private static ActionResult placeHoldGroupEndpoint(ServerPlayerEntity player, ServerWorld world,
+                                                       net.minecraft.util.Hand hand, ChartManifest chart, BlockPos target) {
         if (chart == null || !isValidNotePosition(target, chart, world) || target.getY() != 65
                 || containsNote(chart, world, target)) return ActionResult.FAIL;
         if (player.getInventory().getStack(player.getInventory().getSelectedSlot()).isOf(HOLD_GROUP_NOTE_ITEM) == false) {
@@ -1316,6 +1356,7 @@ private static void flushActiveChart(MinecraftServer server, ServerPlayerEntity 
         note.time = ChartTiming.beatToSeconds(chart, beat);
         BlockState previousState = world.getBlockState(target);
         world.setBlockState(target, Blocks.DIAMOND_BLOCK.getDefaultState());
+        playNotePlacementFeedback(player, world, hand, target, 4);
         chart.notes.add(note);
         if (pending == null) {
             PENDING_HOLD_GROUPS.put(player.getUuid(), new PendingHoldGroup(chart, world, note,
@@ -1343,6 +1384,19 @@ private static void flushActiveChart(MinecraftServer server, ServerPlayerEntity 
 
     private static int activeNoteTrack(ChartManifest chart) {
         return chart.tracks == null || chart.tracks.isEmpty() ? 0 : chart.tracks.getFirst().id;
+    }
+
+    private static void playNotePlacementFeedback(ServerPlayerEntity player, ServerWorld world,
+                                                  net.minecraft.util.Hand hand, BlockPos position, int noteType) {
+        net.minecraft.sound.SoundEvent sound = switch (noteType) {
+            case 0 -> Blocks.TNT.getDefaultState().getSoundGroup().getPlaceSound();
+            case 1 -> Blocks.OBSERVER.getDefaultState().getSoundGroup().getPlaceSound();
+            case 2 -> Blocks.DIAMOND_BLOCK.getDefaultState().getSoundGroup().getPlaceSound();
+            case 3 -> Blocks.REDSTONE_BLOCK.getDefaultState().getSoundGroup().getPlaceSound();
+            default -> net.minecraft.sound.SoundEvents.BLOCK_NOTE_BLOCK_PLING.value();
+        };
+        player.swingHand(hand);
+        world.playSound(null, position, sound, net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 1.0f);
     }
 
     private static void updatePendingHoldGroups(MinecraftServer server) {
@@ -5093,6 +5147,7 @@ private static void showSceneBoundary(MinecraftServer server) {
     }
     private static void processNoteDisplayChunkCleanupTasks(MinecraftServer server) {
         int budget = 32;
+        Set<RegistryKey<World>> completedWorlds = new java.util.HashSet<>();
         for (var iterator = NOTE_DISPLAY_CHUNK_CLEANUP_TASKS.iterator(); iterator.hasNext() && budget-- > 0;) {
             NoteDisplayChunkCleanup task = iterator.next();
             ServerWorld world = server.getWorld(task.worldKey());
@@ -5106,6 +5161,14 @@ private static void showSceneBoundary(MinecraftServer server) {
                 }
             }
             iterator.remove();
+            if (task.releaseForcedChunk() && task.retriesRemaining() == 0) completedWorlds.add(task.worldKey());
+        }
+        for (RegistryKey<World> worldKey : completedWorlds) {
+            if (hasPendingNoteDisplayChunkCleanup(worldKey) || EDITOR_NOTE_REFRESH_TASKS.containsKey(worldKey)
+                    || EDITOR_NOTE_DISPLAY_SWEEP_TASKS.containsKey(worldKey)) continue;
+            ServerWorld world = server.getWorld(worldKey);
+            ChartManifest chart = CHART_CACHE_BY_WORLD.get(worldKey);
+            if (world != null && chart != null) rebuildAllEditorHoldDisplays(world, chart);
         }
     }
     private static void scheduleNoteDisplaySweep(ServerWorld world, ChartManifest chart) {
@@ -5185,6 +5248,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         if (chart.notes == null) {
             EDITOR_NOTE_REFRESH_TASKS.remove(world.getRegistryKey());
             removeStaleNoteDisplays(world, chart.id, generation);
+            rebuildAllEditorHoldDisplays(world, chart);
             return;
         }
         EDITOR_NOTE_REFRESH_TASKS.put(world.getRegistryKey(), new EditorNoteRefreshTask(chart, generation));
@@ -5207,6 +5271,9 @@ private static void showSceneBoundary(MinecraftServer server) {
             }
             if (task.cursor >= task.notes.size()) {
                 removeStaleNoteDisplays(world, task.chartId, task.generation);
+                if (!EDITOR_NOTE_DISPLAY_SWEEP_TASKS.containsKey(world.getRegistryKey())) {
+                    rebuildAllEditorHoldDisplays(world, task.chart);
+                }
                 iterator.remove();
             }
         }
@@ -5254,6 +5321,8 @@ private static void showSceneBoundary(MinecraftServer server) {
                 DisplayEntity.BlockDisplayEntity display = EntityType.BLOCK_DISPLAY.create(world, SpawnReason.COMMAND);
                 if (display == null) continue;
                 display.setBlockState(Blocks.DIAMOND_BLOCK.getDefaultState());
+                display.setDisplayWidth(1.0f);
+                display.setDisplayHeight(1.0f);
                 display.setPosition(HoldFillPlanner.interpolate(start.x, end.x, progress),
                         HoldFillPlanner.interpolate(start.y, end.y, progress),
                         HoldFillPlanner.interpolate(start.z, end.z, progress));
@@ -5270,6 +5339,31 @@ private static void showSceneBoundary(MinecraftServer server) {
             }
         }
     }
+    private static boolean hasPendingNoteDisplayChunkCleanup(RegistryKey<World> worldKey) {
+        return NOTE_DISPLAY_CHUNK_CLEANUP_TASKS.stream()
+                .anyMatch(task -> task.releaseForcedChunk() && task.worldKey().equals(worldKey));
+    }
+
+    private static void rebuildAllEditorHoldDisplays(ServerWorld world, ChartManifest chart) {
+        String prefix = "rhythmc_hold_fill:" + chart.id + ":";
+        for (DisplayEntity.BlockDisplayEntity display : world.getEntitiesByType(EntityType.BLOCK_DISPLAY,
+                entity -> entity.getCommandTags().stream().anyMatch(tag -> tag.startsWith(prefix)))) {
+            display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+        }
+        if (chart.notes == null) return;
+        Set<EditorHoldGroupKey> holdGroups = new java.util.HashSet<>();
+        for (ChartManifest.Note note : chart.notes) {
+            if (note != null && note.holdGroup >= 0) holdGroups.add(new EditorHoldGroupKey(note.trackId, note.holdGroup));
+        }
+        for (EditorHoldGroupKey holdGroup : holdGroups) {
+            List<ChartManifest.Note> members = chart.notes.stream()
+                    .filter(note -> note != null && note.trackId == holdGroup.trackId() && note.holdGroup == holdGroup.holdGroup())
+                    .toList();
+            if (!members.isEmpty()) rebuildEditorHoldDisplays(world, chart, holdGroup.trackId(), holdGroup.holdGroup());
+        }
+    }
+
+    private record EditorHoldGroupKey(int trackId, int holdGroup) {}
 
     private static void clearEditorHoldDisplays(ServerWorld world, String chartId, int trackId, int holdGroup) {
         String prefix = holdFillPrefix(chartId, trackId, holdGroup);
@@ -5310,12 +5404,16 @@ private static void showSceneBoundary(MinecraftServer server) {
                 display = EntityType.BLOCK_DISPLAY.create(world, SpawnReason.COMMAND);
                 if (display == null) return;
                 display.addCommandTag(noteTag(chart.id, note.id));
+                display.setDisplayWidth(1.0f);
+                display.setDisplayHeight(1.0f);
                 display.setNoGravity(true);
                 display.setInvulnerable(true);
                 ensureEffectPreviewDisplayRange(display);
             }
             display.setCustomName(Text.literal(noteReferenceName(chart.id, note.id)));
             display.setCustomNameVisible(false);
+            display.setDisplayWidth(1.0f);
+            display.setDisplayHeight(1.0f);
             display.setBlockState(blockStateForType(note.type));
             display.setTransformation(AffineTransformation.identity());
             display.setPosition(note.x, note.y, note.z);
