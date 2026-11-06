@@ -14,7 +14,8 @@ public final class HoldPlaybackRegression {
         ChartManifest.Note editableNote = note("editable", 1.0, -1);
         ChartManifest.Note gluedNote = note("glued", 1.0, 4);
         require(NoteEditRules.canEdit(editableNote), "unglued notes remain editable");
-        require(!NoteEditRules.canEdit(gluedNote), "glued notes are immutable until unglued");
+        require(NoteEditRules.canOpenEditor(gluedNote), "glued representative holds can open the editor");
+        require(!NoteEditRules.canBreakRepresentation(gluedNote), "glued representative holds remain protected from direct breaking");
         require(NoteEditRules.requiresDisplayEntity(1.25, 66.0, -4.5),
                 "fractional note coordinates require a display entity");
         require(!NoteEditRules.requiresDisplayEntity(1.0, 66.0, -4.0),

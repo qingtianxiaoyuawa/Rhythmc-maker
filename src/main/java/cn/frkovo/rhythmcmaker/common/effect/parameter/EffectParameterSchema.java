@@ -43,8 +43,10 @@ public final class EffectParameterSchema {
                 "BLACK", "DARK_BLUE", "DARK_GREEN", "DARK_AQUA", "DARK_RED", "DARK_PURPLE", "GOLD", "GRAY",
                 "DARK_GRAY", "BLUE", "GREEN", "AQUA", "RED", "LIGHT_PURPLE", "YELLOW", "WHITE")));
         add("JUDGE_FRAME_COLOR", "判定框颜色", true,
-                field("color", "场景调色板颜色名", TEXT, "\"border\"",
-                        "引用当前场景的判定框调色板名称；border 恢复场景默认色。颜色定义由场景提供，不是 RGB 或十六进制值。"));        add("MESSAGE", "聊天消息", true, field("contents", "消息内容", STRING_LIST, "[\"消息\"]", "每行发送一条消息。"));
+                enumeration("color", "判定框颜色", "WHITE", List.of(
+                        "BLACK", "DARK_BLUE", "DARK_GREEN", "DARK_AQUA", "DARK_RED", "DARK_PURPLE", "GOLD", "GRAY",
+                        "DARK_GRAY", "BLUE", "GREEN", "AQUA", "RED", "LIGHT_PURPLE", "YELLOW", "WHITE")));
+        add("MESSAGE", "聊天消息", true, field("contents", "消息内容", STRING_LIST, "[\"消息\"]", "每行发送一条消息。"));
         add("TEXT_DISPLAY", "文本展示实体", true,
                 vector("position", "位置偏移 [x,y,z]（格）", "[0,1.5,0]", "相对固定播放中心 (200.5, 66, -1.5) 的偏移；不填写绝对世界坐标。"),
                 vector("rotation", "旋转 [x,y,z]（角度）", "[0,0,0]", ""),

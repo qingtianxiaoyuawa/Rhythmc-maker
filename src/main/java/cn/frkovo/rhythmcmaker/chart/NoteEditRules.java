@@ -6,7 +6,15 @@ public final class NoteEditRules {
     private NoteEditRules() {
     }
 
+    public static boolean canOpenEditor(ChartManifest.Note note) {
+        return note != null;
+    }
+
     public static boolean canEdit(ChartManifest.Note note) {
+        return canOpenEditor(note);
+    }
+
+    public static boolean canBreakRepresentation(ChartManifest.Note note) {
         return note != null && note.holdGroup < 0;
     }
 

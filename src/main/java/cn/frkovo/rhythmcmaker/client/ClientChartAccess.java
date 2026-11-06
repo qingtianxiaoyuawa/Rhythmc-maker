@@ -148,12 +148,17 @@ public final class ClientChartAccess {
         ChartManifest current = resolveActiveChart();
         if (current == null) return null;
         try {
-            ChartManifest fresh = ChartStorage.find(server(), current.id);
-            if (fresh != null) {
-                activeChart = fresh;
-                var attributes = ChartStorage.manifestAttributes(server(), fresh.id);
-                activeChartModifiedTime = attributes.lastModifiedTime();
-                activeChartFileSize = attributes.size();
+            ChartManifest inMemory = cn.frkovo.rhythmcmaker.RhythmcMaker.activeChartSnapshot(server(), current.id);
+            if (inMemory != null) {
+                activeChart = inMemory;
+            } else {
+                ChartManifest fresh = ChartStorage.find(server(), current.id);
+                if (fresh != null) {
+                    activeChart = fresh;
+                    var attributes = ChartStorage.manifestAttributes(server(), fresh.id);
+                    activeChartModifiedTime = attributes.lastModifiedTime();
+                    activeChartFileSize = attributes.size();
+                }
             }
         } catch (IOException ignored) {
         }

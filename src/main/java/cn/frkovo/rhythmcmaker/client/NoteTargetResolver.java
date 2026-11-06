@@ -1,6 +1,7 @@
 package cn.frkovo.rhythmcmaker.client;
 
 import cn.frkovo.rhythmcmaker.chart.ChartManifest;
+import cn.frkovo.rhythmcmaker.chart.NoteEditRules;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.decoration.DisplayEntity;
@@ -50,7 +51,7 @@ final class NoteTargetResolver {
         double maximumDistance = client.player.getBlockInteractionRange();
         double maximumDistanceSquared = 0.9 * 0.9;
         RayCandidate nearest = null;
-        for (DisplayEntity.BlockDisplayEntity display : client.world.getEntitiesByType(EntityType.BLOCK_DISPLAY,
+        for (DisplayEntity display : client.world.getEntitiesByClass(DisplayEntity.class,
                 new Box(origin, origin).expand(maximumDistance + 1.0),
                 entity -> hasNoteBinding(entity, chart.id))) {
             ChartManifest.Note note = resolveTaggedEntity(display, chart.notes, chart.id);
@@ -62,7 +63,7 @@ final class NoteTargetResolver {
         return nearest == null ? null : new NoteTarget(chart, nearest.note(), nearest.entity(), target);
     }
 
-    private static RayCandidate rayCandidate(ChartManifest.Note note, DisplayEntity.BlockDisplayEntity entity, Vec3d origin, Vec3d direction,
+    private static RayCandidate rayCandidate(ChartManifest.Note note, DisplayEntity entity, Vec3d origin, Vec3d direction,
                                              double maximumDistance, double maximumDistanceSquared) {
         Vec3d hit = entity.getVisibilityBoundingBox()
                 .raycast(origin, origin.add(direction.multiply(maximumDistance))).orElse(null);
@@ -85,7 +86,7 @@ final class NoteTargetResolver {
     private record RayCandidate(ChartManifest.Note note, Entity entity, double distanceSquared, double alongRay) {}
 
     private static ChartManifest.Note resolveTaggedEntity(Entity entity, List<ChartManifest.Note> notes, String chartId) {
-        if (!(entity instanceof DisplayEntity.BlockDisplayEntity)) return null;
+        if (!(entity instanceof DisplayEntity)) return null;
         String noteId = entity.getCommandTags().stream()
                 .filter(tag -> tag.startsWith(NOTE_TAG_PREFIX + chartId + ":"))
                 .map(tag -> tag.substring((NOTE_TAG_PREFIX + chartId + ":").length()))

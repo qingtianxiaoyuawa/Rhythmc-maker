@@ -120,6 +120,7 @@ public final class RhythmcMaker implements ModInitializer {
     public static final Item EFFECT_TRACK_ITEM = registerMenuItem("effect_track", "特效编辑器（右键打开）");
     public static final Item SAVE_SCENE_ITEM = registerMenuItem("save_scene", "保存场景（右键保存并返回）");
     public static final Item QUICK_FUNCTIONS_ITEM = registerMenuItem("quick_functions", "快捷功能（右键打开）");
+    public static final Item CHART_MENU_ITEM = registerMenuItem("chart_menu", "谱面菜单");
     public static final Item CHART_SETTINGS_ITEM = registerMenuItem("chart_settings", "谱面设置");
     public static final Item MORE_OPTIONS_RETURN_ITEM = registerMenuItem("more_options_return", "返回（右键打开）");
     public static final Item CHART_INFO_ITEM = registerMenuItem("chart_info", "谱面信息（右键打开）");
@@ -346,6 +347,7 @@ public final class RhythmcMaker implements ModInitializer {
             chart.notes.add(note);
             invalidateTrackSnapUndo(serverPlayer.getUuid());
             try { saveChart(serverWorld.getServer(), chart); } catch (IOException ignored) { }
+            refreshNoteDisplays(serverWorld, chart);
             return ActionResult.SUCCESS;
         });
         UseItemCallback.EVENT.register((player, world, hand) -> {
@@ -370,7 +372,7 @@ public final class RhythmcMaker implements ModInitializer {
             if (noteId == null) return ActionResult.PASS;
             ChartManifest.Note note = chart.notes.stream()
                     .filter(candidate -> candidate != null && noteId.equals(candidate.id)).findFirst().orElse(null);
-            if (note == null || NoteEditRules.canEdit(note)) return ActionResult.PASS;
+            if (note == null || NoteEditRules.canBreakRepresentation(note)) return ActionResult.PASS;
             serverPlayer.sendMessage(Text.literal("请先解除粘合，再破坏该音符"), true);
             return ActionResult.FAIL;
         });
@@ -389,7 +391,7 @@ public final class RhythmcMaker implements ModInitializer {
             if (chart == null) return false;
             if (!isNoteBlock(state.getBlock())) return false;
             boolean gluedNoteAtPosition = chart.notes != null && chart.notes.stream()
-                    .anyMatch(note -> isBlockNoteAt(note, pos) && !NoteEditRules.canEdit(note));
+                    .anyMatch(note -> isBlockNoteAt(note, pos) && !NoteEditRules.canBreakRepresentation(note));
             if (gluedNoteAtPosition) {
                 serverPlayer.sendMessage(Text.literal("请先解除粘合，再破坏该音符"), true);
                 return false;
@@ -636,9 +638,7 @@ public final class RhythmcMaker implements ModInitializer {
         player.getInventory().setStack(3, new ItemStack(Blocks.TNT.asItem()));
         player.getInventory().setStack(4, menuStack(PLAY_ITEM));
         player.getInventory().setStack(5, createNoteEditTool());
-        player.getInventory().setStack(6, menuStack(CHART_SETTINGS_ITEM));
-        player.getInventory().setStack(7, menuStack(MORE_SETTINGS_ITEM));
-        player.getInventory().setStack(8, menuStack(QUICK_FUNCTIONS_ITEM));
+        player.getInventory().setStack(8, menuStack(CHART_MENU_ITEM));
         player.currentScreenHandler.sendContentUpdates();
     }
     private static int openMoreOptions(net.minecraft.server.command.ServerCommandSource source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
@@ -648,11 +648,11 @@ public final class RhythmcMaker implements ModInitializer {
         for (int slot = 0; slot < 9; slot++) hotbar.add(player.getInventory().getStack(slot).copy());
         SAVED_HOTBARS.put(player.getUuid(), hotbar);
         player.getInventory().clear();
-        player.getInventory().setStack(0, menuStack(CHART_INFO_ITEM));
+        player.getInventory().setStack(0, menuStack(CHART_MENU_ITEM));
         player.getInventory().setStack(1, menuStack(SCENE_EDIT_ITEM));
         player.getInventory().setStack(2, menuStack(EFFECT_TRACK_ITEM));
         player.getInventory().setStack(4, menuStack(EXPORT_ITEM));
-        player.getInventory().setStack(6, menuStack(BEAT_SCORE_ITEM));
+
         player.getInventory().setStack(7, menuStack(SETTINGS_ITEM));
         player.getInventory().setStack(8, menuStack(MORE_OPTIONS_RETURN_ITEM));
         player.currentScreenHandler.sendContentUpdates();
@@ -1137,6 +1137,7 @@ private static void flushActiveChart(MinecraftServer server, ServerPlayerEntity 
         if (state != null) queueChartSave(server, state);
     }
     public static String activeChart(ServerPlayerEntity player) { return ACTIVE_CHARTS.get(player.getUuid()); }
+    public static boolean canUndoTrackSnap(UUID playerId) { return playerId != null && TRACK_SNAP_UNDOS.containsKey(playerId); }
     public static void saveEffectEditor(MinecraftServer server, ServerPlayerEntity player,
                                        java.util.List<com.google.gson.JsonObject> effects,
                                        cn.frkovo.rhythmcmaker.common.effect.editor.EffectEditorLayout layout) throws IOException {
@@ -1445,6 +1446,11 @@ private static Path holdBackupPath(MinecraftServer server, String chartId, int g
         return chart != null && ((chart.tracks != null && !chart.tracks.isEmpty())
                 || (chart.notes != null && !chart.notes.isEmpty())
                 || (chart.effects != null && !chart.effects.isEmpty()));
+    }
+
+    public static ChartManifest activeChartSnapshot(MinecraftServer server, String chartId) {
+        CachedChartState state = CHART_CACHE_BY_ID.get(chartId);
+        return state == null ? null : state.chart;
     }
 
     private static ChartManifest cachedChart(MinecraftServer server, String chartId) throws IOException {
@@ -2698,6 +2704,7 @@ private static Path holdBackupPath(MinecraftServer server, String chartId, int g
                 .mapToDouble(note -> note.beat).max().orElse(0.0);
         invalidateTrackSnapUndo(playerId);
         try { saveChart(server, chart); } catch (IOException exception) { LOGGER.warn("Failed to sync WorldEdit note", exception); }
+        refreshNoteDisplays(world, chart);
     }
 
     private static boolean isWorldEditTrackBlock(String blockId) {

@@ -123,12 +123,10 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             if (item == RhythmcMaker.START_CHART_ITEM) client.setScreen(new ChartListScreen());
             else if (item == RhythmcMaker.AWA_ITEM) client.setScreen(new PlaceholderScreen("awa~", "awa-menu"));
             else if (item == RhythmcMaker.SETTINGS_ITEM) client.setScreen(new SettingsScreen());
-            else if (item == RhythmcMaker.CHART_SETTINGS_ITEM) client.setScreen(new PlaceholderScreen("谱面设置", "chart-settings"));
+            else if (item == RhythmcMaker.CHART_MENU_ITEM) client.setScreen(new ChartMenuScreen());
             else if (item == RhythmcMaker.MORE_SETTINGS_ITEM) sendCommand(client, "rhythmc_more_options");
-            else if (item == RhythmcMaker.QUICK_FUNCTIONS_ITEM) client.setScreen(new PlaceholderScreen("快捷功能", "quick-functions"));
             else if (item == RhythmcMaker.MORE_OPTIONS_RETURN_ITEM) sendCommand(client, "rhythmc_more_return");
             else if (item == RhythmcMaker.EXPORT_ITEM) client.setScreen(new ExportChartScreen());
-            else if (item == RhythmcMaker.CHART_INFO_ITEM) { if (ClientChartAccess.activeChart() != null) client.setScreen(new ChartInfoScreen(ClientChartAccess.activeChart())); else if (client.player != null) client.player.sendMessage(Text.literal("当前未加载谱面"), true); }
             else if (item == RhythmcMaker.SCENE_EDIT_ITEM) client.setScreen(new SceneEditScreen());
             else if (item == RhythmcMaker.EFFECT_TRACK_ITEM) client.setScreen(new EffectTrackScreen());
             else if (item == RhythmcMaker.SAVE_SCENE_ITEM) sendCommand(client, "rhythmc_scene_save");
@@ -146,7 +144,6 @@ public final class RhythmcMakerClient implements ClientModInitializer {
                 syncPlaybackPreference();
                 beginPlayback(client);
             }
-            else if (item == RhythmcMaker.BEAT_SCORE_ITEM) client.setScreen(new PlaceholderScreen("修改制谱器轨道", "beat-score"));
             else if (item == RhythmcMaker.INCREASE_BEATS_ITEM) sendCommand(client, "rhythmc_beats 1");
             else if (item == RhythmcMaker.DECREASE_BEATS_ITEM) sendCommand(client, "rhythmc_beats -1");
             else return ActionResult.PASS;
@@ -921,16 +918,17 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         return true;
     }
     private static boolean isRhythmcScreen(net.minecraft.client.gui.screen.Screen screen) {
-        return screen instanceof RhythmcScreen || screen instanceof EffectTrackScreen || screen instanceof NoteEditScreen;
+        return screen instanceof RhythmcScreen || screen instanceof EffectTrackScreen || screen instanceof NoteEditScreen
+                || screen instanceof ChartMenuScreen || screen instanceof SnapConfirmScreen;
     }
     private static boolean isRhythmcMenuItem(Item item) {
         return item == RhythmcMaker.START_CHART_ITEM || item == RhythmcMaker.AWA_ITEM
-                || item == RhythmcMaker.SETTINGS_ITEM || item == RhythmcMaker.CHART_SETTINGS_ITEM
-                || item == RhythmcMaker.MORE_SETTINGS_ITEM || item == RhythmcMaker.QUICK_FUNCTIONS_ITEM
+                || item == RhythmcMaker.SETTINGS_ITEM || item == RhythmcMaker.CHART_MENU_ITEM
+                || item == RhythmcMaker.MORE_SETTINGS_ITEM
                 || item == RhythmcMaker.MORE_OPTIONS_RETURN_ITEM || item == RhythmcMaker.EXPORT_ITEM
-                || item == RhythmcMaker.CHART_INFO_ITEM || item == RhythmcMaker.SCENE_EDIT_ITEM
+                || item == RhythmcMaker.SCENE_EDIT_ITEM
                 || item == RhythmcMaker.EFFECT_TRACK_ITEM || item == RhythmcMaker.SAVE_SCENE_ITEM
-                || item == RhythmcMaker.PLAY_ITEM || item == RhythmcMaker.BEAT_SCORE_ITEM
+                || item == RhythmcMaker.PLAY_ITEM
                 || item == RhythmcMaker.INCREASE_BEATS_ITEM || item == RhythmcMaker.DECREASE_BEATS_ITEM;
     }
     private static void renderOperationProgress(DrawContext drawContext) {
@@ -948,6 +946,6 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         Text label = Text.literal(progress.label() + " " + progress.percent() + "%");
         drawContext.drawTextWithShadow(client.textRenderer, label, left, top - 12, 0xFFFFFFFF);
     }
-    static void sendChartCommand(String command) { sendCommand(MinecraftClient.getInstance(), command); }
+    public static void sendChartCommand(String command) { sendCommand(MinecraftClient.getInstance(), command); }
     private static void sendCommand(MinecraftClient client, String command) { if (client.player != null) client.player.networkHandler.sendChatCommand(command); }
 }
