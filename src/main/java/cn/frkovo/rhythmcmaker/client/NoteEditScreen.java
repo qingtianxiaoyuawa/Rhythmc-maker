@@ -1,7 +1,6 @@
 package cn.frkovo.rhythmcmaker.client;
 
 import cn.frkovo.rhythmcmaker.chart.ChartManifest;
-import cn.frkovo.rhythmcmaker.chart.HoldNoteGroupMerger;
 import cn.frkovo.rhythmcmaker.client.render.ImGuiRuntime;
 import imgui.ImGui;
 import imgui.flag.ImGuiCond;
@@ -25,9 +24,6 @@ public final class NoteEditScreen extends Screen {
     private String operationStatus = "";
     private int operationStatusColor = 0xFFFFFFFF;
     private long operationStatusUntilNanos;
-    private int pendingHoldGroup = -1;
-    private String pendingHoldRepresentativeId;
-    private boolean holdOperationPending;
     private final imgui.type.ImInt beatWhole = new imgui.type.ImInt();
     private final imgui.type.ImInt beatNumerator = new imgui.type.ImInt();
     private final imgui.type.ImInt beatDenominator = new imgui.type.ImInt(1);
@@ -76,19 +72,6 @@ public final class NoteEditScreen extends Screen {
             }
             }
             if (!operationStatus.isBlank()) ImGui.textColored(operationStatusColor, operationStatus);
-            if (note.holdGroup >= 0) {
-                ImGui.text("移动或调整 Beat 会整体移动 Hold 并保持原时长");
-                ImGui.beginDisabled(holdOperationPending);
-                if (ImGui.button("解除粘合")) {
-                    holdOperationPending = true;
-                    pendingHoldGroup = note.holdGroup;
-                    operationStatus = "正在解除粘合…";
-                    operationStatusColor = 0xFFFFFF66;
-                    operationStatusUntilNanos = System.nanoTime() + 5_000_000_000L;
-                    client.player.networkHandler.sendChatCommand("rhythmc_note_unglue " + note.id);
-                }
-                ImGui.endDisabled();
-            }
             ImGui.text("相对位置 X");
             ImDouble x = new ImDouble(note.x);
             if (ImGui.inputDouble("##note-x", x, 0.0, 0.0, "%.3f")) update(client, x.get(), note.y, note.beat);
@@ -123,32 +106,6 @@ public final class NoteEditScreen extends Screen {
                 ImGui.textColored(0xFF7777FF, "Beat 需满足 n≥0、1≤b≤32、0≤a<b。");
             } else if (beatUpdated) {
                 update(client, note.x, note.y, beatWhole.get() + beatNumerator.get() / (double) beatDenominator.get());
-            }
-            ImGui.beginDisabled(holdOperationPending);
-            boolean glueRequested = note.type == 2 && ImGui.button("粘合相邻钻石块");
-            ImGui.endDisabled();
-            if (glueRequested) {
-                java.util.List<ChartManifest.Note> connected = HoldNoteGroupMerger.connectedNotes(chart.notes, note);
-                if (connected.size() > 1) {
-                    int group = connected.stream().mapToInt(member -> member.holdGroup).distinct().count() == 1
-                            && connected.getFirst().holdGroup >= 0
-                            ? connected.getFirst().holdGroup : HoldNoteGroupMerger.nextGroupId(chart.notes);
-                    holdOperationPending = true;
-                    pendingHoldGroup = group;
-                    pendingHoldRepresentativeId = connected.stream().min(java.util.Comparator.comparingDouble(member -> member.beat)).map(member -> member.id).orElse(note.id);
-                    operationStatus = "正在粘合 " + connected.size() + " 个钻石音符…";
-                    operationStatusColor = 0xFFFFFF66;
-                    operationStatusUntilNanos = System.nanoTime() + 5_000_000_000L;
-                    client.player.networkHandler.sendChatCommand("rhythmc_note_glue " + note.id);
-                } else {
-                    operationStatus = "未找到同轨道且距离≤1的钻石音符";
-                    operationStatusColor = 0xFF7777FF;
-                    operationStatusUntilNanos = System.nanoTime() + 2_500_000_000L;
-                }
-            }
-            if (note.type == 2) {
-                int connectableCount = Math.max(0, HoldNoteGroupMerger.connectedNotes(chart.notes, note).size() - 1);
-                ImGui.text(connectableCount == 0 ? "当前没有可粘合的钻石音符" : "当前可粘合：" + connectableCount + " 个钻石音符");
             }
             if (ImGui.button("关闭")) client.setScreen(null);
             ImGui.end();
@@ -189,28 +146,7 @@ public final class NoteEditScreen extends Screen {
         ChartManifest refreshed = ClientChartAccess.refreshActiveChartNow();
         if (refreshed != null) chart = refreshed;
         if (chart.notes == null) return;
-        if (message.startsWith("已粘合 ") && success) {
-            ChartManifest.Note representative = chart.notes.stream()
-                    .filter(candidate -> candidate != null && pendingHoldRepresentativeId != null
-                            && pendingHoldRepresentativeId.equals(candidate.id))
-                    .findFirst().orElse(null);
-            if (representative != null) note = representative;
-            holdOperationPending = false;
-            pendingHoldGroup = -1;
-            pendingHoldRepresentativeId = null;
-        } else if (message.startsWith("已解除粘合") && success) {
-            ChartManifest.Note restored = chart.notes.stream()
-                    .filter(candidate -> candidate != null && candidate.id.equals(note.id))
-                    .findFirst().orElse(null);
-            if (restored != null) note = restored;
-            holdOperationPending = false;
-            pendingHoldGroup = -1;
-            pendingHoldRepresentativeId = null;
-        } else if (message.startsWith("粘合失败")) {
-            holdOperationPending = false;
-            pendingHoldGroup = -1;
-            pendingHoldRepresentativeId = null;
-        } else if (message.startsWith("音符已更新") || message.startsWith("音符类型已改为 ")) {
+        if (message.startsWith("音符已更新") || message.startsWith("音符类型已改为 ")) {
             ChartManifest.Note updated = chart.notes.stream()
                     .filter(candidate -> candidate != null && candidate.id.equals(note.id))
                     .findFirst().orElse(null);
@@ -219,6 +155,7 @@ public final class NoteEditScreen extends Screen {
         operationStatusColor = success ? 0xFF66FF66 : 0xFF7777FF;
         operationStatusUntilNanos = System.nanoTime() + 2_500_000_000L;
     }
+
     private static String noteTypeName(int type) {
         return switch (type) {
             case 1 -> "侦测器音符";

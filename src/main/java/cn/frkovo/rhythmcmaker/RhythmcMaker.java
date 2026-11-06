@@ -6,7 +6,6 @@ import com.google.gson.Gson;
 import cn.frkovo.rhythmcmaker.chart.ChartStorage;
 import cn.frkovo.rhythmcmaker.chart.ChartTiming;
 import cn.frkovo.rhythmcmaker.chart.HoldInterval;
-import cn.frkovo.rhythmcmaker.chart.HoldNoteGroupMerger;
 import cn.frkovo.rhythmcmaker.chart.EditorTrackLayout;
 import cn.frkovo.rhythmcmaker.chart.EditorNoteLayout;
 import cn.frkovo.rhythmcmaker.chart.PlaybackCoordinates;
@@ -356,22 +355,6 @@ public final class RhythmcMaker implements ModInitializer {
                     ? ActionResult.FAIL
                     : ActionResult.PASS;
         });
-        AttackEntityCallback.EVENT.register((player, world, hand, target, hitResult) -> {
-            if (!(world instanceof ServerWorld serverWorld) || !isEditorWorld(serverWorld)
-                    || !(player instanceof ServerPlayerEntity serverPlayer)) return ActionResult.PASS;
-            ChartManifest chart = loadActiveChart(serverPlayer, serverWorld.getServer());
-            if (chart == null || chart.notes == null) return ActionResult.PASS;
-            String notePrefix = "rhythmc_note:" + chart.id + ":";
-            String noteId = target.getCommandTags().stream()
-                    .filter(tag -> tag.startsWith(notePrefix)).map(tag -> tag.substring(notePrefix.length()))
-                    .findFirst().orElse(null);
-            if (noteId == null) return ActionResult.PASS;
-            ChartManifest.Note note = chart.notes.stream()
-                    .filter(candidate -> candidate != null && noteId.equals(candidate.id)).findFirst().orElse(null);
-            if (note == null || NoteEditRules.canBreakRepresentation(note)) return ActionResult.PASS;
-            serverPlayer.sendMessage(Text.literal("请先解除粘合，再破坏该音符"), true);
-            return ActionResult.FAIL;
-        });
         PlayerBlockBreakEvents.BEFORE.register((world, player, pos, state, blockEntity) -> {
             if (!isEditorWorld(world) || !(world instanceof ServerWorld serverWorld) || !(player instanceof ServerPlayerEntity serverPlayer)) return true;
             if (isSceneOperationBusy(serverPlayer.getUuid())) return false;
@@ -386,13 +369,7 @@ public final class RhythmcMaker implements ModInitializer {
             if (sceneArea != null) return false;
             if (chart == null) return false;
             if (!isNoteBlock(state.getBlock())) return false;
-            boolean gluedNoteAtPosition = chart.notes != null && chart.notes.stream()
-                    .anyMatch(note -> isBlockNoteAt(note, pos) && !NoteEditRules.canBreakRepresentation(note));
-            if (gluedNoteAtPosition) {
-                serverPlayer.sendMessage(Text.literal("请先解除粘合，再破坏该音符"), true);
-                return false;
-            }
-            return true;
+return true;
         });
         PlayerBlockBreakEvents.AFTER.register((world, player, pos, state, blockEntity) -> {
             if (!(world instanceof ServerWorld serverWorld) || !isEditorWorld(world)
@@ -462,14 +439,6 @@ public final class RhythmcMaker implements ModInitializer {
                                     com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "x"),
                                     com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "y"),
                                     com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "beat"))))))));
-            dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_note_glue")
-                .then(net.minecraft.server.command.CommandManager.argument("noteId", com.mojang.brigadier.arguments.StringArgumentType.word())
-                    .executes(context -> glueHoldNotes(context.getSource(),
-                        com.mojang.brigadier.arguments.StringArgumentType.getString(context, "noteId")))));
-            dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_note_unglue")
-                .then(net.minecraft.server.command.CommandManager.argument("noteId", com.mojang.brigadier.arguments.StringArgumentType.word())
-                    .executes(context -> unglueHoldNotes(context.getSource(),
-                        com.mojang.brigadier.arguments.StringArgumentType.getString(context, "noteId")))));
             dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_note_type")
                 .then(net.minecraft.server.command.CommandManager.argument("noteId", com.mojang.brigadier.arguments.StringArgumentType.word())
                     .then(net.minecraft.server.command.CommandManager.argument("type", com.mojang.brigadier.arguments.IntegerArgumentType.integer(0, 3))
@@ -1087,7 +1056,7 @@ public final class RhythmcMaker implements ModInitializer {
         target.id = source.id; target.type = source.type; target.trackId = source.trackId; target.beat = source.beat; target.time = source.time;
         target.x = source.x; target.y = source.y; target.z = source.z; target.sourceX = source.sourceX; target.sourceY = source.sourceY; target.sourceZ = source.sourceZ;
         target.scaleX = source.scaleX; target.scaleY = source.scaleY; target.scaleZ = source.scaleZ; target.rotationX = source.rotationX; target.rotationY = source.rotationY; target.rotationZ = source.rotationZ; target.holdGroup = source.holdGroup;
-        target.holdStartBeat = source.holdStartBeat; target.holdEndBeat = source.holdEndBeat; target.holdStartX = source.holdStartX; target.holdStartY = source.holdStartY; target.holdStartZ = source.holdStartZ; target.holdEndX = source.holdEndX; target.holdEndY = source.holdEndY; target.holdEndZ = source.holdEndZ; target.holdBackupId = source.holdBackupId;
+        target.holdStartBeat = source.holdStartBeat; target.holdEndBeat = source.holdEndBeat; target.holdStartX = source.holdStartX; target.holdStartY = source.holdStartY; target.holdStartZ = source.holdStartZ; target.holdEndX = source.holdEndX; target.holdEndY = source.holdEndY; target.holdEndZ = source.holdEndZ;
         return target;
     }
 
@@ -1230,139 +1199,6 @@ private static void flushActiveChart(MinecraftServer server, ServerPlayerEntity 
         return 1;
     }
 
-private static int glueHoldNotes(net.minecraft.server.command.ServerCommandSource source, String noteId)
-            throws com.mojang.brigadier.exceptions.CommandSyntaxException {
-        ServerPlayerEntity player = source.getPlayerOrThrow();
-        if (!(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world)
-                || !isNoteEditTool(player.getMainHandStack())) return 0;
-        ChartManifest chart = loadActiveChart(player, source.getServer());
-        if (chart == null || chart.notes == null) return 0;
-        ChartManifest.Note selected = chart.notes.stream().filter(note -> note != null && noteId.equals(note.id)).findFirst().orElse(null);
-        if (selected == null || selected.type != 2) {
-            player.sendMessage(Text.literal("粘合失败：目标不是 Hold 钻石音符"), true);
-            return 0;
-        }
-        java.util.List<ChartManifest.Note> connected = HoldNoteGroupMerger.connectedNotes(chart.notes, selected).stream()
-                .sorted(java.util.Comparator.comparingDouble(note -> note.beat)).toList();
-        if (connected.size() < 2) {
-            player.sendMessage(Text.literal("粘合失败：未找到同轨道且三维距离≤1的钻石音符"), true);
-            return 0;
-        }
-        ChartManifest.Note first = connected.getFirst();
-        ChartManifest.Note last = connected.getLast();
-        int group = HoldNoteGroupMerger.nextGroupId(chart.notes);
-        Path backup = holdBackupPath(source.getServer(), chart.id, group);
-        writeHoldBackup(backup, connected);
-        Set<String> connectedIds = connected.stream().map(member -> member.id).collect(java.util.stream.Collectors.toSet());
-        for (ChartManifest.Note member : connected) {
-            removeNoteDisplay(world, noteTag(chart.id, member.id));
-            if (!hasFraction(member.x) && !hasFraction(member.y) && !hasFraction(member.z)) {
-                BlockPos position = BlockPos.ofFloored(member.x, member.y, member.z);
-                boolean occupiedByOtherNote = chart.notes.stream().anyMatch(candidate -> candidate != null
-                        && !connectedIds.contains(candidate.id) && isBlockNoteAt(candidate, position));
-                if (!occupiedByOtherNote && noteTypeForBlockState(world.getBlockState(position)) == member.type) {
-                    world.setBlockState(position, Blocks.AIR.getDefaultState(), 3);
-                }
-            }
-        }
-        ChartManifest.Note representative = copyNote(first);
-        representative.holdGroup = group;
-        representative.holdStartBeat = first.beat;
-        representative.holdEndBeat = last.beat;
-        representative.holdStartX = first.x;
-        representative.holdStartY = first.y;
-        representative.holdStartZ = first.z;
-        representative.holdEndX = last.x;
-        representative.holdEndY = last.y;
-        representative.holdEndZ = last.z;
-        representative.holdBackupId = backup.getFileName().toString();
-        chart.notes.removeIf(note -> note != null && connected.stream().anyMatch(member -> member.id.equals(note.id)));
-        chart.notes.add(representative);
-        invalidateTrackSnapUndo(player.getUuid());
-        CachedChartState state = cacheChart(source.getServer(), chart);
-        synchronized (state) { state.revision++; state.dirty = true; }
-        updateNoteWorldRepresentation(world, chart, representative, representative.x, representative.y, representative.z, representative.type);
-        queueChartSave(source.getServer(), state);
-        player.sendMessage(Text.literal("已粘合 " + connected.size() + " 个钻石音符"), true);
-        return connected.size();
-    }
-
-    private static int unglueHoldNotes(net.minecraft.server.command.ServerCommandSource source, String noteId)
-            throws com.mojang.brigadier.exceptions.CommandSyntaxException {
-        ServerPlayerEntity player = source.getPlayerOrThrow();
-        if (!(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world)
-                || !isNoteEditTool(player.getMainHandStack())) return 0;
-        ChartManifest chart = loadActiveChart(player, source.getServer());
-        if (chart == null || chart.notes == null) return 0;
-        ChartManifest.Note selected = chart.notes.stream().filter(note -> note != null && noteId.equals(note.id)).findFirst().orElse(null);
-        if (selected == null || selected.holdBackupId == null || selected.holdBackupId.isBlank()) return 0;
-        Path backup = holdBackupPath(source.getServer(), selected.holdBackupId);
-        Path tempRoot = temporaryRoot(source.getServer());
-        if (!backup.startsWith(tempRoot) || !Files.isRegularFile(backup)) {
-            player.sendMessage(Text.literal("解除粘合失败：找不到粘合前备份"), true);
-            return 0;
-        }
-        java.lang.reflect.Type noteListType = new com.google.gson.reflect.TypeToken<java.util.List<ChartManifest.Note>>() {}.getType();
-        java.util.List<ChartManifest.Note> restored = readHoldBackup(backup, noteListType);
-        if (restored == null || restored.isEmpty()) return 0;
-        ChartManifest.Note originalStart = restored.stream().min(java.util.Comparator.comparingDouble(note -> note.beat)).orElseThrow();
-        double xOffset = (selected.holdStartX == null ? selected.x : selected.holdStartX) - originalStart.x;
-        double yOffset = (selected.holdStartY == null ? selected.y : selected.holdStartY) - originalStart.y;
-        double beatOffset = (selected.holdStartBeat == null ? selected.beat : selected.holdStartBeat) - originalStart.beat;
-        HoldNoteGroupMerger.translateNotes(restored, chart, xOffset, yOffset, beatOffset);
-        removeNoteDisplay(world, noteTag(chart.id, selected.id));
-        chart.notes.remove(selected);
-        chart.notes.addAll(restored);
-        invalidateTrackSnapUndo(player.getUuid());
-        deleteHoldBackup(backup);
-        CachedChartState state = cacheChart(source.getServer(), chart);
-        synchronized (state) { state.revision++; state.dirty = true; }
-        for (ChartManifest.Note restoredNote : restored) {
-            updateNoteWorldRepresentation(world, chart, restoredNote, restoredNote.x, restoredNote.y, restoredNote.z, restoredNote.type);
-        }
-        queueChartSave(source.getServer(), state);
-        player.sendMessage(Text.literal("已解除粘合，共 " + restored.size() + " 个钻石音符"), true);
-        return restored.size();
-    }
-
-private static Path holdBackupPath(MinecraftServer server, String chartId, int group) {
-        return holdBackupPath(server, chartId + "-hold-" + group + ".json");
-    }
-
-    private static Path holdBackupPath(MinecraftServer server, String fileName) {
-        try {
-            Path root = ChartStorage.temporaryDirectory(server).toAbsolutePath().normalize();
-            Path path = root.resolve(fileName).normalize();
-            if (!path.startsWith(root)) throw new IllegalArgumentException("Hold backup path invalid");
-            return path;
-        } catch (IOException exception) {
-            throw new IllegalStateException("无法创建 Hold 临时目录", exception);
-        }
-    }
-
-    private static Path temporaryRoot(MinecraftServer server) {
-        try { return ChartStorage.temporaryDirectory(server).toAbsolutePath().normalize(); }
-        catch (IOException exception) { throw new IllegalStateException("无法读取 Hold 临时目录", exception); }
-    }
-
-    private static void writeHoldBackup(Path path, java.util.List<ChartManifest.Note> notes) {
-        try {
-            Files.createDirectories(path.getParent());
-            Files.writeString(path, CHART_SNAPSHOT_GSON.toJson(notes), java.nio.charset.StandardCharsets.UTF_8);
-        } catch (IOException exception) {
-            throw new IllegalStateException("无法写入 Hold 备份", exception);
-        }
-    }
-
-    private static java.util.List<ChartManifest.Note> readHoldBackup(Path path, java.lang.reflect.Type noteListType) {
-        try { return CHART_SNAPSHOT_GSON.fromJson(Files.readString(path, java.nio.charset.StandardCharsets.UTF_8), noteListType); }
-        catch (IOException exception) { throw new IllegalStateException("无法读取 Hold 备份", exception); }
-    }
-
-    private static void deleteHoldBackup(Path path) {
-        try { Files.delete(path); }
-        catch (IOException exception) { throw new IllegalStateException("无法删除 Hold 备份", exception); }
-    }
     private static int changeChartNoteType(net.minecraft.server.command.ServerCommandSource source, String noteId, int type)
             throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayerEntity player = source.getPlayerOrThrow();

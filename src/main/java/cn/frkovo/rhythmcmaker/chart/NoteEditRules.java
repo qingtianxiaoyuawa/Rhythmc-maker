@@ -14,10 +14,6 @@ public final class NoteEditRules {
         return canOpenEditor(note);
     }
 
-    public static boolean canBreakRepresentation(ChartManifest.Note note) {
-        return note != null && note.holdGroup < 0;
-    }
-
     public static boolean requiresDisplayEntity(double x, double y, double z) {
         return hasFraction(x) || hasFraction(y) || hasFraction(z);
     }

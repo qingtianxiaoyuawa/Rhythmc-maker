@@ -12,40 +12,28 @@ public final class HoldPlaybackRegression {
                 List.of("JUDGE_FRAME_COLOR"), List.of(1.0), 1.0).equals(List.of(0)),
                 "judge frame color persists through seek rebuild");
         ChartManifest.Note editableNote = note("editable", 1.0, -1);
-        ChartManifest.Note gluedNote = note("glued", 1.0, 4);
-        gluedNote.holdStartBeat = 1.0;
-        gluedNote.holdEndBeat = 4.0;
-        gluedNote.holdStartX = gluedNote.x;
-        gluedNote.holdEndX = gluedNote.x;
-        gluedNote.holdStartY = gluedNote.y;
-        gluedNote.holdEndY = gluedNote.y;
-        gluedNote.holdStartZ = gluedNote.z;
-        gluedNote.holdEndZ = gluedNote.z - 3.0;
-        require(NoteEditRules.canEdit(editableNote), "unglued notes remain editable");
-        require(NoteEditRules.canOpenEditor(gluedNote), "glued representative holds can open the editor");
-        require(NoteEditRules.usesDisplayEntity(gluedNote), "glued Hold representatives never retain block representation");
-        require(!NoteEditRules.hasBlockRepresentationAt(gluedNote, 2, 0.0, 65.0, -3.0), "glued Hold representatives are not mistaken for old note blocks");
+        ChartManifest.Note longHold = note("long-hold", 1.0, -1);
+        longHold.holdStartBeat = 1.0;
+        longHold.holdEndBeat = 4.0;
+        longHold.holdStartX = longHold.x;
+        longHold.holdEndX = longHold.x;
+        longHold.holdStartY = longHold.y;
+        longHold.holdEndY = longHold.y;
+        longHold.holdStartZ = longHold.z;
+        longHold.holdEndZ = longHold.z - 3.0;
+        require(NoteEditRules.canEdit(longHold), "long Hold notes remain editable");
+        require(NoteEditRules.usesDisplayEntity(longHold), "long Hold notes use a display entity");
         require(NoteEditRules.hasBlockRepresentationAt(editableNote, editableNote.type, editableNote.x, editableNote.y, editableNote.z), "exact note block break identity matches");
         require(!NoteEditRules.hasBlockRepresentationAt(editableNote, editableNote.type + 1, editableNote.x, editableNote.y, editableNote.z), "breaking another block type cannot delete a note");
-        require(!NoteEditRules.canBreakRepresentation(gluedNote), "glued representative holds remain protected from direct breaking");
         ChartManifest layoutChart = new ChartManifest();
         layoutChart.bpm = 120.0;
         layoutChart.divisionsPerBeat = 2;
-        layoutChart.notes.add(gluedNote);
+        layoutChart.notes.add(longHold);
         EditorTrackLayout.of(5, 8).applyTo(layoutChart);
         EditorNoteLayout.repositionNotes(layoutChart);
-        require(gluedNote.z == PlaybackCoordinates.editorWorldZAtBeat(layoutChart, gluedNote.beat) - 0.5, "layout changes reposition Hold representative by beat");
-        require(gluedNote.holdStartZ == PlaybackCoordinates.editorWorldZAtBeat(layoutChart, gluedNote.holdStartBeat) - 0.5, "layout changes reposition Hold start by beat");
-        require(gluedNote.holdEndZ == PlaybackCoordinates.editorWorldZAtBeat(layoutChart, gluedNote.holdEndBeat) - 0.5, "layout changes reposition Hold end by beat");
-        ChartManifest.Note restoredHoldNote = note("restore-hold", 2.0, 2);
-        restoredHoldNote.x = 2.0;
-        restoredHoldNote.y = 2.0;
-        java.util.List<ChartManifest.Note> restoredHoldNotes = new java.util.ArrayList<>(java.util.List.of(restoredHoldNote));
-        HoldNoteGroupMerger.translateNotes(restoredHoldNotes, layoutChart, 1.5, -1.0, 2.0);
-        require(restoredHoldNote.x == 3.5 && restoredHoldNote.y == 1.0 && restoredHoldNote.beat == 4.0,
-                "ungluing a moved Hold restores notes with the same translation");
-        require(restoredHoldNote.z == PlaybackCoordinates.editorWorldZAtBeat(layoutChart, 4.0) - 0.5,
-                "unglued backup z is recalculated from its shifted beat");
+        require(longHold.z == PlaybackCoordinates.editorWorldZAtBeat(layoutChart, longHold.beat) - 0.5, "layout changes reposition Hold representative by beat");
+        require(longHold.holdStartZ == PlaybackCoordinates.editorWorldZAtBeat(layoutChart, longHold.holdStartBeat) - 0.5, "layout changes reposition Hold start by beat");
+        require(longHold.holdEndZ == PlaybackCoordinates.editorWorldZAtBeat(layoutChart, longHold.holdEndBeat) - 0.5, "layout changes reposition Hold end by beat");
         require(NoteEditRules.editorDisplayCenter(0.0, -3.0) == -1.0, "hold model centers use visible integer block centers");
         require(NoteEditRules.editorDisplaySpan(0.0, -3.0) == 4.0, "hold model spans touch both outer block faces");
         require(NoteEditRules.editorDisplayCenter(0.0, -3.5) == -1.5, "mixed fractional hold coordinates remain centered");
@@ -54,15 +42,6 @@ public final class HoldPlaybackRegression {
                 "fractional note coordinates require a display entity");
         require(!NoteEditRules.requiresDisplayEntity(1.0, 66.0, -4.0),
                 "integer note coordinates remain block represented");
-        ChartManifest.Note fractionalConnected = note("fractional-connected", 0.5, -1);
-        fractionalConnected.x = 0.5;
-        fractionalConnected.z = -1.0;
-        ChartManifest.Note fractionalNeighbor = note("fractional-neighbor", 1.5, -1);
-        fractionalNeighbor.x = 1.5;
-        fractionalNeighbor.z = -1.0;
-        List<ChartManifest.Note> fractionalCandidates = List.of(fractionalConnected, fractionalNeighbor);
-        require(HoldNoteGroupMerger.connectedNotes(fractionalCandidates, fractionalConnected).size() == 2,
-                "fractional display notes participate in hold connection resolution");
         ChartManifest.Note first = note("first", 1.0, 8);
         ChartManifest.Note middle = note("middle", 2.0, 8);
         ChartManifest.Note last = note("last", 4.0, 8);
@@ -81,31 +60,6 @@ public final class HoldPlaybackRegression {
         require(simultaneous.startBeat() == simultaneous.endBeat() && simultaneous.durationBeats() == 0.0,
                 "same-beat hold group remains loadable");
         require(interval.hasEndJudgementBoundary(), "three-member runtime groups have an end boundary");
-
-        ChartManifest.Note connectedStart = note("connected-start", 0.0, 4);
-        connectedStart.x = 0.0;
-        ChartManifest.Note mergedGroupStart = note("merged-group-start", 1.0, 9);
-        mergedGroupStart.x = 1.0;
-        ChartManifest.Note mergedGroupEnd = note("merged-group-end", 2.0, 9);
-        mergedGroupEnd.x = 2.0;
-        ChartManifest.Note unrelatedTrack = note("unrelated-track", 0.5, -1);
-        unrelatedTrack.trackId = 1;
-        ChartManifest.Note unrelatedDistance = note("unrelated-distance", 4.0, -1);
-        unrelatedDistance.x = 4.0;
-        ChartManifest.Note nonHold = note("non-hold", 0.5, -1);
-        nonHold.type = 1;
-        List<ChartManifest.Note> mergeCandidates = List.of(connectedStart, mergedGroupStart, mergedGroupEnd,
-                unrelatedTrack, unrelatedDistance, nonHold);
-        List<ChartManifest.Note> merged = HoldNoteGroupMerger.connectedNotes(mergeCandidates, connectedStart);
-        require(merged.size() == 3 && merged.contains(connectedStart) && merged.contains(mergedGroupStart)
-                && merged.contains(mergedGroupEnd), "transitive merge expands existing groups on the same track: "
-                        + merged.stream().map(member -> member.id).toList());
-        int mergedGroupId = HoldNoteGroupMerger.nextGroupId(mergeCandidates);
-        for (ChartManifest.Note member : merged) member.holdGroup = mergedGroupId;
-        require(HoldInterval.fromChart(chartWith(merged)).getFirst().members().size() == 3,
-                "merged group retains all timing members");
-        require(HoldInterval.fromChart(chartWith(merged.subList(0, 2))).getFirst().hasEndJudgementBoundary(),
-                "two-member runtime groups retain an end boundary");
         ChartManifest.Note representative = note("representative", 1.0, 12);
         representative.holdStartBeat = 1.0;
         representative.holdEndBeat = 8.0;

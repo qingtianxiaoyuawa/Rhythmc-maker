@@ -135,7 +135,6 @@ public final class ChartManifest {
         public Double holdEndX;
         public Double holdEndY;
         public Double holdEndZ;
-        public String holdBackupId;
 
         public Note() {
         }

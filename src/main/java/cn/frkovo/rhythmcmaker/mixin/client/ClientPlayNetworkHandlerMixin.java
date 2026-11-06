@@ -16,11 +16,8 @@ abstract class ClientPlayNetworkHandlerMixin {
     private void rhythmcMaker$noteOperationStatus(OverlayMessageS2CPacket packet, CallbackInfo callback) {
         if (!(MinecraftClient.getInstance().currentScreen instanceof NoteEditScreen screen)) return;
         String value = packet.text().getString();
-        if (value.startsWith("已粘合 ")) screen.showServerStatus(value, true);
-        else if (value.startsWith("粘合失败")) screen.showServerStatus(value, false);
-        else if (value.startsWith("音符已更新")) screen.showServerStatus(value, true);
+        if (value.startsWith("音符已更新")) screen.showServerStatus(value, true);
         else if (value.startsWith("音符类型已改为 ")) screen.showServerStatus(value, true);
-        else if (value.startsWith("已解除粘合")) screen.showServerStatus(value, true);
     }
 
     @Inject(method = "sendChatCommand(Ljava/lang/String;)V", at = @At("HEAD"), cancellable = true)
