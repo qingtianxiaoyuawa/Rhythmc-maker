@@ -150,10 +150,12 @@ public final class ClientChartAccess {
         try {
             ChartManifest inMemory = cn.frkovo.rhythmcmaker.RhythmcMaker.activeChartSnapshot(server(), current.id);
             if (inMemory != null) {
+                applyPendingLayout(inMemory);
                 activeChart = inMemory;
             } else {
                 ChartManifest fresh = ChartStorage.find(server(), current.id);
                 if (fresh != null) {
+                    applyPendingLayout(fresh);
                     activeChart = fresh;
                     var attributes = ChartStorage.manifestAttributes(server(), fresh.id);
                     activeChartModifiedTime = attributes.lastModifiedTime();
@@ -163,6 +165,12 @@ public final class ClientChartAccess {
         } catch (IOException ignored) {
         }
         return activeChart;
+    }
+
+    private static void applyPendingLayout(ChartManifest chart) {
+        if (pendingLayoutDivisions < 1 || System.nanoTime() >= pendingLayoutExpiresAtNanos) return;
+        EditorTrackLayout.of(pendingLayoutLanes, pendingLayoutDivisions).applyTo(chart);
+        chart.trackLength = Math.max(8, Math.max(1, chart.beatCount) * chart.divisionsPerBeat);
     }
 
     static boolean refreshActiveChartIfChanged() {

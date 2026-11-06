@@ -22,7 +22,6 @@ final class PlaceholderScreen extends RhythmcScreen {
     private final String section;
     private static boolean trackSnapUndoAvailable;
     private static String trackSnapChartId;
-    private static TrackSnapSummary lastTrackSnapSummary;
 
     PlaceholderScreen(String title) {
         this(title, "root");
@@ -132,7 +131,6 @@ final class PlaceholderScreen extends RhythmcScreen {
             var undo = UIComponents.button(Text.literal("撤销上次吸附"), button -> {
                 RhythmcMakerClient.sendChartCommand("rhythmc_track_snap_undo");
                 trackSnapUndoAvailable = false;
-                lastTrackSnapSummary = null;
                 MinecraftClient.getInstance().setScreen(new PlaceholderScreen("轨道吸附", "track-snap"));
             });
             undo.active(trackSnapUndoAvailable && chart != null && chart.id.equals(trackSnapChartId));
@@ -193,7 +191,8 @@ final class PlaceholderScreen extends RhythmcScreen {
                 }
             }).horizontalSizing(Sizing.fill()));
         } else if (section.equals("beat-score")) {
-            var chart = ClientChartAccess.resolveActiveChart();
+            var chart = ClientChartAccess.refreshActiveChartNow();
+            RhythmcMakerClient.requestSidebarRefresh();
             int currentDivisions = chart == null ? ClientChartAccess.defaultDivisionsPerBeat() : EditorTrackLayout.boundedDivisionsPerBeat(chart.divisionsPerBeat);
             int currentLanes = EditorTrackLayout.supportedLaneCount(chart == null ? EditorTrackLayout.DEFAULT_LANE_COUNT : chart.laneCount);
             page.child(UIComponents.label(Text.literal("每Beat分数（1 - 32）")));
@@ -210,6 +209,7 @@ final class PlaceholderScreen extends RhythmcScreen {
                     if (!EditorTrackLayout.isSupportedDivisionsPerBeat(divisionsValue) || !EditorTrackLayout.isSupportedLaneCount(lanesValue)) throw new NumberFormatException();
                     EditorTrackLayout layout = EditorTrackLayout.of(lanesValue, divisionsValue);
                     invalidateTrackSnapState();
+                    ClientChartAccess.applyLocalLayout(layout);
                     RhythmcMakerClient.sendChartCommand("rhythmc_layout_set " + layout.divisionsPerBeat() + " " + layout.laneCount());
                     ClientChartAccess.status("正在应用制谱器轨道：" + layout.laneCount() + " × " + layout.divisionsPerBeat());
                     close();
@@ -281,7 +281,6 @@ final class PlaceholderScreen extends RhythmcScreen {
     static void invalidateTrackSnapState() {
         trackSnapUndoAvailable = false;
         trackSnapChartId = null;
-        lastTrackSnapSummary = null;
     }
 
     @Override

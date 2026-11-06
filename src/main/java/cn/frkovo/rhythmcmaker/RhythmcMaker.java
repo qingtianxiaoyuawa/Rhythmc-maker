@@ -3157,6 +3157,8 @@ private static void showSceneBoundary(MinecraftServer server) {
                     session.playing = false;
                     if (session.effectSession != null) {
                         session.effectSession.resetClientTime(player);
+                        session.effectSession.resetWorldTime(player);
+                        session.effectSession.resetWorldWeather();
                         session.effectSession.clearTextDisplays();
                         session.effectSession.clearGlowTeam();
                         session.effectSession = null;
@@ -3228,7 +3230,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             case "MESSAGE" -> sendMessageEffect(player, effect, text);
             case "TEXT_DISPLAY", "TEXT_DISPLAY_EFFECT", "TEXT_DISPLAY_SYNC_TRACK", "TEXT_DISPLAY_DESYNC_TRACK", "TEXT_DISPLAY_REMOVE", "HOLOGRAM", "REMOVE_HOLOGRAM" -> session.applyTextEffect(effect);
             case "TIME" -> session.applyTime(player, effect);
-            case "WEATHER" -> session.applyWeather(player, effect);
+            case "WEATHER" -> session.applyWeather(effect);
             case "EFFECT" -> session.applyPotionProxy(player, effect);
             case "CLEAR_EFFECT" -> session.clearPotionEffect(player, effect);
             case "ARENA", "CHANGE_ARENA" -> session.applyArena(effect);
@@ -3459,14 +3461,21 @@ private static void showSceneBoundary(MinecraftServer server) {
         long scaled = (long) Math.ceil(Math.max(1L, durationTicks) / playbackRate);
         return (int) Math.min(Integer.MAX_VALUE, Math.max(1L, scaled));
     }
-    private static void sendPlayerWeather(ServerPlayerEntity player, boolean raining, boolean thunder) {
-        player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket(
-                raining ? net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket.RAIN_STARTED
-                        : net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket.RAIN_STOPPED, 0.0F));
-        player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket(
-                net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket.RAIN_GRADIENT_CHANGED, raining ? 1.0F : 0.0F));
-        player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket(
-                net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket.THUNDER_GRADIENT_CHANGED, thunder ? 1.0F : 0.0F));
+    private static void broadcastWorldTime(ServerWorld world, long timeOfDay, boolean advanceTime) {
+        var packet = new net.minecraft.network.packet.s2c.play.WorldTimeUpdateS2CPacket(world.getTime(), timeOfDay, advanceTime);
+        for (ServerPlayerEntity player : world.getPlayers()) player.networkHandler.sendPacket(packet);
+    }
+    private static void setWorldWeather(ServerWorld world, int clearDuration, int weatherDuration, boolean raining, boolean thunder) {
+        world.setWeather(clearDuration, weatherDuration, raining, thunder);
+        for (ServerPlayerEntity player : world.getPlayers()) {
+            player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket(
+                    raining ? net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket.RAIN_STARTED
+                            : net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket.RAIN_STOPPED, 0.0F));
+            player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket(
+                    net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket.RAIN_GRADIENT_CHANGED, raining ? 1.0F : 0.0F));
+            player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket(
+                    net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket.THUNDER_GRADIENT_CHANGED, thunder ? 1.0F : 0.0F));
+        }
     }
     private static void stopPlayback(MinecraftServer server, ServerPlayerEntity player, boolean returnPlayer) {
         releasePlaybackChunkTickets(server, player.getUuid());
@@ -3474,10 +3483,10 @@ private static void showSceneBoundary(MinecraftServer server) {
         ScrollJudgementSession scrollSession = SCROLL_JUDGEMENT_SESSIONS.remove(player.getUuid());
         if (scrollSession != null) {
             cleanupPlaybackDisplayEntities(scrollSession.world, player.getUuid(), scrollSession.chart.id);
-            sendPlayerWeather(player, false, false);
             if (scrollSession.effectSession != null) {
                 scrollSession.effectSession.resetClientTime(player);
                 scrollSession.effectSession.resetWorldTime(player);
+                scrollSession.effectSession.resetWorldWeather();
                 scrollSession.effectSession.clearTextDisplays();
                 scrollSession.effectSession.clearGlowTeam();
             }
@@ -3489,9 +3498,9 @@ private static void showSceneBoundary(MinecraftServer server) {
         cancelPlaybackSceneImports(session);
         cleanupPlaybackDisplayEntities(session.world, player.getUuid(), session.chart.id);
         try {
-            sendPlayerWeather(player, false, false);
             session.resetClientTime(player);
             session.resetWorldTime(player);
+            session.resetWorldWeather();
             session.clearGlowTeam();
             for (DisplayEntity.BlockDisplayEntity display : session.displays.values()) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
             session.clearHoldDisplays();
@@ -3646,6 +3655,8 @@ private static void showSceneBoundary(MinecraftServer server) {
         private void clearEffectSession(ServerPlayerEntity player) {
             if (effectSession == null) return;
             effectSession.resetClientTime(player);
+            effectSession.resetWorldTime(player);
+            effectSession.resetWorldWeather();
             effectSession.clearTextDisplays();
             effectSession.clearGlowTeam();
             for (DisplayEntity.BlockDisplayEntity display : effectSession.displays.values()) {
@@ -3727,10 +3738,16 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final Map<Integer, Team> glowTeams = new java.util.HashMap<>();
         private Formatting observerGlowColor = Formatting.WHITE;
         private String judgeFrameColor = "border";
-        private Long clientTime;
         private Long worldTime;
         private int lastShownTime = Integer.MIN_VALUE;
         private final long originalWorldTimeOfDay;
+        private int originalClearWeatherTime;
+        private int originalRainTime;
+        private int originalThunderTime;
+        private boolean originalRaining;
+        private boolean originalThundering;
+        private long originalWeatherCapturedAtTick;
+        private boolean weatherChanged;
         private final Map<String, ChartManifest.Note> notesById = new java.util.HashMap<>();
         private final Map<String, Double> noteTimes = new java.util.HashMap<>();
 
@@ -3806,6 +3823,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private void rebuildPersistentEffectState(ServerPlayerEntity player, double targetSeconds) {
             resetClientTime(player);
             resetWorldTime(player);
+            resetWorldWeather();
             clearTextDisplays();
             clearGlowTeam();
             clearHiddenNoteFilter();
@@ -3828,6 +3846,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 if (PersistentEffectStateFold.isArenaType(effectTypes.get(index))) restoresArena = true;
                 playTrackEffectSafely(this, player, effects.get(index));
             }
+            restoreWorldWeatherAtBeat(PlaybackCoordinates.beatAtSongTime(chart, timing, targetSeconds));
             updateTimeEffect(player, PlaybackCoordinates.beatAtSongTime(chart, timing, targetSeconds));
             if (sceneChanged && !restoresArena) restoreInitialPlaybackScene(world.getServer(), this);
             initializeTextDisplays(targetSeconds);
@@ -3844,6 +3863,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             this.returnPitch = returnPitch;
             this.chart = chart;
             this.originalWorldTimeOfDay = world.getTimeOfDay();
+            captureOriginalWorldWeather();
             this.timing = ChartTiming.prepare(chart);
             this.demandProfile = PlaybackDemandProfile.from(chart);
             this.textDisplayPool = new java.util.ArrayDeque<>(demandProfile.recommendedTextPoolCapacity());
@@ -4338,34 +4358,16 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
         private void applyTime(ServerPlayerEntity player, JsonObject effect) {
             long time = TimeFade.wrap(effectLong(effect, "time", effectLong(effect, "timeOfDay", effectLong(effect, "worldTime", effectLong(effect, "value", world.getTimeOfDay())))));
-            boolean clientOnly = effectBoolean(effect, "client", true);
             if (effect.has("durationBeats") && effectDouble(effect, "durationBeats", 0.0) > 0.0) {
-                if (clientOnly) {
-                    resetWorldTime(player);
-                    clientTime = time;
-                    lastShownTime = Integer.MIN_VALUE;
-                    updateTimeEffect(player, effectDouble(effect, "beat", 0.0));
-                    return;
-                }
-                resetClientTime(player);
                 worldTime = time;
                 lastShownTime = Integer.MIN_VALUE;
                 updateTimeEffect(player, effectDouble(effect, "beat", 0.0));
                 return;
             }
-            if (!clientOnly) {
-                resetClientTime(player);
-                worldTime = time;
-                world.setTimeOfDay(time);
-                player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.WorldTimeUpdateS2CPacket(
-                        world.getTime(), time, world.getGameRules().getValue(GameRules.ADVANCE_TIME)));
-                return;
-            }
-            resetWorldTime(player);
-            clientTime = time;
+            worldTime = time;
             lastShownTime = (int) time;
-            player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.WorldTimeUpdateS2CPacket(
-                    world.getTime(), time, false));
+            world.setTimeOfDay(time);
+            broadcastWorldTime(world, time, world.getGameRules().getValue(GameRules.ADVANCE_TIME));
         }
         private void updateClientTime(ServerPlayerEntity player) {
             double beat = PlaybackCoordinates.beatAtSongTime(chart, timing,
@@ -4373,7 +4375,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             updateTimeEffect(player, beat);
         }
         private void updateTimeEffect(ServerPlayerEntity player, double beat) {
-            if (clientTime == null && worldTime == null) return;
+            if (worldTime == null) return;
             JsonObject active = latestTimeEffectAt(beat);
             if (active == null) return;
             double durationBeats = effectDouble(active, "durationBeats", 0.0);
@@ -4383,20 +4385,11 @@ private static void showSceneBoundary(MinecraftServer server) {
             long from = timeBeforeEffect(active, beat);
             long target = TimeFade.wrap(effectLong(active, "time", effectLong(active, "timeOfDay", world.getTimeOfDay())));
             long shown = TimeFade.at(from, target, TimeFade.Direction.parse(effectString(active, "direction", "CLOCKWISE")), progress);
-            if (clientTime != null) {
-                if (shown != lastShownTime) {
-                    lastShownTime = (int) shown;
-                    player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.WorldTimeUpdateS2CPacket(
-                            world.getTime(), shown, false));
-                }
-            } else {
-                worldTime = shown;
-                if (shown != lastShownTime) {
-                    lastShownTime = (int) shown;
-                    world.setTimeOfDay(shown);
-                    player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.WorldTimeUpdateS2CPacket(
-                            world.getTime(), shown, world.getGameRules().getValue(GameRules.ADVANCE_TIME)));
-                }
+            worldTime = shown;
+            if (shown != lastShownTime) {
+                lastShownTime = (int) shown;
+                world.setTimeOfDay(shown);
+                broadcastWorldTime(world, shown, world.getGameRules().getValue(GameRules.ADVANCE_TIME));
             }
         }
         private JsonObject latestTimeEffectAt(double beat) {
@@ -4425,25 +4418,52 @@ private static void showSceneBoundary(MinecraftServer server) {
             return time;
         }
         private void resetClientTime(ServerPlayerEntity player) {
-            if (clientTime == null) return;
-            clientTime = null;
-            lastShownTime = Integer.MIN_VALUE;
-            player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.WorldTimeUpdateS2CPacket(
-                    world.getTime(), world.getTimeOfDay(), world.getGameRules().getValue(GameRules.ADVANCE_TIME)));
+            resetWorldTime(player);
         }
         private void resetWorldTime(ServerPlayerEntity player) {
             if (worldTime == null) return;
             worldTime = null;
             lastShownTime = Integer.MIN_VALUE;
             world.setTimeOfDay(originalWorldTimeOfDay);
-            player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.WorldTimeUpdateS2CPacket(
-                    world.getTime(), world.getTimeOfDay(), world.getGameRules().getValue(GameRules.ADVANCE_TIME)));
+            broadcastWorldTime(world, world.getTimeOfDay(), world.getGameRules().getValue(GameRules.ADVANCE_TIME));
         }
-        private void applyWeather(ServerPlayerEntity player, JsonObject effect) {
+        private void applyWeather(JsonObject effect) {
             String weather = effectString(effect, "weather", effectString(effect, "type", "clear")).trim().toUpperCase(java.util.Locale.ROOT);
             boolean thunder = weather.equals("THUNDER") || weather.equals("THUNDERSTORM") || weather.equals("STORM");
             boolean raining = thunder || weather.equals("RAIN") || weather.equals("DOWNFALL");
-            sendPlayerWeather(player, raining, thunder);
+            weatherChanged = true;
+            setWorldWeather(world, raining ? 0 : Integer.MAX_VALUE, Integer.MAX_VALUE, raining, thunder);
+        }
+        private void resetWorldWeather() {
+            if (!weatherChanged) return;
+            weatherChanged = false;
+            long elapsedTicks = Math.max(0L, world.getTime() - originalWeatherCapturedAtTick);
+            int clearTime = Math.max(0, originalClearWeatherTime - (int) Math.min(Integer.MAX_VALUE, elapsedTicks));
+            int rainTime = Math.max(0, originalRainTime - (int) Math.min(Integer.MAX_VALUE, elapsedTicks));
+            int thunderTime = Math.max(0, originalThunderTime - (int) Math.min(Integer.MAX_VALUE, elapsedTicks));
+            setWorldWeather(world, clearTime, originalThundering ? thunderTime : rainTime, originalRaining, originalThundering);
+        }
+        private void captureOriginalWorldWeather() {
+            var properties = (ServerWorldProperties) world.getLevelProperties();
+            originalClearWeatherTime = properties.getClearWeatherTime();
+            originalRainTime = properties.getRainTime();
+            originalThunderTime = properties.getThunderTime();
+            originalRaining = world.isRaining();
+            originalThundering = world.isThundering();
+            originalWeatherCapturedAtTick = world.getTime();
+        }
+        private void restoreWorldWeatherAtBeat(double beat) {
+            JsonObject latestWeather = null;
+            for (JsonObject effect : effects) {
+                if (!effectType(effect).equals("WEATHER")) continue;
+                if (effectDouble(effect, "beat", Double.POSITIVE_INFINITY) > beat) break;
+                latestWeather = effect;
+            }
+            if (latestWeather == null) {
+                resetWorldWeather();
+                captureOriginalWorldWeather();
+            }
+            else applyWeather(latestWeather);
         }
         private double calculateEndSeconds() {
             double end = chart.durationSeconds + chart.offsetMillis / 1000.0;
