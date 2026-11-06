@@ -31,19 +31,24 @@ public final class NoteEditRules {
     }
 
     public static boolean usesDisplayEntity(ChartManifest.Note note) {
-        return note != null && requiresDisplayEntity(note.x, note.y, note.z);
+        return note != null && (note.visualOnly || requiresDisplayEntity(note.x, note.y, note.z)
+                || cn.frkovo.rhythmcmaker.common.note.NoteGeometry.hasTransform(note));
     }
 
     public static boolean hasBlockRepresentationAt(ChartManifest.Note note, int type, double x, double y, double z) {
         return note != null && note.type == type
-                && !requiresDisplayEntity(note.x, note.y, note.z)
+                && !usesDisplayEntity(note)
                 && Math.abs(note.x - x) < FRACTION_EPSILON
                 && Math.abs(note.y - y) < FRACTION_EPSILON
                 && Math.abs(note.z - z) < FRACTION_EPSILON;
     }
 
     public static double editorDisplayCoordinate(double coordinate) {
-        return hasFraction(coordinate) ? coordinate : coordinate + 0.5;
+        return coordinate + 0.5;
+    }
+
+    public static double editorNoteCoordinate(double displayCoordinate) {
+        return displayCoordinate - 0.5;
     }
 
     public static double editorDisplayCenter(double start, double end) {

@@ -93,6 +93,12 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         clearSidebarSnapshot();
     }
 
+    public static void refreshEditorLayout() {
+        ClientChartAccess.refreshActiveChartNow();
+        requestSidebarRefresh();
+        if (MinecraftClient.getInstance().currentScreen instanceof ChartMenuScreen menu) menu.refreshLayoutFields();
+    }
+
     public static boolean interceptNoteItemDrop(net.minecraft.client.network.ClientPlayerEntity player) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player != player || client.world == null
@@ -694,7 +700,8 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             "歌曲时间 " + formatHudTime(currentSeconds) + "/" + formatHudTime(totalSeconds),
             "beat数 " + currentBeat + "/" + totalBeatCount,
             "当前每beat分数 " + divisions,
-            "当前轨道宽度 " + Math.max(1, Math.min(9, chart.laneCount))
+            "当前轨道宽度 " + Math.max(1, Math.min(9, chart.laneCount)),
+            "当前轨道高度 " + chart.trackHeight
         });
     }
 
@@ -715,7 +722,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         String dimension = client.player == null ? "" : client.player.getEntityWorld().getRegistryKey().getValue().toString();
         if (chart == null) return mode + "|" + dimension + "|" + ClientChartAccess.config().lobbySidebarContent;
         return mode + "|" + dimension + "|" + String.valueOf(chart.id) + "|" + chart.divisionsPerBeat + "|"
-                + chart.beatsPerMeasure + "|" + chart.laneCount + "|" + chart.beatCount + "|" + chart.totalBeats + "|"
+                + chart.beatsPerMeasure + "|" + chart.laneCount + "|" + chart.trackHeight + "|" + chart.beatCount + "|" + chart.totalBeats + "|"
                 + chart.durationSeconds + "|" + playbackStartBeat + "|" + playbackStartSeconds;
     }
 

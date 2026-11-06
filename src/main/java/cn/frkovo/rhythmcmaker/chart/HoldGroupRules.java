@@ -18,16 +18,43 @@ public final class HoldGroupRules {
     }
 
     public static boolean isEndpoint(ChartManifest chart, ChartManifest.Note note) {
+        if (note != null && note.visualOnly) return false;
         if (note == null || note.type != 2 || note.holdGroup < 0) return true;
-        List<ChartManifest.Note> members = members(chart, note.trackId, note.holdGroup);
-        return members.size() >= 2 && (members.getFirst().id.equals(note.id) || members.getLast().id.equals(note.id));
+        return note.holdRole == cn.frkovo.rhythmcmaker.common.note.HoldRole.HEAD
+                || note.holdRole == cn.frkovo.rhythmcmaker.common.note.HoldRole.TAIL;
     }
 
     public static ChartManifest.Note otherEndpoint(ChartManifest chart, ChartManifest.Note note) {
         if (note == null || note.type != 2 || note.holdGroup < 0) return null;
         List<ChartManifest.Note> members = members(chart, note.trackId, note.holdGroup);
-        if (members.size() != 2) return null;
-        return members.getFirst().id.equals(note.id) ? members.getLast() : members.getFirst();
+        if (members.size() < 2) return null;
+        ChartManifest.Note head = members.stream().filter(candidate -> candidate.holdRole == cn.frkovo.rhythmcmaker.common.note.HoldRole.HEAD).findFirst().orElse(members.getFirst());
+        ChartManifest.Note tail = members.stream().filter(candidate -> candidate.holdRole == cn.frkovo.rhythmcmaker.common.note.HoldRole.TAIL).findFirst().orElse(members.getLast());
+        return head.id.equals(note.id) ? tail : head;
+    }
+
+    public static boolean isValidGroup(ChartManifest chart, ChartManifest.Note note) {
+        if (note.holdGroup < 0) return true;
+        List<ChartManifest.Note> real = members(chart, note.trackId, note.holdGroup).stream().filter(member -> !member.visualOnly).toList();
+        List<ChartManifest.Note> heads = real.stream().filter(member -> member.holdRole == cn.frkovo.rhythmcmaker.common.note.HoldRole.HEAD).toList();
+        List<ChartManifest.Note> tails = real.stream().filter(member -> member.holdRole == cn.frkovo.rhythmcmaker.common.note.HoldRole.TAIL).toList();
+        if (heads.size() != 1 || tails.size() != 1 || heads.getFirst().beat >= tails.getFirst().beat) return false;
+        return real.stream().allMatch(member -> Double.isFinite(member.beat)
+                && member.beat >= heads.getFirst().beat && member.beat <= tails.getFirst().beat);
+    }
+
+    public static boolean isHead(ChartManifest chart, ChartManifest.Note note) {
+        if (note.holdRole == cn.frkovo.rhythmcmaker.common.note.HoldRole.HEAD) return true;
+        if (note.holdRole == cn.frkovo.rhythmcmaker.common.note.HoldRole.TAIL) return false;
+        return members(chart, note.trackId, note.holdGroup).getFirst().id.equals(note.id);
+    }
+
+    public static boolean canSetBeat(ChartManifest chart, ChartManifest.Note note, double beat) {
+        if (!Double.isFinite(beat) || beat < 0.0 || beat > 1_000_000.0 || !isEndpoint(chart, note)) return false;
+        if (note.holdGroup < 0) return true;
+        if (!isValidGroup(chart, note)) return false;
+        ChartManifest.Note other = otherEndpoint(chart, note);
+        return isHead(chart, note) ? beat < other.beat : beat > other.beat;
     }
 
     public static int nextGroupId(ChartManifest chart) {

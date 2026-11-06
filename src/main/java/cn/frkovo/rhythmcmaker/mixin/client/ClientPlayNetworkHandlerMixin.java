@@ -14,8 +14,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 abstract class ClientPlayNetworkHandlerMixin {
     @Inject(method = "onOverlayMessage(Lnet/minecraft/network/packet/s2c/play/OverlayMessageS2CPacket;)V", at = @At("TAIL"))
     private void rhythmcMaker$noteOperationStatus(OverlayMessageS2CPacket packet, CallbackInfo callback) {
-        if (!(MinecraftClient.getInstance().currentScreen instanceof NoteEditScreen screen)) return;
         String value = packet.text().getString();
+        if (value.startsWith("制谱器轨道调整完成") || value.startsWith("制谱器轨道已是")) RhythmcMakerClient.refreshEditorLayout();
+        if (!(MinecraftClient.getInstance().currentScreen instanceof NoteEditScreen screen)) return;
         if (value.startsWith("音符已更新")) screen.showServerStatus(value, true);
         else if (value.startsWith("音符类型已改为 ")) screen.showServerStatus(value, true);
     }

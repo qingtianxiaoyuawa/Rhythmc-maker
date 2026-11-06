@@ -23,6 +23,7 @@ public final class ChartManifest {
     public int divisionsPerBeat = 4;
     /** Odd number of editable horizontal lanes in the Maker grid. */
     public int laneCount = 3;
+    public int trackHeight = 3;
     public int beatsPerMeasure = 0;
     public String coverItemId;
     public String audioFile;
@@ -34,6 +35,7 @@ public final class ChartManifest {
     public int editorTrackBuiltLength;
     public int editorTrackBuiltLaneCount;
     public int editorTrackBuiltDivisionsPerBeat;
+    public int editorTrackBuiltHeight;
     /** Persisted stable dynamic editor-dimension path. */
     public String dimensionId;
     /** Persisted playback start beat for this chart. */
@@ -127,6 +129,9 @@ public final class ChartManifest {
         public double rotationY;
         public double rotationZ;
         public int holdGroup = -1;
+        public cn.frkovo.rhythmcmaker.common.note.HoldRole holdRole = cn.frkovo.rhythmcmaker.common.note.HoldRole.SINGLE;
+        public boolean visualOnly;
+        public transient cn.frkovo.rhythmcmaker.common.note.EditorBeat editorBeat;
 
         public Note() {
         }

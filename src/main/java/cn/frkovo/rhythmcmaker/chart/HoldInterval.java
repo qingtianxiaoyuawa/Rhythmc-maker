@@ -21,7 +21,7 @@ public record HoldInterval(String id, int trackId, int holdGroup, double startBe
     public static List<HoldInterval> fromChart(ChartManifest chart) {
         java.util.Map<GroupKey, java.util.List<ChartManifest.Note>> grouped = new java.util.HashMap<>();
         for (ChartManifest.Note note : chart.notes) {
-            if (note != null && note.type == 2 && note.holdGroup >= 0 && Double.isFinite(note.beat)) {
+            if (note != null && !note.visualOnly && note.type == 2 && note.holdGroup >= 0 && Double.isFinite(note.beat)) {
                 GroupKey key = new GroupKey(note.trackId, note.holdGroup);
                 grouped.computeIfAbsent(key, ignored -> new java.util.ArrayList<>()).add(note);
             }

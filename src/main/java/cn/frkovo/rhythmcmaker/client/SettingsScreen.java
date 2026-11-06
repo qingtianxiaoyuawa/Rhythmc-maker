@@ -12,6 +12,11 @@ import net.minecraft.text.Text;
 public final class SettingsScreen extends Screen {
     private final SettingsImGuiView view = new SettingsImGuiView(this::closeSettings);
 
+    @Override
+    public void removed() {
+        ImGuiRuntime.saveWindowSettings();
+    }
+
     SettingsScreen() {
         super(Text.literal("RhythMC 设置"));
     }

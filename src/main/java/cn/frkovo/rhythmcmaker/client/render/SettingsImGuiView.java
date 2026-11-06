@@ -49,30 +49,42 @@ public final class SettingsImGuiView {
     }
 
     public void render(MinecraftClient client) {
-        float displayWidth = client.getWindow().getWidth();
-        float displayHeight = client.getWindow().getHeight();
-        float width = Math.min(displayWidth - 24.0f, Math.max(420.0f, displayWidth * 0.86f));
-        float height = Math.min(displayHeight - 24.0f, Math.max(300.0f, displayHeight * 0.86f));
-        ImGui.setNextWindowPos((displayWidth - width) * 0.5f, (displayHeight - height) * 0.5f, ImGuiCond.Always);
-        ImGui.setNextWindowSize(width, height, ImGuiCond.Always);
+        float displayWidth = ImGui.getIO().getDisplaySizeX();
+        float displayHeight = ImGui.getIO().getDisplaySizeY();
+        float width = Math.max(1.0f, Math.min(displayWidth - 24.0f, Math.max(420.0f, displayWidth * 0.86f)));
+        float height = Math.max(1.0f, Math.min(displayHeight - 24.0f, Math.max(300.0f, displayHeight * 0.86f)));
+        ImGui.setNextWindowPos((displayWidth - width) * 0.5f, (displayHeight - height) * 0.5f, ImGuiCond.FirstUseEver);
+        ImGui.setNextWindowSize(width, height, ImGuiCond.FirstUseEver);
+        ImGui.setNextWindowSizeConstraints(Math.min(360.0f, width), Math.min(260.0f, height),
+                Math.max(1.0f, displayWidth - 16.0f), Math.max(1.0f, displayHeight - 16.0f));
         ImGui.setNextWindowBgAlpha(0.94f);
-        int flags = ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoSavedSettings;
-        if (ImGui.begin("设置##rhythmc-settings", flags)) {
+        if (ImGui.begin("设置##rhythmc-settings", ImGuiWindowFlags.NoCollapse)) {
             ImGui.pushStyleColor(ImGuiCol.ChildBg, 0xD91B2430);
             ImGui.text("RhythMC Maker 设置");
             ImGui.separator();
-            float sidebarWidth = Math.min(190.0f, Math.max(150.0f, width * 0.22f));
-            ImGui.beginChild("settings-sidebar", sidebarWidth, -1.0f, true);
-            sidebarButton("制谱器设置", PAGE_EDITOR);
-            sidebarButton("声音设置", PAGE_SOUND);
-            sidebarButton("显示设置", PAGE_DISPLAY);
-            sidebarButton("帮助", PAGE_HELP);
-            ImGui.endChild();
-            ImGui.sameLine();
-            if (ImGui.beginChild("settings-content", 0.0f, -1.0f, true)) {
-                renderPage();
-                ImGui.endChild();
+            float availableWidth = ImGui.getContentRegionAvailX();
+            float sidebarWidth = Math.min(190.0f, Math.max(140.0f, availableWidth * 0.25f));
+            boolean narrow = availableWidth < 430.0f;
+            if (narrow) {
+                ImInt selected = new ImInt(page);
+                ImGui.setNextItemWidth(-1.0f);
+                if (ImGui.combo("##settings-page", selected, new String[]{"制谱器设置", "声音设置", "显示设置", "帮助"})) page = selected.get();
             }
+            float contentHeight = Math.max(1.0f, ImGui.getContentRegionAvailY() - ImGui.getFrameHeightWithSpacing() - 8.0f);
+            if (!narrow) {
+                boolean sidebarVisible = ImGui.beginChild("settings-sidebar", sidebarWidth, contentHeight, true);
+                if (sidebarVisible) {
+                    sidebarButton("制谱器设置", PAGE_EDITOR);
+                    sidebarButton("声音设置", PAGE_SOUND);
+                    sidebarButton("显示设置", PAGE_DISPLAY);
+                    sidebarButton("帮助", PAGE_HELP);
+                }
+                ImGui.endChild();
+                ImGui.sameLine();
+            }
+            boolean contentVisible = ImGui.beginChild("settings-content", 0.0f, contentHeight, true);
+            if (contentVisible) renderPage();
+            ImGui.endChild();
             ImGui.separator();
             if (ImGui.button("关闭##settings-close")) closeAction.run();
             ImGui.popStyleColor();
@@ -132,9 +144,10 @@ public final class SettingsImGuiView {
 
     private void renderDouble(String label, ImDouble field, double minimum, double maximum, double step, String format) {
         ImGui.text(label);
-        ImGui.setNextItemWidth(190.0f);
+        ImGui.setNextItemWidth(Math.max(1.0f, Math.min(190.0f, ImGui.getContentRegionAvailX() - 76.0f)));
+        double previous = field.get();
         boolean changed = ImGui.inputDouble("##" + label, field, 0.0, 0.0, format);
-        double value = clamp(field.get(), minimum, maximum);
+        double value = Double.isNaN(field.get()) ? previous : Math.max(minimum, Math.min(maximum, field.get()));
         if (value != field.get()) {
             field.set(value);
             changed = true;
@@ -154,7 +167,7 @@ public final class SettingsImGuiView {
 
     private void renderInteger(String label, ImInt field, int minimum, int maximum, int step) {
         ImGui.text(label);
-        ImGui.setNextItemWidth(190.0f);
+        ImGui.setNextItemWidth(Math.max(1.0f, Math.min(190.0f, ImGui.getContentRegionAvailX() - 76.0f)));
         boolean changed = ImGui.inputInt("##" + label, field, 0, 0);
         int value = Math.max(minimum, Math.min(maximum, field.get()));
         if (value != field.get()) {

@@ -225,7 +225,7 @@ public final class ChartStorage {
         int divisionsPerBeat = jsonNumber(meta, "divisionsPerBeat", jsonNumber(meta, "divisionsPerChunk", jsonNumber(meta, "beatsPerChunk", jsonNumber(meta, "divisions", RhythmcMaker.defaultDivisionsPerBeat())))).intValue();
         return EditorTrackLayout.of(EditorTrackLayout.DEFAULT_LANE_COUNT, divisionsPerBeat);
     }
-    private static void importRhythmc3Track(ChartManifest chart, ChartTiming.Prepared timing, JsonObject source) {
+    static void importRhythmc3Track(ChartManifest chart, ChartTiming.Prepared timing, JsonObject source) {
         ChartManifest.Track track = new ChartManifest.Track(jsonNumber(source, "id", 0).intValue());
         for (TrackEventChannel channel : TrackEventChannel.values()) {
             channel.setEvents(track, readNumEvents(source, channel.jsonKey()));
@@ -246,6 +246,7 @@ public final class ChartStorage {
             readVector(noteSource, "rotation", values -> { note.rotationX = values[0]; note.rotationY = values[1]; note.rotationZ = values[2]; });
             note.z = PlaybackCoordinates.editorWorldZAtBeat(chart, note.beat) - 0.5; chart.notes.add(note); chart.totalBeats = Math.max(chart.totalBeats, note.beat);
         }
+        cn.frkovo.rhythmcmaker.common.note.HoldGroupModel.getInstance().initializeRoles(chart);
     }
     private static double noteHeightBase(int type) { return type == 2 ? 65.0 : 66.0; }
     private interface VectorConsumer { void accept(double[] values); }
@@ -259,7 +260,7 @@ public final class ChartStorage {
         for (JsonElement element : source.getAsJsonArray(key)) if (element.isJsonObject()) { JsonObject event = element.getAsJsonObject(); double start = jsonNumber(event, "startBeat", 0).doubleValue(), end = jsonNumber(event, "endBeat", start).doubleValue(), startValue = jsonNumber(event, "startValue", 0).doubleValue(), endValue = jsonNumber(event, "endValue", startValue).doubleValue(); if (Double.isFinite(start) && Double.isFinite(end) && Double.isFinite(startValue) && Double.isFinite(endValue)) result.add(new ChartManifest.NumEvent(start, end, startValue, endValue, jsonNumber(event, "easingType", jsonNumber(event, "easing", 0)).intValue())); }
         return result;
     }
-    private static JsonObject convertRhythmc2ToRhythmc3(JsonObject legacyRoot, String charter, double level, long offsetMillis, String initialArena, int divisionsPerBeat, double bpm) {
+    static JsonObject convertRhythmc2ToRhythmc3(JsonObject legacyRoot, String charter, double level, long offsetMillis, String initialArena, int divisionsPerBeat, double bpm) {
         JsonObject root = new JsonObject();
         JsonObject meta = new JsonObject();
         JsonArray charters = new JsonArray(); charters.add(charter == null || charter.isBlank() ? "Unknown" : charter); meta.add("charters", charters);
@@ -276,7 +277,7 @@ public final class ChartStorage {
             for (JsonElement noteElement : frame.getAsJsonArray("notes")) {
                 if (!noteElement.isJsonObject()) continue;
                 JsonObject source = noteElement.getAsJsonObject(); int type = oldNoteType(source.has("type") ? source.get("type").getAsString() : "NOTE_CLICK");
-                int length = Math.max(1, jsonNumber(source, "length", 1).intValue()); int group = type == 2 ? holdGroup++ : -1;
+                int length = Math.max(1, jsonNumber(source, "length", 1).intValue()); int group = type == 2 && length > 1 ? holdGroup++ : -1;
                 for (int index = 0; index < (type == 2 ? length : 1); index++) {
                     JsonObject note = new JsonObject(); note.addProperty("noteType", type); note.addProperty("beat", snapImportedBeat(Math.max(0.0, (judgeTick + index) * bpm / 1200.0)));
                     JsonArray position = new JsonArray();
@@ -869,7 +870,8 @@ public static Path temporaryDirectory(MinecraftServer server) throws IOException
     }
 
     private static void writeChartDocument(Path path, ChartManifest chart) throws IOException {
-        String document = GSON.toJson(new ChartDocument(chart));
+        String document = serializeChartDocument(chart);
+        writeJsonAtomically(path.resolveSibling("editor.rmcd"), cn.frkovo.rhythmcmaker.common.note.NoteEditorDraft.serialize(chart));
         writeJsonAtomically(path, document);
     }
 
@@ -898,6 +900,7 @@ public static Path temporaryDirectory(MinecraftServer server) throws IOException
         metadata.level = source.level;
         metadata.divisionsPerBeat = source.divisionsPerBeat;
         metadata.laneCount = source.laneCount;
+        metadata.trackHeight = source.trackHeight;
         metadata.beatsPerMeasure = source.beatsPerMeasure;
         metadata.coverItemId = source.coverItemId;
         metadata.audioFile = source.audioFile;
@@ -909,6 +912,7 @@ public static Path temporaryDirectory(MinecraftServer server) throws IOException
         metadata.editorTrackBuiltLength = source.editorTrackBuiltLength;
         metadata.editorTrackBuiltLaneCount = source.editorTrackBuiltLaneCount;
         metadata.editorTrackBuiltDivisionsPerBeat = source.editorTrackBuiltDivisionsPerBeat;
+        metadata.editorTrackBuiltHeight = source.editorTrackBuiltHeight;
         metadata.dimensionId = source.dimensionId;
         metadata.selectedStartBeat = source.selectedStartBeat;
         metadata.noteDisplayRevision = source.noteDisplayRevision;
@@ -953,9 +957,13 @@ public static Path temporaryDirectory(MinecraftServer server) throws IOException
             JsonObject layout = root.getAsJsonObject("layout");
             if (layout.has("divisionsPerBeat")) chart.divisionsPerBeat = layout.get("divisionsPerBeat").getAsInt();
             if (layout.has("laneCount")) chart.laneCount = layout.get("laneCount").getAsInt();
+            if (layout.has("trackHeight")) chart.trackHeight = layout.get("trackHeight").getAsInt();
             if (layout.has("beatsPerMeasure")) chart.beatsPerMeasure = layout.get("beatsPerMeasure").getAsInt();
             if (layout.has("selectedStartBeat")) chart.selectedStartBeat = layout.get("selectedStartBeat").getAsInt();
         }
+        cn.frkovo.rhythmcmaker.common.note.HoldGroupModel.getInstance().initializeRoles(chart);
+        Path draft = localChartPath(server, chartId).resolveSibling("editor.rmcd");
+        if (Files.isRegularFile(draft)) cn.frkovo.rhythmcmaker.common.note.NoteEditorDraft.apply(Files.readString(draft, StandardCharsets.UTF_8), chart);
         return chart;
     }
 
@@ -1077,9 +1085,13 @@ public static Path temporaryDirectory(MinecraftServer server) throws IOException
         return filename.substring(index + 1).toLowerCase();
     }
 
+    static String serializeChartDocument(ChartManifest chart) {
+        return GSON.toJson(new ChartDocument(chart));
+    }
+
     private record ChartDocument(ChartManifest meta, List<ChartManifest.Track> tracks, List<ChartManifest.Note> notes, List<com.google.gson.JsonObject> effects, List<ChartManifest.SpeedEvent> speedEvents) {
         private ChartDocument(ChartManifest chart) {
-            this(metadataOnly(chart), chart.tracks == null ? List.of() : chart.tracks, chart.notes == null ? List.of() : chart.notes,
+            this(metadataOnly(chart), chart.tracks == null ? List.of() : chart.tracks, cn.frkovo.rhythmcmaker.common.note.HoldGroupModel.getInstance().runtimeNotes(chart),
                     chart.effects == null ? List.of() : chart.effects, chart.speedEvents == null ? List.of() : chart.speedEvents);
         }
     }

@@ -61,6 +61,7 @@ public final class HoldPlaybackRegression {
         otherTrack.trackId = 1;
         ChartManifest chart = new ChartManifest();
         chart.notes = List.of(first, middle, last, otherTrack);
+        cn.frkovo.rhythmcmaker.common.note.HoldGroupModel.getInstance().initializeRoles(chart);
         require(HoldGroupRules.isEndpoint(chart, first) && HoldGroupRules.isEndpoint(chart, last),
                 "only the first and last Hold members are editable endpoints");
         require(!HoldGroupRules.isEndpoint(chart, middle), "middle Hold members cannot open the editor");

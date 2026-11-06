@@ -38,7 +38,7 @@ final class NoteTargetResolver {
             ChartManifest.Note note = activeChart.notes.stream()
                     .filter(candidate -> candidate != null
                             && HoldGroupRules.isEndpoint(activeChart, candidate)
-                            && !cn.frkovo.rhythmcmaker.chart.NoteEditRules.requiresDisplayEntity(candidate.x, candidate.y, candidate.z))
+                            && !cn.frkovo.rhythmcmaker.chart.NoteEditRules.usesDisplayEntity(candidate))
                     .filter(candidate -> BlockPos.ofFloored(candidate.x, candidate.y, candidate.z).equals(hitPosition))
                     .findFirst().orElse(null);
             return note == null ? null : new NoteTarget(activeChart, note, null, target);
@@ -53,7 +53,7 @@ final class NoteTargetResolver {
         double maximumDistance = client.player.getBlockInteractionRange();
         RayCandidate nearest = null;
         for (DisplayEntity display : client.world.getEntitiesByClass(DisplayEntity.class,
-                new Box(origin, origin).expand(maximumDistance + 1.0),
+                new Box(origin, origin).expand(maximumDistance + 6.0),
                 entity -> hasNoteBinding(entity, chart.id))) {
             ChartManifest.Note note = resolveTaggedEntity(display, chart);
             if (note == null) continue;
@@ -65,7 +65,9 @@ final class NoteTargetResolver {
 
     private static RayCandidate rayCandidate(ChartManifest.Note note, DisplayEntity entity, Vec3d origin, Vec3d direction,
                                              double maximumDistance) {
-        Box modelBounds = entity.getVisibilityBoundingBox();
+        Box modelBounds = cn.frkovo.rhythmcmaker.common.note.NoteGeometry.transformedBounds(
+                note.x + 0.5, note.y + 0.5, note.z + 0.5,
+                cn.frkovo.rhythmcmaker.common.note.NoteGeometry.editorTransform(note).getMatrix());
         Vec3d hit = modelBounds
                 .raycast(origin, origin.add(direction.multiply(maximumDistance))).orElse(null);
         if (hit == null) return null;

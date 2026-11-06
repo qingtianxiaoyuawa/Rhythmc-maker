@@ -1,44 +1,66 @@
 package cn.frkovo.rhythmcmaker.client;
 
 import cn.frkovo.rhythmcmaker.chart.ChartManifest;
+import cn.frkovo.rhythmcmaker.chart.EditorTrackLayout;
+import cn.frkovo.rhythmcmaker.chart.HoldGroupRules;
 import cn.frkovo.rhythmcmaker.chart.NoteEditRules;
 import cn.frkovo.rhythmcmaker.client.render.ImGuiRuntime;
+import cn.frkovo.rhythmcmaker.common.note.EditorBeat;
+import cn.frkovo.rhythmcmaker.common.note.NoteEditingModel;
+import cn.frkovo.rhythmcmaker.common.note.NoteGeometry;
+import cn.frkovo.rhythmcmaker.common.note.NoteKind;
+import cn.frkovo.rhythmcmaker.common.note.NoteTransformField;
+import cn.frkovo.rhythmcmaker.common.ui.NoteEditorWindowSize;
 import imgui.ImGui;
 import imgui.flag.ImGuiCond;
+import imgui.flag.ImGuiDataType;
+import imgui.flag.ImGuiInputTextFlags;
+import imgui.flag.ImGuiSliderFlags;
 import imgui.flag.ImGuiWindowFlags;
 import imgui.type.ImDouble;
+import imgui.type.ImInt;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.text.Text;
-import net.minecraft.util.math.Vec3d;
 
 import java.util.Locale;
 
 public final class NoteEditScreen extends Screen {
-    private static final float WINDOW_WIDTH = 420.0f;
     private ChartManifest chart;
     private ChartManifest.Note note;
     private final boolean showOnRight;
-    private boolean firstFrame = true;
-    private boolean beatPartsInitialized;
+    private boolean fieldsNeedRefresh;
     private String operationStatus = "";
-    private int operationStatusColor = 0xFFFFFFFF;
+    private int operationStatusColor;
     private long operationStatusUntilNanos;
-    private final imgui.type.ImInt beatWhole = new imgui.type.ImInt();
-    private final imgui.type.ImInt beatNumerator = new imgui.type.ImInt();
-    private final imgui.type.ImInt beatDenominator = new imgui.type.ImInt(1);
+    private final ImInt beatWhole = new ImInt();
+    private final ImInt beatNumerator = new ImInt();
+    private final ImInt beatDenominator = new ImInt(1);
+    private final ImDouble relativeX = new ImDouble();
+    private final ImDouble relativeY = new ImDouble();
+    private final ImDouble[] transforms = new ImDouble[NoteTransformField.values().length];
 
     public NoteEditScreen(ChartManifest chart, ChartManifest.Note note) {
         super(Text.literal("修改音符"));
         this.chart = chart;
         this.note = note;
         MinecraftClient client = MinecraftClient.getInstance();
-        Vec3d relative = new Vec3d(note.x - client.player.getX(),
-                note.y - client.player.getY(), note.z - client.player.getZ());
         double yaw = Math.toRadians(client.gameRenderer.getCamera().getYaw());
-        double horizontalRight = relative.x * Math.cos(yaw) + relative.z * Math.sin(yaw);
-        this.showOnRight = horizontalRight < 0.0;
+        this.showOnRight = client.player != null && (note.x - client.player.getX()) * Math.cos(yaw)
+                + (client.player == null ? 0.0 : note.z - client.player.getZ()) * Math.sin(yaw) < 0.0;
+        for (NoteTransformField field : NoteTransformField.values()) transforms[field.ordinal()] = new ImDouble();
+        syncFields();
+    }
+
+    private void syncFields() {
+        relativeX.set(note.x);
+        relativeY.set(note.type == 2 ? 0.0 : NoteEditRules.editorRelativeY(note.y, note.type));
+        EditorBeat beat = note.editorBeat != null && note.editorBeat.represents(note.beat)
+                ? note.editorBeat : EditorBeat.fromValue(note.beat);
+        setBeatFields(beat);
+        for (NoteTransformField field : NoteTransformField.values()) transforms[field.ordinal()].set(field.get(note));
+        fieldsNeedRefresh = false;
     }
 
     @Override
@@ -46,169 +68,192 @@ public final class NoteEditScreen extends Screen {
         MinecraftClient client = MinecraftClient.getInstance();
         if (!ImGuiRuntime.beginFrame(client)) return;
         try {
-            float windowWidth = Math.max(1.0f, Math.min(WINDOW_WIDTH, ImGui.getIO().getDisplaySizeX() / 3.0f));
-            float windowX = showOnRight ? ImGui.getIO().getDisplaySizeX() - windowWidth - 16.0f : 16.0f;
-            if (firstFrame) {
-                ImGui.setNextWindowPos(windowX, ImGui.getIO().getDisplaySizeY() * 0.25f, ImGuiCond.Always);
-                ImGui.setNextWindowSize(windowWidth, 300.0f, ImGuiCond.Always);
-                firstFrame = false;
-            }
-            ImGui.begin("修改音符##rhythmc-note", ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse);
-            if (operationStatusUntilNanos > 0L && System.nanoTime() >= operationStatusUntilNanos) operationStatus = "";
-            if (note.holdGroup >= 0) {
-                ImGui.text("音符类型");
-                ImGui.beginDisabled();
-                ImGui.button(noteTypeName(note.type) + "##note-type-locked");
-                ImGui.endDisabled();
-            } else {
-            ImGui.text("音符类型");
-            if (ImGui.beginCombo("##note-type", noteTypeName(note.type))) {
-                int[] availableTypes = note.type == 2 ? new int[]{2} : new int[]{0, 1, 3};
-                for (int availableType : availableTypes) {
-                    if (ImGui.selectable(noteTypeName(availableType) + "##note-type-" + availableType, note.type == availableType)) {
-                        updateType(client, availableType);
-                    }
+            float displayWidth = ImGui.getIO().getDisplaySizeX();
+            float displayHeight = ImGui.getIO().getDisplaySizeY();
+            NoteEditorWindowSize size = NoteEditorWindowSize.defaultSize(displayWidth, displayHeight);
+            ImGui.setNextWindowSize(size.width(), size.height(), ImGuiCond.FirstUseEver);
+            ImGui.setNextWindowPos(showOnRight ? Math.max(0.0f, displayWidth - size.width() - 16.0f) : 16.0f,
+                    Math.max(0.0f, (displayHeight - size.height()) * 0.5f), ImGuiCond.FirstUseEver);
+            ImGui.setNextWindowSizeConstraints(Math.min(260.0f, size.width()), Math.min(220.0f, size.height()),
+                    Math.max(1.0f, displayWidth - 16.0f), Math.max(1.0f, displayHeight - 16.0f));
+            if (ImGui.begin("修改音符##rhythmc-note", ImGuiWindowFlags.NoCollapse)) {
+                if (fieldsNeedRefresh && !ImGui.isAnyItemActive()) {
+                    refreshSelectedNote();
+                    syncFields();
                 }
-                ImGui.endCombo();
+                if (operationStatusUntilNanos > 0 && System.nanoTime() >= operationStatusUntilNanos) operationStatus = "";
+                float footerHeight = ImGui.getFrameHeightWithSpacing() + ImGui.getStyle().getItemSpacingY() + 4.0f;
+                boolean contentVisible = ImGui.beginChild("note-edit-content", -1.0f,
+                        Math.max(1.0f, ImGui.getContentRegionAvailY() - footerHeight), true);
+                if (contentVisible) renderEditableFields(client);
+                ImGui.endChild();
+                ImGui.separator();
+                float buttonWidth = Math.max(1.0f, (ImGui.getContentRegionAvailX() - ImGui.getStyle().getItemSpacingX()) * 0.5f);
+                if (ImGui.button("删除音符##note-delete", buttonWidth, 0.0f)) {
+                    send(client, "rhythmc_note_delete " + note.id);
+                    client.setScreen(null);
+                }
+                ImGui.sameLine();
+                if (ImGui.button("关闭##note-close", buttonWidth, 0.0f)) client.setScreen(null);
             }
-            }
-            if (!operationStatus.isBlank()) ImGui.textColored(operationStatusColor, operationStatus);
-            ImGui.text("X 相对坐标");
-            ImDouble x = new ImDouble(note.x);
-            if (ImGui.inputDouble("##note-x", x, 0.0, 0.0, "%.3f")) update(client, x.get(), NoteEditRules.editorRelativeY(note.y, note.type), note.beat);
-            ImGui.text("Y 相对坐标");
-            ImDouble y = new ImDouble(NoteEditRules.editorRelativeY(note.y, note.type));
-            if (ImGui.inputDouble("##note-y", y, 0.0, 0.0, "%.3f")) update(client, note.x, y.get(), note.beat);
-            ImGui.text("时机 Beat");
-            if (!beatPartsInitialized) {
-                BeatParts parts = beatParts(note.beat);
-                beatWhole.set(parts.whole());
-                beatNumerator.set(parts.numerator());
-                beatDenominator.set(parts.denominator());
-                beatPartsInitialized = true;
-            }
-            ImGui.setNextItemWidth(86.0f);
-            boolean beatUpdated = ImGui.inputInt("n##note-beat", beatWhole, 1, 1);
-            ImGui.sameLine();
-            ImGui.text("+");
-            ImGui.sameLine();
-            ImGui.setNextItemWidth(86.0f);
-            beatUpdated |= ImGui.inputInt("a##note-beat", beatNumerator, 1, 1);
-            ImGui.sameLine();
-            ImGui.text("/");
-            ImGui.sameLine();
-            ImGui.setNextItemWidth(86.0f);
-            beatUpdated |= ImGui.inputInt("b##note-beat", beatDenominator, 1, 1);
-            ImGui.sameLine();
-            ImGui.text("beat");
-            if (beatDenominator.get() < 1 || beatDenominator.get() > 32
-                    || beatNumerator.get() < 0 || beatNumerator.get() >= beatDenominator.get()
-                    || beatWhole.get() < 0 || beatWhole.get() > 1_000_000) {
-                ImGui.textColored(0xFF7777FF, "Beat 需满足 n≥0、1≤b≤32、0≤a<b。");
-            } else if (beatUpdated) {
-                updateBeat(client, beatWhole.get() + beatNumerator.get() / (double) beatDenominator.get());
-            }
-            if (ImGui.button("\u5220\u9664\u97f3\u7b26")) {
-                if (client.player != null) client.player.networkHandler.sendChatCommand("rhythmc_note_delete " + note.id);
-                client.setScreen(null);
-            }
-            ImGui.sameLine();
-            if (ImGui.button("关闭")) client.setScreen(null);
             ImGui.end();
         } finally {
             ImGuiRuntime.endFrame();
         }
     }
 
-    @Override public boolean shouldPause() { return false; }
-    @Override public void renderBackground(DrawContext context, int mouseX, int mouseY, float delta) {}
-    @Override public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) { return true; }
-
-    @Override
-    public boolean keyPressed(net.minecraft.client.input.KeyInput input) {
-        if (input.isEscape()) {
-            MinecraftClient.getInstance().setScreen(null);
-            return true;
+    private void renderEditableFields(MinecraftClient client) {
+        boolean group = note.type == 2 && note.holdGroup >= 0;
+        boolean canEdit = NoteEditingModel.getInstance().canEdit(chart, note);
+        ImGui.text("音符类型");
+        ImGui.beginDisabled(group || !canEdit);
+        ImGui.setNextItemWidth(-1.0f);
+        if (ImGui.beginCombo("##note-type", group ? NoteKind.HOLD_GROUP.label() : NoteKind.ofType(note.type).label())) {
+            for (int type = 0; type <= 3; type++) {
+                if (ImGui.selectable(NoteKind.ofType(type).label() + "##note-type-" + type, type == note.type)
+                        && type != note.type) send(client, "rhythmc_note_type " + note.id + " " + type);
+            }
+            ImGui.endCombo();
         }
-        return true;
+        ImGui.endDisabled();
+        if (group) ImGui.textWrapped("HOLD组 音符类型固定，只能修改头尾或删除整个组。");
+        if (!operationStatus.isBlank()) ImGui.textColored(operationStatusColor, operationStatus);
+        if (!canEdit) ImGui.textWrapped("HOLD组头尾顺序无效，数值编辑已禁用；仍可删除整个组。");
+        ImGui.separator();
+        ImGui.beginDisabled(!canEdit);
+        EditorTrackLayout layout = EditorTrackLayout.of(chart);
+        renderCoordinate(client, "X 相对坐标", "x", relativeX, -layout.halfWidth(), layout.halfWidth(), false);
+        renderCoordinate(client, "Y 相对坐标", "y", relativeY, 0.0,
+                note.type == 2 ? 0.0 : layout.maximumRelativeY(), note.type == 2);
+        ImGui.separator();
+        ImGui.text("修改时机：n + a / b beat");
+        renderBeatPart(client, "整数 n", beatWhole, 0);
+        renderBeatPart(client, "分子 a", beatNumerator, 1);
+        renderBeatPart(client, "分母 b（1–1000）", beatDenominator, 2);
+        ImGui.separator();
+        for (NoteTransformField field : NoteTransformField.values()) {
+            ImDouble value = transforms[field.ordinal()];
+            double previous = value.get();
+            ImGui.text(transformLabel(field));
+            ImGui.setNextItemWidth(-1.0f);
+            if (ImGui.sliderScalar("##transform-" + field.name(), ImGuiDataType.Double, value,
+                    field.minimum(), field.maximum(), field.ordinal() < 3 ? "%.1f" : "%.1f°", ImGuiSliderFlags.AlwaysClamp)) {
+                double snapped = Double.isFinite(value.get())
+                        ? NoteGeometry.stepped(value.get(), field.minimum(), field.maximum(), field.step()) : previous;
+                value.set(snapped);
+                if (Math.abs(snapped - previous) > 1.0e-9) send(client, "rhythmc_note_transform " + note.id + " "
+                        + field.name().toLowerCase(Locale.ROOT) + " " + Double.toString(snapped));
+            }
+        }
+        ImGui.endDisabled();
+        ImGui.textDisabled("滑条支持 Ctrl + 左键输入数值。");
     }
 
-    private void update(MinecraftClient client, double x, double y, double beat) {
-        if (client.player == null || !Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(beat) || beat < 0.0) return;
-        client.player.networkHandler.sendChatCommand("rhythmc_note_edit " + note.id + " "
-                + String.format(Locale.ROOT, "%.9f %.9f %.9f", x, y, beat));
+    private void renderCoordinate(MinecraftClient client, String label, String axis, ImDouble value,
+                                  double minimum, double maximum, boolean disabled) {
+        ImGui.text(label);
+        double previous = value.get();
+        ImGui.beginDisabled(disabled || maximum <= minimum);
+        ImGui.setNextItemWidth(-1.0f);
+        if (ImGui.sliderScalar("##coordinate-" + axis, ImGuiDataType.Double, value, minimum, maximum,
+                "%.2f", ImGuiSliderFlags.AlwaysClamp)) {
+            double snapped = Double.isFinite(value.get()) ? NoteGeometry.stepped(value.get(), minimum, maximum, 0.05) : previous;
+            value.set(snapped);
+            if (Math.abs(snapped - previous) > 1.0e-9) send(client, "rhythmc_note_coordinate " + note.id + " "
+                    + axis + " " + Double.toString(snapped));
+        }
+        ImGui.endDisabled();
+        if (previous < minimum || previous > maximum || Math.abs(previous / 0.05 - Math.rint(previous / 0.05)) > 1.0e-7) {
+            ImGui.textWrapped("历史值：" + Double.toString(value.get()) + "；操作滑条后才进入当前范围及 0.05 步进。");
+        }
     }
 
-    private void updateBeat(MinecraftClient client, double beat) {
-        if (client.player == null || !Double.isFinite(beat) || beat < 0.0) return;
-        client.player.networkHandler.sendChatCommand("rhythmc_note_timing " + note.id + " "
-                + String.format(Locale.ROOT, "%.9f", beat));
+    private void renderBeatPart(MinecraftClient client, String label, ImInt field, int part) {
+        ImGui.text(label);
+        EditorBeat previous = beatFields();
+        ImGui.setNextItemWidth(Math.max(1.0f, ImGui.getContentRegionAvailX() - 72.0f));
+        if (ImGui.inputInt("##beat-input-" + part, field, 0, 0, ImGuiInputTextFlags.CharsDecimal)) {
+            EditorBeat changed = beatFields();
+            if (allowedBeat(changed)) submitBeat(client, changed);
+            else setBeatFields(previous);
+        }
+        ImGui.sameLine();
+        renderBeatStep(client, field, part, -1);
+        ImGui.sameLine();
+        renderBeatStep(client, field, part, 1);
     }
 
-    private void updateType(MinecraftClient client, int type) {
-        if (type == note.type || client.player == null) return;
-        operationStatus = "正在更新音符类型…";
-        operationStatusColor = 0xFFFFFF66;
-        operationStatusUntilNanos = System.nanoTime() + 5_000_000_000L;
-        client.player.networkHandler.sendChatCommand("rhythmc_note_type " + note.id + " " + type);
+    private void renderBeatStep(MinecraftClient client, ImInt field, int part, int direction) {
+        int previous = field.get();
+        long next = (long) previous + direction;
+        field.set(next < Integer.MIN_VALUE || next > Integer.MAX_VALUE ? previous : (int) next);
+        EditorBeat candidate = beatFields();
+        field.set(previous);
+        ImGui.beginDisabled(!allowedBeat(candidate) || next < Integer.MIN_VALUE || next > Integer.MAX_VALUE);
+        if (ImGui.button((direction < 0 ? "-" : "+") + "##beat-step-" + part + "-" + direction, 28.0f, 0.0f)) {
+            setBeatFields(candidate);
+            submitBeat(client, candidate);
+        }
+        ImGui.endDisabled();
+    }
+
+    private boolean allowedBeat(EditorBeat beat) {
+        return beat.isValid() && HoldGroupRules.canSetBeat(chart, note, beat.value());
+    }
+
+    private EditorBeat beatFields() {
+        return new EditorBeat(beatWhole.get(), beatNumerator.get(), beatDenominator.get());
+    }
+
+    private void setBeatFields(EditorBeat beat) {
+        beatWhole.set(beat.whole());
+        beatNumerator.set(beat.numerator());
+        beatDenominator.set(beat.denominator());
+    }
+
+    private void submitBeat(MinecraftClient client, EditorBeat beat) {
+        send(client, "rhythmc_note_fraction " + note.id + " " + beat.whole() + " " + beat.numerator() + " " + beat.denominator());
+    }
+
+    private static void send(MinecraftClient client, String command) {
+        if (client.player != null) client.player.networkHandler.sendChatCommand(command);
     }
 
     public void showServerStatus(String message, boolean success) {
         operationStatus = message;
-        ChartManifest refreshed = ClientChartAccess.refreshActiveChartNow();
-        if (refreshed != null) chart = refreshed;
-        if (chart.notes == null) return;
-        if (message.startsWith("音符已更新") || message.startsWith("音符类型已改为 ")) {
-            ChartManifest.Note updated = chart.notes.stream()
-                    .filter(candidate -> candidate != null && candidate.id.equals(note.id))
-                    .findFirst().orElse(null);
-            if (updated != null) note = updated;
-        }
         operationStatusColor = success ? 0xFF66FF66 : 0xFF7777FF;
         operationStatusUntilNanos = System.nanoTime() + 2_500_000_000L;
+        fieldsNeedRefresh = true;
     }
 
-    private static String noteTypeName(int type) {
-        return switch (type) {
-            case 1 -> "侦测器音符";
-            case 2 -> "Hold 钻石音符";
-            case 3 -> "红石块音符";
-            default -> "TNT 音符";
+    private void refreshSelectedNote() {
+        ChartManifest refreshed = ClientChartAccess.refreshActiveChartNow();
+        if (refreshed == null || refreshed.notes == null) return;
+        ChartManifest.Note updated = refreshed.notes.stream().filter(candidate -> candidate != null && note.id.equals(candidate.id))
+                .findFirst().orElse(null);
+        if (updated != null) {
+            chart = refreshed;
+            note = updated;
+        }
+    }
+
+    private static String transformLabel(NoteTransformField field) {
+        return switch (field) {
+            case SCALE_X -> "缩放 X";
+            case SCALE_Y -> "缩放 Y";
+            case SCALE_Z -> "缩放 Z";
+            case ROTATION_X -> "旋转 X";
+            case ROTATION_Y -> "旋转 Y";
+            case ROTATION_Z -> "旋转 Z";
         };
     }
 
-
-    private static BeatParts beatParts(double value) {
-        double safeValue = Math.max(0.0, Double.isFinite(value) ? value : 0.0);
-        int whole = (int) Math.floor(safeValue);
-        double fraction = safeValue - whole;
-        int bestNumerator = 0;
-        int bestDenominator = 1;
-        double bestError = Double.POSITIVE_INFINITY;
-        for (int denominator = 1; denominator <= 32; denominator++) {
-            int numerator = (int) Math.round(fraction * denominator);
-            double error = Math.abs(fraction - numerator / (double) denominator);
-            if (error < bestError) {
-                bestError = error;
-                bestNumerator = numerator;
-                bestDenominator = denominator;
-            }
-        }
-        if (bestNumerator >= bestDenominator) return new BeatParts(whole + 1, 0, 1);
-        int divisor = greatestCommonDivisor(bestNumerator, bestDenominator);
-        return new BeatParts(whole, bestNumerator / divisor, bestDenominator / divisor);
+    @Override public void removed() { ImGuiRuntime.saveWindowSettings(); }
+    @Override public boolean shouldPause() { return false; }
+    @Override public void renderBackground(DrawContext context, int mouseX, int mouseY, float delta) {}
+    @Override public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) { return true; }
+    @Override public boolean keyPressed(net.minecraft.client.input.KeyInput input) {
+        if (input.isEscape()) MinecraftClient.getInstance().setScreen(null);
+        return true;
     }
-
-    private static int greatestCommonDivisor(int first, int second) {
-        int left = Math.abs(first);
-        int right = Math.abs(second);
-        while (right != 0) {
-            int remainder = left % right;
-            left = right;
-            right = remainder;
-        }
-        return Math.max(1, left);
-    }
-
-    private record BeatParts(int whole, int numerator, int denominator) {}
 }

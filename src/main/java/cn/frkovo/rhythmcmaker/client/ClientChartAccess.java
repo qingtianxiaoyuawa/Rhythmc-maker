@@ -46,6 +46,7 @@ public final class ClientChartAccess {
     private static String lastRefreshError;
     private static int pendingLayoutDivisions = -1;
     private static int pendingLayoutLanes = -1;
+    private static int pendingLayoutHeight = -1;
     private static long pendingLayoutExpiresAtNanos;
     private ClientChartAccess() {
     }
@@ -117,6 +118,7 @@ public final class ClientChartAccess {
         activeChart.trackLength = Math.max(8, Math.max(1, activeChart.beatCount) * activeChart.divisionsPerBeat);
         pendingLayoutDivisions = layout.divisionsPerBeat();
         pendingLayoutLanes = layout.laneCount();
+        pendingLayoutHeight = layout.trackHeight();
         pendingLayoutExpiresAtNanos = System.nanoTime() + 8_000_000_000L;
         lastRefreshRequest = null;
         lastRefreshError = null;
@@ -169,7 +171,7 @@ public final class ClientChartAccess {
 
     private static void applyPendingLayout(ChartManifest chart) {
         if (pendingLayoutDivisions < 1 || System.nanoTime() >= pendingLayoutExpiresAtNanos) return;
-        EditorTrackLayout.of(pendingLayoutLanes, pendingLayoutDivisions).applyTo(chart);
+        EditorTrackLayout.of(pendingLayoutLanes, pendingLayoutDivisions, pendingLayoutHeight).applyTo(chart);
         chart.trackLength = Math.max(8, Math.max(1, chart.beatCount) * chart.divisionsPerBeat);
     }
 
@@ -240,25 +242,29 @@ public final class ClientChartAccess {
         lastRefreshError = null;
         if (result.chart == null) return false;
         if (pendingLayoutDivisions > 0 && System.nanoTime() < pendingLayoutExpiresAtNanos
-                && (result.chart.divisionsPerBeat != pendingLayoutDivisions || result.chart.laneCount != pendingLayoutLanes)) {
+                && (result.chart.divisionsPerBeat != pendingLayoutDivisions || result.chart.laneCount != pendingLayoutLanes
+                    || result.chart.trackHeight != pendingLayoutHeight)) {
             activeChartModifiedTime = null;
             activeChartFileSize = -1L;
             return true;
         }
         if (pendingLayoutDivisions > 0 && result.chart.divisionsPerBeat == pendingLayoutDivisions
-                && result.chart.laneCount == pendingLayoutLanes) {
+                && result.chart.laneCount == pendingLayoutLanes && result.chart.trackHeight == pendingLayoutHeight) {
             pendingLayoutDivisions = -1;
             pendingLayoutLanes = -1;
+            pendingLayoutHeight = -1;
             pendingLayoutExpiresAtNanos = 0L;
         } else if (pendingLayoutDivisions > 0 && System.nanoTime() >= pendingLayoutExpiresAtNanos) {
             pendingLayoutDivisions = -1;
             pendingLayoutLanes = -1;
+            pendingLayoutHeight = -1;
             pendingLayoutExpiresAtNanos = 0L;
         }
         boolean changed = activeChart == null
                 || !result.chart.id.equals(activeChart.id)
                 || result.chart.divisionsPerBeat != activeChart.divisionsPerBeat
                 || result.chart.laneCount != activeChart.laneCount
+                || result.chart.trackHeight != activeChart.trackHeight
                 || result.chart.trackLength != activeChart.trackLength
                 || result.chart.beatCount != activeChart.beatCount;
         activeChart = result.chart;

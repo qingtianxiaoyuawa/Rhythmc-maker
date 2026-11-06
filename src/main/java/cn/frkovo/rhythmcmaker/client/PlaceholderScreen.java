@@ -207,7 +207,7 @@ final class PlaceholderScreen extends RhythmcScreen {
                     int divisionsValue = Integer.parseInt(divisions.getText());
                     int lanesValue = Integer.parseInt(lanes.getText());
                     if (!EditorTrackLayout.isSupportedDivisionsPerBeat(divisionsValue) || !EditorTrackLayout.isSupportedLaneCount(lanesValue)) throw new NumberFormatException();
-                    EditorTrackLayout layout = EditorTrackLayout.of(lanesValue, divisionsValue);
+                    EditorTrackLayout layout = EditorTrackLayout.of(lanesValue, divisionsValue, chart.trackHeight);
                     invalidateTrackSnapState();
                     ClientChartAccess.applyLocalLayout(layout);
                     RhythmcMakerClient.sendChartCommand("rhythmc_layout_set " + layout.divisionsPerBeat() + " " + layout.laneCount());

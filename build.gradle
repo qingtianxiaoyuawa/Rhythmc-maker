@@ -121,7 +121,17 @@ tasks.register("timeFadeRegression", JavaExec) {
     dependsOn tasks.named("testClasses")
 }
 
+tasks.register("noteEditingRegression", JavaExec) {
+    group = "verification"
+    description = "Runs note editing, legacy Hold import, geometry and layout regressions."
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = "cn.frkovo.rhythmcmaker.chart.NoteEditingRegression"
+    dependsOn tasks.named("testClasses")
+    if (project.hasProperty("regressionChart")) args project.property("regressionChart")
+}
+
 tasks.named("check") {
+    dependsOn tasks.named("noteEditingRegression")
     dependsOn tasks.named("holdPlaybackRegression")
     dependsOn tasks.named("timeFadeRegression")
 }
@@ -160,4 +170,6 @@ tasks.register("deploy") {
     dependsOn "bumpPatchVersion"
 }
 
-buildTask.configure { mustRunAfter tasks.named("bumpPatchVersion") }
+buildTask.configure { dependsOn tasks.named("bumpPatchVersion") }
+tasks.named("processResources") { mustRunAfter tasks.named("bumpPatchVersion") }
+tasks.withType(AbstractArchiveTask).configureEach { mustRunAfter tasks.named("bumpPatchVersion") }

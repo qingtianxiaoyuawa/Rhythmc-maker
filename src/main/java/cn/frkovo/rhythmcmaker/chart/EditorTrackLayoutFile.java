@@ -26,7 +26,8 @@ public final class EditorTrackLayoutFile {
         if (!root.has("laneCount") || !root.has(divisionsField)) {
             throw new IOException("轨道布局文件缺少字段：" + file.getFileName());
         }
-        EditorTrackLayout layout = EditorTrackLayout.of(root.get("laneCount").getAsInt(), root.get(divisionsField).getAsInt());
+        EditorTrackLayout layout = EditorTrackLayout.of(root.get("laneCount").getAsInt(), root.get(divisionsField).getAsInt(),
+                root.has("trackHeight") ? root.get("trackHeight").getAsInt() : EditorTrackLayout.DEFAULT_HEIGHT);
         if (root.has("divisionsPerChunk")) write(file, layout);
         return layout;
     }
@@ -35,6 +36,9 @@ public final class EditorTrackLayoutFile {
         JsonObject root = new JsonObject();
         root.addProperty("laneCount", layout.laneCount());
         root.addProperty("divisionsPerBeat", layout.divisionsPerBeat());
-
+        root.addProperty("trackHeight", layout.trackHeight());
+        Path temporary = file.resolveSibling(file.getFileName() + ".tmp");
+        Files.writeString(temporary, GSON.toJson(root), StandardCharsets.UTF_8);
+        Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING);
     }
 }

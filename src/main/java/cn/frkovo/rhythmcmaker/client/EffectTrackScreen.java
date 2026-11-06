@@ -215,7 +215,7 @@ public final class EffectTrackScreen extends Screen {
     private void finishLayout(boolean successful) {
         if (successful) {
             PlaceholderScreen.invalidateTrackSnapState();
-            cn.frkovo.rhythmcmaker.chart.EditorTrackLayout layout = cn.frkovo.rhythmcmaker.chart.EditorTrackLayout.of(chart.laneCount, requestedDivisions);
+            cn.frkovo.rhythmcmaker.chart.EditorTrackLayout layout = cn.frkovo.rhythmcmaker.chart.EditorTrackLayout.of(chart.laneCount, requestedDivisions, chart.trackHeight);
             layout.applyTo(chart);
             if (chart.notes != null) {
                 cn.frkovo.rhythmcmaker.chart.ChartTiming.Prepared timing = cn.frkovo.rhythmcmaker.chart.ChartTiming.prepare(chart);
