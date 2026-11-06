@@ -18,7 +18,19 @@ public record EditorBeat(int whole, int numerator, int denominator) {
     }
 
     public static EditorBeat fromValue(double beat) {
+        return fromValue(beat, 1);
+    }
+
+    public static EditorBeat fromValue(double beat, int preferredDenominator) {
         if (!Double.isFinite(beat) || beat < 0.0 || beat > MAX_WHOLE) throw new IllegalArgumentException("Invalid beat");
+        if (preferredDenominator >= 1 && preferredDenominator <= MAX_DENOMINATOR) {
+            long preferredTick = Math.round(beat * preferredDenominator);
+            double preferredBeat = preferredTick / (double) preferredDenominator;
+            if (Math.abs(preferredBeat - beat) < 1.0e-9) {
+                return new EditorBeat((int) (preferredTick / preferredDenominator),
+                        (int) (preferredTick % preferredDenominator), preferredDenominator);
+            }
+        }
         int whole = (int) Math.floor(beat);
         double fraction = beat - whole;
         EditorBeat closest = new EditorBeat(whole, 0, 1);

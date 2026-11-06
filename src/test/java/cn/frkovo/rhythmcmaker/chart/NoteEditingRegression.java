@@ -25,6 +25,7 @@ public final class NoteEditingRegression {
         verifyRhythmc3ExportContract();
         verifyLayoutHeightAndBounds();
         verifyBeatDraftPersistence();
+        verifyBeatGridBoundaries();
         verifySaveSnapshotPreservesFraction();
         verifyGeometryAndOriginRoundTrip();
         verifyEditingValidation();
@@ -115,6 +116,25 @@ public final class NoteEditingRegression {
         require(restoredNote.editorBeat != null && restoredNote.editorBeat.numerator() == 2
                         && restoredNote.editorBeat.denominator() == 4,
                 "Maker draft preserves the user's unreduced fraction spelling");
+    }
+
+    private static void verifyBeatGridBoundaries() {
+        ChartManifest chart = new ChartManifest();
+        chart.divisionsPerBeat = 12;
+        for (int wholeBeat = 1; wholeBeat <= 256; wholeBeat++) {
+            double integerPosition = PlaybackCoordinates.editorWorldZAtBeat(chart, wholeBeat) - 0.5;
+            double previousTickPosition = PlaybackCoordinates.editorWorldZAtBeat(chart, wholeBeat - 1.0 / 12.0) - 0.5;
+            double integerBeat = PlaybackCoordinates.editorBeatAtBlockZ(chart, integerPosition);
+            double previousTickBeat = PlaybackCoordinates.editorBeatAtBlockZ(chart, previousTickPosition);
+            var integerDisplay = cn.frkovo.rhythmcmaker.common.note.EditorBeat.fromValue(integerBeat, chart.divisionsPerBeat);
+            var previousTickDisplay = cn.frkovo.rhythmcmaker.common.note.EditorBeat.fromValue(previousTickBeat, chart.divisionsPerBeat);
+            require(integerDisplay.whole() == wholeBeat && integerDisplay.numerator() == 0
+                            && integerDisplay.denominator() == 12,
+                    "integer Beat keeps its exact grid position at " + wholeBeat);
+            require(previousTickDisplay.whole() == wholeBeat - 1 && previousTickDisplay.numerator() == 11
+                            && previousTickDisplay.denominator() == 12,
+                    "the immediately preceding tick remains distinct from integer Beat " + wholeBeat);
+        }
     }
 
     private static void verifySaveSnapshotPreservesFraction() {

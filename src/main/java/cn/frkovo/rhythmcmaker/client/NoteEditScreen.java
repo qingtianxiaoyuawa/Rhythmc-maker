@@ -57,7 +57,7 @@ public final class NoteEditScreen extends Screen {
         relativeX.set(note.x);
         relativeY.set(note.type == 2 ? 0.0 : NoteEditRules.editorRelativeY(note.y, note.type));
         EditorBeat beat = note.editorBeat != null && note.editorBeat.represents(note.beat)
-                ? note.editorBeat : EditorBeat.fromValue(note.beat);
+                ? note.editorBeat : EditorBeat.fromValue(note.beat, chart.divisionsPerBeat);
         setBeatFields(beat);
         for (NoteTransformField field : NoteTransformField.values()) transforms[field.ordinal()].set(field.get(note));
         fieldsNeedRefresh = false;

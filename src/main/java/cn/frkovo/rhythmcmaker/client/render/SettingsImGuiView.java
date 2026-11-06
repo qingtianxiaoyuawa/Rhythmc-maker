@@ -3,7 +3,6 @@ package cn.frkovo.rhythmcmaker.client.render;
 import cn.frkovo.rhythmcmaker.client.ClientChartAccess;
 import cn.frkovo.rhythmcmaker.config.RhythmcMakerConfig;
 import imgui.ImGui;
-import imgui.flag.ImGuiCol;
 import imgui.flag.ImGuiCond;
 import imgui.flag.ImGuiInputTextFlags;
 import imgui.flag.ImGuiWindowFlags;
@@ -57,9 +56,7 @@ public final class SettingsImGuiView {
         ImGui.setNextWindowSize(width, height, ImGuiCond.FirstUseEver);
         ImGui.setNextWindowSizeConstraints(Math.min(360.0f, width), Math.min(260.0f, height),
                 Math.max(1.0f, displayWidth - 16.0f), Math.max(1.0f, displayHeight - 16.0f));
-        ImGui.setNextWindowBgAlpha(0.94f);
         if (ImGui.begin("设置##rhythmc-settings", ImGuiWindowFlags.NoCollapse)) {
-            ImGui.pushStyleColor(ImGuiCol.ChildBg, 0xD91B2430);
             ImGui.text("RhythMC Maker 设置");
             ImGui.separator();
             float availableWidth = ImGui.getContentRegionAvailX();
@@ -87,7 +84,6 @@ public final class SettingsImGuiView {
             ImGui.endChild();
             ImGui.separator();
             if (ImGui.button("关闭##settings-close")) closeAction.run();
-            ImGui.popStyleColor();
         }
         ImGui.end();
     }
