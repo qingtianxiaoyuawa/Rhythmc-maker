@@ -113,17 +113,18 @@ public final class RhythmcMaker implements ModInitializer {
     public static final BlockPos CHARTER_SPAWN = new BlockPos(0, 65, 0);
     private static final BlockPos EDITOR_SPAWN = new BlockPos(0, 66, 0);
     public static final RegistryKey<World> CHARTER_DIMENSION = RegistryKey.of(RegistryKeys.WORLD, Identifier.of(MOD_ID, "charter"));
-    public static final Item START_CHART_ITEM = registerMenuItem("start_chart", "开始写谱（右键打开）");
-    public static final Item AWA_ITEM = registerMenuItem("awa", "awa~（右键打开）");
-    public static final Item SETTINGS_ITEM = registerMenuItem("settings", "设置（右键打开）");
-    public static final Item MORE_SETTINGS_ITEM = registerMenuItem("more_settings", "更多选项（右键打开）");
-    public static final Item SCENE_EDIT_ITEM = registerMenuItem("scene_edit", "场景编辑（右键打开）");
-    public static final Item EFFECT_TRACK_ITEM = registerMenuItem("effect_track", "特效编辑器（右键打开）");
-    public static final Item SAVE_SCENE_ITEM = registerMenuItem("save_scene", "保存场景（右键保存并返回）");
+    public static final Item START_CHART_ITEM = registerMenuItem("start_chart", "开始写谱");
+    public static final Item AWA_ITEM = registerMenuItem("awa", "awa~");
+    public static final Item SETTINGS_ITEM = registerMenuItem("settings", "设置");
+    public static final Item MORE_SETTINGS_ITEM = registerMenuItem("more_settings", "更多选项");
+    public static final Item SCENE_EDITOR_ITEM = registerMenuItem("scene_editor", "场景编辑器");
+    public static final Item EFFECT_TRACK_ITEM = registerMenuItem("effect_track", "特效编辑器");
+    public static final Item SAVE_SCENE_ITEM = registerMenuItem("save_scene", "保存场景");
     public static final Item CHART_MENU_ITEM = registerMenuItem("chart_menu", "谱面菜单");
-    public static final Item MORE_OPTIONS_RETURN_ITEM = registerMenuItem("more_options_return", "返回（右键打开）");
+    public static final Item MORE_OPTIONS_RETURN_ITEM = registerMenuItem("more_options_return", "返回");
     public static final Item PLAY_ITEM = registerMenuItem("play", "播放");
-    public static final Item EXPORT_ITEM = registerMenuItem("export", "导出（右键打开）");
+    public static final Item NOTE_EDIT_ITEM = registerMenuItem("note_edit", "修改音符");
+    public static final Item EXPORT_ITEM = registerMenuItem("export", "导出");
     private static final Map<UUID, String> ACTIVE_CHARTS = new ConcurrentHashMap<>();
     private static final Map<UUID, Integer> ACTIVE_CHART_LANES = new ConcurrentHashMap<>();
     private static final Map<UUID, Integer> PENDING_PLAYER_SETUP = new ConcurrentHashMap<>();
@@ -638,7 +639,8 @@ public final class RhythmcMaker implements ModInitializer {
         player.getInventory().setStack(2, new ItemStack(Blocks.DIAMOND_BLOCK.asItem()));
         player.getInventory().setStack(3, new ItemStack(Blocks.TNT.asItem()));
         player.getInventory().setStack(4, menuStack(PLAY_ITEM));
-        player.getInventory().setStack(5, createNoteEditTool());
+        player.getInventory().setStack(5, menuStack(NOTE_EDIT_ITEM));
+        player.getInventory().setStack(7, menuStack(MORE_SETTINGS_ITEM));
         player.getInventory().setStack(8, menuStack(CHART_MENU_ITEM));
         player.currentScreenHandler.sendContentUpdates();
     }
@@ -649,9 +651,8 @@ public final class RhythmcMaker implements ModInitializer {
         for (int slot = 0; slot < 9; slot++) hotbar.add(player.getInventory().getStack(slot).copy());
         SAVED_HOTBARS.put(player.getUuid(), hotbar);
         player.getInventory().clear();
-        player.getInventory().setStack(0, menuStack(CHART_MENU_ITEM));
-        player.getInventory().setStack(1, menuStack(SCENE_EDIT_ITEM));
-        player.getInventory().setStack(2, menuStack(EFFECT_TRACK_ITEM));
+        player.getInventory().setStack(0, menuStack(SCENE_EDITOR_ITEM));
+        player.getInventory().setStack(1, menuStack(EFFECT_TRACK_ITEM));
         player.getInventory().setStack(4, menuStack(EXPORT_ITEM));
 
         player.getInventory().setStack(7, menuStack(SETTINGS_ITEM));
@@ -1757,7 +1758,7 @@ private static Path holdBackupPath(MinecraftServer server, String chartId, int g
             player.sendMessage(Text.literal("当前不在制谱器谱面世界"), true);
             return 0;
         }
-        player.teleport(world, EDITOR_SPAWN.getX(), EDITOR_SPAWN.getY(), EDITOR_SPAWN.getZ(), Set.of(), 0.0f, 0.0f, false);
+        player.teleport(world, 0.5, 66.0, 0.5, Set.of(), 0.0f, 0.0f, false);
         player.sendMessage(Text.literal("已传送到制谱器平台"), true);
         return 1;
     }
@@ -4910,11 +4911,10 @@ private static void showSceneBoundary(MinecraftServer server) {
     }
     private static double effectiveNoteTime(ChartManifest.Note note, ChartManifest chart) { return note.time + chart.offsetMillis / 1000.0; }
     public static ItemStack createNoteEditTool() {
-        ItemStack stack = new ItemStack(Items.BREEZE_ROD);
-        stack.set(DataComponentTypes.CUSTOM_NAME, Text.literal("修改音符"));
-        return stack;
+        return new ItemStack(NOTE_EDIT_ITEM);
     }
     public static boolean isNoteEditTool(ItemStack stack) {
+        if (stack.isOf(NOTE_EDIT_ITEM)) return true;
         if (!stack.isOf(Items.BREEZE_ROD)) return false;
         Text customName = stack.get(DataComponentTypes.CUSTOM_NAME);
         return customName != null && customName.getString().equals("修改音符");

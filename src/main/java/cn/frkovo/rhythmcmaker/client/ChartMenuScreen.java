@@ -58,11 +58,11 @@ public final class ChartMenuScreen extends Screen {
         ImGui.setNextItemWidth(Math.max(1.0f, ImGui.getContentRegionAvailX()));
         ImGui.sliderScalar("##teleport-value", ImGuiDataType.Double, teleportBeat, minValue, maxValue, teleportMode == 0 ? "%.0f" : "%.2f");
         teleportBeat.set(Math.max(minValue, Math.min(maxValue, teleportBeat.get())));
-        if (ImGui.button("传送至制谱器平台##teleport-editor")) {
+        if (ImGui.button("传送##teleport-selected", -1.0f, 30.0f)) {
             if (teleportMode == 0) RhythmcMakerClient.sendChartCommand("rhythmc_teleport_beat " + (int) Math.round(teleportBeat.get()));
             else RhythmcMakerClient.sendChartCommand("rhythmc_teleport_time " + teleportBeat.get());
         }
-        if (ImGui.button("传送至播放场景##teleport-playback")) RhythmcMakerClient.sendChartCommand("rhythmc_teleport_playback_scene");
+        if (ImGui.button("传送至制谱器平台##teleport-editor", -1.0f, 30.0f)) RhythmcMakerClient.sendChartCommand("rhythmc_teleport_editor_platform");
         ImGui.separator(); ImGui.text("轨道吸附"); ImGui.text("吸附轨道可能导致音符时机改变，请确认操作"); boolean hasFractional = chart.notes != null && chart.notes.stream().anyMatch(note -> note != null && Math.abs(note.z - Math.rint(note.z)) > 1.0e-6);
         if (!hasFractional) ImGui.beginDisabled(); if (ImGui.button("确认吸附##snap")) client.setScreen(new SnapConfirmScreen(this)); if (!hasFractional) ImGui.endDisabled();
         boolean canUndo = client.player != null && client.getServer() != null && RhythmcMaker.canUndoTrackSnap(client.player.getUuid()); if (!canUndo) ImGui.beginDisabled(); if (ImGui.button("撤销吸附##snap-undo")) RhythmcMakerClient.sendChartCommand("rhythmc_track_snap_undo"); if (!canUndo) ImGui.endDisabled();

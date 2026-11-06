@@ -127,7 +127,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             else if (item == RhythmcMaker.MORE_SETTINGS_ITEM) sendCommand(client, "rhythmc_more_options");
             else if (item == RhythmcMaker.MORE_OPTIONS_RETURN_ITEM) sendCommand(client, "rhythmc_more_return");
             else if (item == RhythmcMaker.EXPORT_ITEM) client.setScreen(new ExportChartScreen());
-            else if (item == RhythmcMaker.SCENE_EDIT_ITEM) client.setScreen(new SceneEditScreen());
+            else if (item == RhythmcMaker.SCENE_EDITOR_ITEM) client.setScreen(new SceneEditScreen());
             else if (item == RhythmcMaker.EFFECT_TRACK_ITEM) client.setScreen(new EffectTrackScreen());
             else if (item == RhythmcMaker.SAVE_SCENE_ITEM) sendCommand(client, "rhythmc_scene_save");
             else if (item == RhythmcMaker.PLAY_ITEM) {
@@ -924,7 +924,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
                 || item == RhythmcMaker.SETTINGS_ITEM || item == RhythmcMaker.CHART_MENU_ITEM
                 || item == RhythmcMaker.MORE_SETTINGS_ITEM
                 || item == RhythmcMaker.MORE_OPTIONS_RETURN_ITEM || item == RhythmcMaker.EXPORT_ITEM
-                || item == RhythmcMaker.SCENE_EDIT_ITEM
+                || item == RhythmcMaker.SCENE_EDITOR_ITEM
                 || item == RhythmcMaker.EFFECT_TRACK_ITEM || item == RhythmcMaker.SAVE_SCENE_ITEM
                 || item == RhythmcMaker.PLAY_ITEM;
     }
