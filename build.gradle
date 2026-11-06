@@ -105,6 +105,41 @@ def updateModVersion = { String nextVersion ->
     propertiesFile.write(updated, "UTF-8")
 }
 
+tasks.register("holdPlaybackRegression", JavaExec) {
+    group = "verification"
+    description = "Runs deterministic Hold interval and playback-state regression checks."
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = "cn.frkovo.rhythmcmaker.chart.HoldPlaybackRegression"
+    dependsOn tasks.named("testClasses")
+}
+
+tasks.register("timeFadeRegression", JavaExec) {
+    group = "verification"
+    description = "Runs deterministic time-of-day fade regression checks."
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = "cn.frkovo.rhythmcmaker.chart.TimeFadeRegression"
+    dependsOn tasks.named("testClasses")
+}
+
+tasks.register("noteEditingRegression", JavaExec) {
+    group = "verification"
+    description = "Runs note editing, legacy Hold import, geometry and layout regressions."
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = "cn.frkovo.rhythmcmaker.chart.NoteEditingRegression"
+    dependsOn tasks.named("testClasses")
+    if (project.hasProperty("regressionChart")) args project.property("regressionChart")
+}
+
+tasks.named("check") {
+    dependsOn tasks.named("noteEditingRegression")
+    dependsOn tasks.named("holdPlaybackRegression")
+    dependsOn tasks.named("timeFadeRegression")
+}
+
+tasks.named("test", Test) {
+    failOnNoDiscoveredTests = false
+}
+
 tasks.register("bumpPatchVersion") {
     group = "release"
     description = "Increments the c component of mod_version before deployment."
@@ -135,4 +170,6 @@ tasks.register("deploy") {
     dependsOn "bumpPatchVersion"
 }
 
-buildTask.configure { mustRunAfter tasks.named("bumpPatchVersion") }
+buildTask.configure { dependsOn tasks.named("bumpPatchVersion") }
+tasks.named("processResources") { mustRunAfter tasks.named("bumpPatchVersion") }
+tasks.withType(AbstractArchiveTask).configureEach { mustRunAfter tasks.named("bumpPatchVersion") }

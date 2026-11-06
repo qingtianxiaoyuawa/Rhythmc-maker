@@ -632,8 +632,6 @@ public final class EffectEditorImGuiView {
             }
         });
         ImGui.separator();
-        if (ImGui.button("新增关键帧##add-keyframe")) addKeyframe(event);
-        ImGui.sameLine();
         if (ImGui.button("删除当前事件##delete-event")) deleteSelected();
         ImGui.end();
     }
@@ -1108,17 +1106,11 @@ public final class EffectEditorImGuiView {
 
     private void drawTimelineMarker(ImDrawList drawList, TimelineMarker marker, float markerX, float markerY) {
         boolean selected = selectedIndices.contains(marker.eventIndex());
-        int colour = marker.kind() == TimelineMarkerKind.EVENT ? 0xFF4DB7FF : 0xFFE9B96E;
-        if (selected && marker.kind() == TimelineMarkerKind.EVENT) {
-            drawList.addCircleFilled(markerX, markerY, 8.0f, 0xFFFFFFFF, 16);
-        }
         if (marker.kind() == TimelineMarkerKind.EVENT) {
-            drawList.addTriangleFilled(markerX, markerY - 7.0f, markerX + 7.0f, markerY,
-                    markerX, markerY + 7.0f, colour);
-            drawList.addTriangleFilled(markerX, markerY - 7.0f, markerX - 7.0f, markerY,
-                    markerX, markerY + 7.0f, colour);
+            drawList.addCircleFilled(markerX, markerY, 6.0f, 0xFF4DB7FF, 16);
+            if (selected) drawList.addCircle(markerX, markerY, 8.0f, 0xFFFFFFFF, 16, 2.0f);
         } else {
-            drawList.addCircleFilled(markerX, markerY, 4.5f, colour, 12);
+            drawList.addCircleFilled(markerX, markerY, 4.5f, 0xFFE9B96E, 12);
         }
     }
 
@@ -1393,7 +1385,8 @@ public final class EffectEditorImGuiView {
         return -1;
     }
     private void appendTimelineMarkers(List<TimelineMarker> markers, int eventIndex, JsonObject event) {
-        markers.add(new TimelineMarker(eventIndex, -1, -1, readJsonDouble(event, "beat", 0.0), TimelineMarkerKind.EVENT));
+        double alignedBeat = layoutModel.position(eventIndex).beat;
+        markers.add(new TimelineMarker(eventIndex, -1, -1, alignedBeat, TimelineMarkerKind.EVENT));
         if (!event.has("animation") || !event.get("animation").isJsonObject()) return;
         JsonObject animation = event.getAsJsonObject("animation");
         if (!animation.has("channels") || !animation.get("channels").isJsonArray()) return;
@@ -1679,30 +1672,6 @@ public final class EffectEditorImGuiView {
         cachedTimelineRows = null;
         select(workingEffects.size() - 1);
         status = "已新增 " + definition.displayName();
-    }
-
-    private void addKeyframe(JsonObject event) {
-        rememberForUndo();
-        JsonObject animation = event.has("animation") && event.get("animation").isJsonObject() ? event.getAsJsonObject("animation") : new JsonObject();
-        JsonArray channels = animation.has("channels") && animation.get("channels").isJsonArray() ? animation.getAsJsonArray("channels") : new JsonArray();
-        JsonObject channel = new JsonObject();
-        channel.addProperty("name", "value");
-        channel.addProperty("interpolation", "CONTINUOUS");
-        JsonArray keyframes = new JsonArray();
-        JsonObject keyframe = new JsonObject();
-        keyframe.addProperty("beat", Math.max(0.0, Math.round(playhead[0] * chart.divisionsPerBeat) / (double) chart.divisionsPerBeat));
-        keyframe.addProperty("value", 1.0);
-        keyframe.addProperty("easing", 0);
-        keyframes.add(keyframe);
-        channel.add("keyframes", keyframes);
-        channels.add(channel);
-        animation.add("channels", channels);
-        event.add("animation", animation);
-        keyframePositions.add(new EffectEditorLayout.KeyframePosition(selectedIndex, channels.size() - 1, 0,
-                keyframe.get("beat").getAsDouble(), chart.divisionsPerBeat));
-        dirty = true;
-        cachedTimelineRows = null;
-        status = "已新增关键帧";
     }
 
     private void deleteSelected() {

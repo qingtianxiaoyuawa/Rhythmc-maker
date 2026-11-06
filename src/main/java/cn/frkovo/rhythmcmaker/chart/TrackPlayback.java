@@ -5,6 +5,9 @@ import java.util.List;
 
 /** Runtime evaluation of RhythMC 3.0 track curves. */
 public final class TrackPlayback {
+    private static final int INTEGRAL_STEPS = 2048;
+    private static final double[][] EASING_INTEGRALS = buildEasingIntegrals();
+
     private TrackPlayback() {}
 
     public static Prepared prepare(ChartManifest.Track track, List<ChartManifest.SpeedEvent> legacySpeedEvents) {
@@ -78,7 +81,10 @@ public final class TrackPlayback {
         public double distanceAt(double beat) {
             if (speed.isEmpty()) return 0.0;
             int index = upperBound(speed, beat) - 1;
-            if (index < 0) return 0.0;
+            if (index < 0) {
+                ChartManifest.NumEvent first = speed.getFirst();
+                return first.startValue * (beat - first.startBeat);
+            }
             ChartManifest.NumEvent event = speed.get(index);
             return speedPrefix[index] + eventDistance(event, beat);
         }
@@ -147,12 +153,12 @@ public final class TrackPlayback {
 
     private static double eventDistance(ChartManifest.NumEvent event, double beat) {
         if (beat < event.startBeat) return 0.0;
-        if (event.endBeat <= event.startBeat || beat > event.endBeat) {
-            return 0.5 * (event.startValue + event.endValue) * Math.max(0.0, event.endBeat - event.startBeat);
-        }
-        double duration = beat - event.startBeat;
-        double value = interpolate(event, duration / (event.endBeat - event.startBeat));
-        return 0.5 * (event.startValue + value) * duration;
+        if (event.endBeat <= event.startBeat) return 0.0;
+        double duration = Math.min(beat, event.endBeat) - event.startBeat;
+        double progress = duration / (event.endBeat - event.startBeat);
+        double integral = normalizedIntegral(progress, event.easingType);
+        return (event.startValue * progress + (event.endValue - event.startValue) * integral)
+                * (event.endBeat - event.startBeat);
     }
 
     private static double interpolate(ChartManifest.NumEvent event, double progress) {
@@ -162,8 +168,8 @@ public final class TrackPlayback {
     private static double ease(double progress, int easingType) {
         double value = Math.max(0.0, Math.min(1.0, progress));
         return switch (Math.max(0, Math.min(33, easingType))) {
-            case 1 -> 1 - Math.cos(value * Math.PI) / 2;
-            case 2 -> Math.sin(value * Math.PI) / 2;
+            case 1 -> 1 - Math.cos(value * Math.PI / 2);
+            case 2 -> Math.sin(value * Math.PI / 2);
             case 3 -> -(Math.cos(Math.PI * value) - 1) / 2;
             case 4 -> value * value;
             case 5 -> 1 - Math.pow(1 - value, 2);
@@ -204,5 +210,37 @@ public final class TrackPlayback {
         if (value < 2 / 2.75) return 7.5625 * Math.pow(value - 1.5 / 2.75, 2) + 0.75;
         if (value < 2.5 / 2.75) return 7.5625 * Math.pow(value - 2.25 / 2.75, 2) + 0.9375;
         return 7.5625 * Math.pow(value - 2.625 / 2.75, 2) + 0.984375;
+    }
+
+    private static double normalizedIntegral(double progress, int easingType) {
+        double value = Math.max(0.0, Math.min(1.0, progress));
+        int id = Math.max(0, Math.min(33, easingType));
+        if (id == 31) return 0.0;
+        if (id == 32) return value;
+        if (id == 33) return Math.max(0.0, value - 0.5);
+        double[] table = EASING_INTEGRALS[id];
+        double position = value * (INTEGRAL_STEPS - 1);
+        int lower = (int) position;
+        int upper = Math.min(lower + 1, INTEGRAL_STEPS - 1);
+        double fraction = position - lower;
+        return table[lower] * (1.0 - fraction) + table[upper] * fraction;
+    }
+
+    private static double[][] buildEasingIntegrals() {
+        double[][] result = new double[34][INTEGRAL_STEPS];
+        for (int easing = 0; easing < result.length; easing++) {
+            double total = 0.0;
+            double previous = ease(0.0, easing);
+            for (int index = 1; index < INTEGRAL_STEPS; index++) {
+                double current = ease(index / (double) (INTEGRAL_STEPS - 1), easing);
+                total += (previous + current) * 0.5 / (INTEGRAL_STEPS - 1);
+                result[easing][index] = total;
+                previous = current;
+            }
+            if (total > 1.0e-12) {
+                for (int index = 0; index < INTEGRAL_STEPS; index++) result[easing][index] /= total;
+            }
+        }
+        return result;
     }
 }

@@ -22,7 +22,6 @@ final class PlaceholderScreen extends RhythmcScreen {
     private final String section;
     private static boolean trackSnapUndoAvailable;
     private static String trackSnapChartId;
-    private static TrackSnapSummary lastTrackSnapSummary;
 
     PlaceholderScreen(String title) {
         this(title, "root");
@@ -117,11 +116,8 @@ final class PlaceholderScreen extends RhythmcScreen {
             page.child(UIComponents.button(Text.literal("快捷传送"), button -> MinecraftClient.getInstance().setScreen(new PlaceholderScreen("快捷传送", "quick-teleport-select"))).horizontalSizing(Sizing.fill()));
             page.child(UIComponents.button(Text.literal("轨道吸附"), button -> MinecraftClient.getInstance().setScreen(new PlaceholderScreen("轨道吸附", "track-snap"))).horizontalSizing(Sizing.fill()));
         } else if (section.equals("track-snap")) {
-            var chart = ClientChartAccess.resolveActiveChart();
+            var chart = ClientChartAccess.refreshActiveChartNow();
             TrackSnapSummary summary = trackSnapSummary(chart);
-            if (chart != null && chart.id.equals(trackSnapChartId) && lastTrackSnapSummary != null) {
-                summary = lastTrackSnapSummary;
-            }
             page.child(UIComponents.label(Text.literal("谱面基础 BPM：" + (chart == null ? "-" : String.format(java.util.Locale.ROOT, "%.2f", chart.bpm)))));
             page.child(UIComponents.label(Text.literal("当前每 Beat 分数：" + (chart == null ? "-" : Math.max(1, chart.divisionsPerBeat)))));
             page.child(UIComponents.label(Text.literal("待吸附音符数量：" + summary.fractionalCount)));
@@ -135,15 +131,13 @@ final class PlaceholderScreen extends RhythmcScreen {
             var undo = UIComponents.button(Text.literal("撤销上次吸附"), button -> {
                 RhythmcMakerClient.sendChartCommand("rhythmc_track_snap_undo");
                 trackSnapUndoAvailable = false;
-                lastTrackSnapSummary = null;
                 MinecraftClient.getInstance().setScreen(new PlaceholderScreen("轨道吸附", "track-snap"));
             });
             undo.active(trackSnapUndoAvailable && chart != null && chart.id.equals(trackSnapChartId));
             page.child(undo.horizontalSizing(Sizing.fill()));
         } else if (section.equals("track-snap-confirm")) {
-            var chart = ClientChartAccess.resolveActiveChart();
+            var chart = ClientChartAccess.refreshActiveChartNow();
             TrackSnapSummary summary = trackSnapSummary(chart);
-            if (chart != null && chart.id.equals(trackSnapChartId) && lastTrackSnapSummary != null) summary = lastTrackSnapSummary;
             page.child(UIComponents.label(Text.literal("谱面基础 BPM：" + (chart == null ? "-" : String.format(java.util.Locale.ROOT, "%.2f", chart.bpm)))));
             page.child(UIComponents.label(Text.literal("当前每 Beat 分数：" + (chart == null ? "-" : Math.max(1, chart.divisionsPerBeat)))));
             page.child(UIComponents.label(Text.literal("待吸附音符数量：" + summary.fractionalCount)));
@@ -166,7 +160,7 @@ final class PlaceholderScreen extends RhythmcScreen {
                 close();
             }).horizontalSizing(Sizing.fill()));
         } else if (section.equals("quick-teleport-beat")) {
-            var chart = ClientChartAccess.resolveActiveChart();
+            var chart = ClientChartAccess.refreshActiveChartNow();
             page.child(UIComponents.label(Text.literal("Beat 数（1 - " + Math.max(1, chart == null ? 1 : chart.beatCount) + "）")));
             TextBoxComponent beat = UIComponents.textBox(Sizing.fill(), "1");
             numericIntegerOnly(beat); page.child(beat);
@@ -181,7 +175,7 @@ final class PlaceholderScreen extends RhythmcScreen {
                 }
             }).horizontalSizing(Sizing.fill()));
         } else if (section.equals("quick-teleport-time")) {
-            var chart = ClientChartAccess.resolveActiveChart();
+            var chart = ClientChartAccess.refreshActiveChartNow();
             double totalSeconds = chart == null ? 0.0 : chart.durationSeconds > 0.0 ? chart.durationSeconds : chart.totalBeats > 0.0 && chart.bpm > 0.0 ? ChartTiming.beatToSeconds(chart, chart.totalBeats) : Math.max(1, chart.beatCount) * 60.0 / Math.max(1.0, chart.bpm);
             page.child(UIComponents.label(Text.literal("歌曲时间（秒，0 - " + String.format(java.util.Locale.ROOT, "%.2f", totalSeconds) + "）")));
             TextBoxComponent time = UIComponents.textBox(Sizing.fill(), "0");
@@ -197,7 +191,8 @@ final class PlaceholderScreen extends RhythmcScreen {
                 }
             }).horizontalSizing(Sizing.fill()));
         } else if (section.equals("beat-score")) {
-            var chart = ClientChartAccess.resolveActiveChart();
+            var chart = ClientChartAccess.refreshActiveChartNow();
+            RhythmcMakerClient.requestSidebarRefresh();
             int currentDivisions = chart == null ? ClientChartAccess.defaultDivisionsPerBeat() : EditorTrackLayout.boundedDivisionsPerBeat(chart.divisionsPerBeat);
             int currentLanes = EditorTrackLayout.supportedLaneCount(chart == null ? EditorTrackLayout.DEFAULT_LANE_COUNT : chart.laneCount);
             page.child(UIComponents.label(Text.literal("每Beat分数（1 - 32）")));
@@ -212,9 +207,9 @@ final class PlaceholderScreen extends RhythmcScreen {
                     int divisionsValue = Integer.parseInt(divisions.getText());
                     int lanesValue = Integer.parseInt(lanes.getText());
                     if (!EditorTrackLayout.isSupportedDivisionsPerBeat(divisionsValue) || !EditorTrackLayout.isSupportedLaneCount(lanesValue)) throw new NumberFormatException();
-                    EditorTrackLayout layout = EditorTrackLayout.of(lanesValue, divisionsValue);
-                    ClientChartAccess.applyLocalLayout(layout);
+                    EditorTrackLayout layout = EditorTrackLayout.of(lanesValue, divisionsValue, chart.trackHeight);
                     invalidateTrackSnapState();
+                    ClientChartAccess.applyLocalLayout(layout);
                     RhythmcMakerClient.sendChartCommand("rhythmc_layout_set " + layout.divisionsPerBeat() + " " + layout.laneCount());
                     ClientChartAccess.status("正在应用制谱器轨道：" + layout.laneCount() + " × " + layout.divisionsPerBeat());
                     close();
@@ -286,7 +281,6 @@ final class PlaceholderScreen extends RhythmcScreen {
     static void invalidateTrackSnapState() {
         trackSnapUndoAvailable = false;
         trackSnapChartId = null;
-        lastTrackSnapSummary = null;
     }
 
     @Override

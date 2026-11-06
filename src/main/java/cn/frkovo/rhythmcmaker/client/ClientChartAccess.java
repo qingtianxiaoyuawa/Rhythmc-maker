@@ -28,7 +28,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-final class ClientChartAccess {
+public final class ClientChartAccess {
     private static ChartManifest activeChart;
     private static RegistryKey<World> activeChartWorld;
     private static MinecraftServer activeChartServer;
@@ -46,6 +46,7 @@ final class ClientChartAccess {
     private static String lastRefreshError;
     private static int pendingLayoutDivisions = -1;
     private static int pendingLayoutLanes = -1;
+    private static int pendingLayoutHeight = -1;
     private static long pendingLayoutExpiresAtNanos;
     private ClientChartAccess() {
     }
@@ -117,6 +118,7 @@ final class ClientChartAccess {
         activeChart.trackLength = Math.max(8, Math.max(1, activeChart.beatCount) * activeChart.divisionsPerBeat);
         pendingLayoutDivisions = layout.divisionsPerBeat();
         pendingLayoutLanes = layout.laneCount();
+        pendingLayoutHeight = layout.trackHeight();
         pendingLayoutExpiresAtNanos = System.nanoTime() + 8_000_000_000L;
         lastRefreshRequest = null;
         lastRefreshError = null;
@@ -142,6 +144,35 @@ final class ClientChartAccess {
         } catch (IOException ignored) {
         }
         return activeChart;
+    }
+
+    static ChartManifest refreshActiveChartNow() {
+        ChartManifest current = resolveActiveChart();
+        if (current == null) return null;
+        try {
+            ChartManifest inMemory = cn.frkovo.rhythmcmaker.RhythmcMaker.activeChartSnapshot(server(), current.id);
+            if (inMemory != null) {
+                applyPendingLayout(inMemory);
+                activeChart = inMemory;
+            } else {
+                ChartManifest fresh = ChartStorage.find(server(), current.id);
+                if (fresh != null) {
+                    applyPendingLayout(fresh);
+                    activeChart = fresh;
+                    var attributes = ChartStorage.manifestAttributes(server(), fresh.id);
+                    activeChartModifiedTime = attributes.lastModifiedTime();
+                    activeChartFileSize = attributes.size();
+                }
+            }
+        } catch (IOException ignored) {
+        }
+        return activeChart;
+    }
+
+    private static void applyPendingLayout(ChartManifest chart) {
+        if (pendingLayoutDivisions < 1 || System.nanoTime() >= pendingLayoutExpiresAtNanos) return;
+        EditorTrackLayout.of(pendingLayoutLanes, pendingLayoutDivisions, pendingLayoutHeight).applyTo(chart);
+        chart.trackLength = Math.max(8, Math.max(1, chart.beatCount) * chart.divisionsPerBeat);
     }
 
     static boolean refreshActiveChartIfChanged() {
@@ -211,25 +242,29 @@ final class ClientChartAccess {
         lastRefreshError = null;
         if (result.chart == null) return false;
         if (pendingLayoutDivisions > 0 && System.nanoTime() < pendingLayoutExpiresAtNanos
-                && (result.chart.divisionsPerBeat != pendingLayoutDivisions || result.chart.laneCount != pendingLayoutLanes)) {
+                && (result.chart.divisionsPerBeat != pendingLayoutDivisions || result.chart.laneCount != pendingLayoutLanes
+                    || result.chart.trackHeight != pendingLayoutHeight)) {
             activeChartModifiedTime = null;
             activeChartFileSize = -1L;
             return true;
         }
         if (pendingLayoutDivisions > 0 && result.chart.divisionsPerBeat == pendingLayoutDivisions
-                && result.chart.laneCount == pendingLayoutLanes) {
+                && result.chart.laneCount == pendingLayoutLanes && result.chart.trackHeight == pendingLayoutHeight) {
             pendingLayoutDivisions = -1;
             pendingLayoutLanes = -1;
+            pendingLayoutHeight = -1;
             pendingLayoutExpiresAtNanos = 0L;
         } else if (pendingLayoutDivisions > 0 && System.nanoTime() >= pendingLayoutExpiresAtNanos) {
             pendingLayoutDivisions = -1;
             pendingLayoutLanes = -1;
+            pendingLayoutHeight = -1;
             pendingLayoutExpiresAtNanos = 0L;
         }
         boolean changed = activeChart == null
                 || !result.chart.id.equals(activeChart.id)
                 || result.chart.divisionsPerBeat != activeChart.divisionsPerBeat
                 || result.chart.laneCount != activeChart.laneCount
+                || result.chart.trackHeight != activeChart.trackHeight
                 || result.chart.trackLength != activeChart.trackLength
                 || result.chart.beatCount != activeChart.beatCount;
         activeChart = result.chart;
@@ -263,9 +298,9 @@ final class ClientChartAccess {
                                  FileTime modified, long size, String request, String error) {}
 
 
-    static cn.frkovo.rhythmcmaker.config.RhythmcMakerConfig config() { return cn.frkovo.rhythmcmaker.RhythmcMaker.currentConfig(); }
+    public static cn.frkovo.rhythmcmaker.config.RhythmcMakerConfig config() { return cn.frkovo.rhythmcmaker.RhythmcMaker.currentConfig(); }
 
-    static void saveConfig(cn.frkovo.rhythmcmaker.config.RhythmcMakerConfig config) throws IOException { cn.frkovo.rhythmcmaker.RhythmcMaker.updateConfig(server(), config); }
+    public static void saveConfig(cn.frkovo.rhythmcmaker.config.RhythmcMakerConfig config) throws IOException { cn.frkovo.rhythmcmaker.RhythmcMaker.updateConfig(server(), config); }
 
     static void update(ChartManifest chart) throws IOException {
         MinecraftServer server = server();
@@ -351,7 +386,7 @@ final class ClientChartAccess {
         };
     }
 
-    static void status(String message) {
+    public static void status(String message) {
         if (containsPathInformation(message)) return;
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player != null) client.player.sendMessage(Text.literal(message), true);

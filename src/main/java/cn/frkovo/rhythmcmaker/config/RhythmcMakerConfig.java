@@ -19,8 +19,8 @@ public final class RhythmcMakerConfig {
     public static final double DEFAULT_AUTOSAVE_INTERVAL_SECONDS = 300.0;
 
     public double autosaveIntervalSeconds = DEFAULT_AUTOSAVE_INTERVAL_SECONDS;
-    public double sidebarRefreshIntervalSeconds = 1.0;
-    public int defaultDivisionsPerBeat = 4;
+    public double sidebarRefreshIntervalSeconds = 0.05;
+    public int defaultDivisionsPerBeat = 12;
     public double playerSpeed = 1.0;
     public double musicVolumeMultiplier = 1.0;
     public double noteJudgementVolumeMultiplier = 1.0;
@@ -57,7 +57,13 @@ public final class RhythmcMakerConfig {
         normalize();
         Path path = path(server);
         Files.createDirectories(path.getParent());
-
+        Path temporary = path.resolveSibling(path.getFileName() + ".tmp");
+        Files.writeString(temporary, GSON.toJson(this), StandardCharsets.UTF_8);
+        try {
+            Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException exception) {
+            Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING);
+        }
     }
 
     private static Path path(MinecraftServer server) {

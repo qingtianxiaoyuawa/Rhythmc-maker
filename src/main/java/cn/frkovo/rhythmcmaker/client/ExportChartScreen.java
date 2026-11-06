@@ -98,9 +98,10 @@ final class ExportChartScreen extends RhythmcScreen {
     private void exportSucceeded(java.nio.file.Path exportFolder, boolean exportWarnings) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player == null) return;
-        MutableText message = Text.literal("导出成功（点击打开）").styled(style -> style
+        MutableText message = Text.literal("导出成功").formatted(Formatting.YELLOW);
+        message.append(Text.literal("【点击打开】").formatted(Formatting.GREEN, Formatting.UNDERLINE).styled(style -> style
                 .withClickEvent(new ClickEvent.OpenFile(exportFolder.toAbsolutePath().normalize()))
-                .withHoverEvent(new HoverEvent.ShowText(Text.literal("点击打开导出文件夹"))));
+                .withHoverEvent(new HoverEvent.ShowText(Text.literal("点击打开导出文件夹")))));
         if (exportWarnings) message.append(Text.literal("（已忽略 Maker 本地预览属性）").formatted(Formatting.YELLOW));
         client.player.sendMessage(message, false);
     }

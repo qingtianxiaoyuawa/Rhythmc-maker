@@ -28,7 +28,9 @@ public final class EffectParameterSchema {
                 enumeration("type", "烟花形状", "BALL", List.of("BALL", "LARGE_BALL", "STAR", "BURST", "CREEPER")),
                 field("flicker", "闪烁", BOOLEAN, "false", ""), field("trail", "拖尾", BOOLEAN, "true", ""));
         add("TIME", "世界时间", true,
-                number("time", "世界时间（游戏刻）", LONG, "6000", 0, Long.MAX_VALUE));
+                number("time", "世界时间（游戏刻）", LONG, "6000", 0, Long.MAX_VALUE),
+                optional(number("durationBeats", "渐变时长（拍）", DECIMAL, "1", 0.000001, 1000000)),
+                enumeration("direction", "渐变方向", "CLOCKWISE", List.of("CLOCKWISE", "COUNTERCLOCKWISE")));
         add("EFFECT", "药水效果", true,
                 number("effectId", "药水效果", INTEGER, "1", 1, 33),
                 number("amplifier", "效果等级（0 为一级）", INTEGER, "0", 0, Integer.MAX_VALUE), duration());
@@ -42,6 +44,10 @@ public final class EffectParameterSchema {
         add("GLOW_COLOR", "发光颜色", true, enumeration("color", "Minecraft 颜色枚举", "WHITE", List.of(
                 "BLACK", "DARK_BLUE", "DARK_GREEN", "DARK_AQUA", "DARK_RED", "DARK_PURPLE", "GOLD", "GRAY",
                 "DARK_GRAY", "BLUE", "GREEN", "AQUA", "RED", "LIGHT_PURPLE", "YELLOW", "WHITE")));
+        add("JUDGE_FRAME_COLOR", "判定框颜色", true,
+                enumeration("color", "判定框颜色", "WHITE", List.of(
+                        "BLACK", "DARK_BLUE", "DARK_GREEN", "DARK_AQUA", "DARK_RED", "DARK_PURPLE", "GOLD", "GRAY",
+                        "DARK_GRAY", "BLUE", "GREEN", "AQUA", "RED", "LIGHT_PURPLE", "YELLOW", "WHITE")));
         add("MESSAGE", "聊天消息", true, field("contents", "消息内容", STRING_LIST, "[\"消息\"]", "每行发送一条消息。"));
         add("TEXT_DISPLAY", "文本展示实体", true,
                 vector("position", "位置偏移 [x,y,z]（格）", "[0,1.5,0]", "相对固定播放中心 (200.5, 66, -1.5) 的偏移；不填写绝对世界坐标。"),

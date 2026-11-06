@@ -1,12 +1,25 @@
 package cn.frkovo.rhythmcmaker;
 
 import cn.frkovo.rhythmcmaker.chart.ChartManifest;
+import cn.frkovo.rhythmcmaker.chart.NoteEditRules;
 import com.google.gson.Gson;
 import cn.frkovo.rhythmcmaker.chart.ChartStorage;
 import cn.frkovo.rhythmcmaker.chart.ChartTiming;
+import cn.frkovo.rhythmcmaker.chart.HoldInterval;
+import cn.frkovo.rhythmcmaker.chart.HoldFillPlanner;
+import cn.frkovo.rhythmcmaker.chart.HoldGroupRules;
+import cn.frkovo.rhythmcmaker.common.note.EditorBeat;
+import cn.frkovo.rhythmcmaker.common.note.HoldRole;
+import cn.frkovo.rhythmcmaker.common.note.HoldGroupModel;
+import cn.frkovo.rhythmcmaker.common.note.NoteGeometry;
+import cn.frkovo.rhythmcmaker.common.note.NoteKind;
+import cn.frkovo.rhythmcmaker.common.note.NoteTransformField;
+import cn.frkovo.rhythmcmaker.chart.TimeFade;
 import cn.frkovo.rhythmcmaker.chart.EditorTrackLayout;
+import cn.frkovo.rhythmcmaker.chart.EditorNoteLayout;
 import cn.frkovo.rhythmcmaker.chart.PlaybackCoordinates;
 import cn.frkovo.rhythmcmaker.chart.TrackPlayback;
+import cn.frkovo.rhythmcmaker.client.playback.HoldPlaybackStateMachine;
 import cn.frkovo.rhythmcmaker.client.playback.PotionEffectClearPolicy;
 import cn.frkovo.rhythmcmaker.client.playback.PotionDurationAtSeek;
 import cn.frkovo.rhythmcmaker.client.playback.TextDisplayDurationAtSeek;
@@ -29,6 +42,7 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerWorldEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.fabricmc.fabric.api.event.player.UseItemCallback;
+import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import com.google.gson.JsonArray;
@@ -107,25 +121,27 @@ public final class RhythmcMaker implements ModInitializer {
     public static final BlockPos CHARTER_SPAWN = new BlockPos(0, 65, 0);
     private static final BlockPos EDITOR_SPAWN = new BlockPos(0, 66, 0);
     public static final RegistryKey<World> CHARTER_DIMENSION = RegistryKey.of(RegistryKeys.WORLD, Identifier.of(MOD_ID, "charter"));
-    public static final Item START_CHART_ITEM = registerMenuItem("start_chart", "开始写谱（右键打开）");
-    public static final Item AWA_ITEM = registerMenuItem("awa", "awa~（右键打开）");
-    public static final Item SETTINGS_ITEM = registerMenuItem("settings", "设置（右键打开）");
-    public static final Item MORE_SETTINGS_ITEM = registerMenuItem("more_settings", "更多选项（右键打开）");
-    public static final Item SCENE_EDIT_ITEM = registerMenuItem("scene_edit", "场景编辑（右键打开）");
-    public static final Item EFFECT_TRACK_ITEM = registerMenuItem("effect_track", "特效编辑器（右键打开）");
-    public static final Item SAVE_SCENE_ITEM = registerMenuItem("save_scene", "保存场景（右键保存并返回）");
-    public static final Item QUICK_FUNCTIONS_ITEM = registerMenuItem("quick_functions", "快捷功能（右键打开）");
-    public static final Item CHART_SETTINGS_ITEM = registerMenuItem("chart_settings", "谱面设置");
-    public static final Item MORE_OPTIONS_RETURN_ITEM = registerMenuItem("more_options_return", "返回（右键打开）");
-    public static final Item CHART_INFO_ITEM = registerMenuItem("chart_info", "谱面信息（右键打开）");
+    public static final Item START_CHART_ITEM = registerMenuItem("start_chart", "开始写谱");
+    public static final Item AWA_ITEM = registerMenuItem("awa", "awa~");
+    public static final Item SETTINGS_ITEM = registerMenuItem("settings", "设置");
+    public static final Item MORE_SETTINGS_ITEM = registerMenuItem("more_settings", "更多选项");
+    public static final Item SCENE_EDITOR_ITEM = registerMenuItem("scene_editor", "场景编辑器");
+    public static final Item EFFECT_TRACK_ITEM = registerMenuItem("effect_track", "特效编辑器");
+    public static final Item SAVE_SCENE_ITEM = registerMenuItem("save_scene", "保存场景");
+    public static final Item CHART_MENU_ITEM = registerMenuItem("chart_menu", "谱面菜单");
+    public static final Item MORE_OPTIONS_RETURN_ITEM = registerMenuItem("more_options_return", "返回");
     public static final Item PLAY_ITEM = registerMenuItem("play", "播放");
-    public static final Item INCREASE_BEATS_ITEM = registerMenuItem("increase_beats", "增加小节拍数");
-    public static final Item DECREASE_BEATS_ITEM = registerMenuItem("decrease_beats", "减少小节拍数");
-    public static final Item BEAT_SCORE_ITEM = registerMenuItem("chunk_score", "修改制谱器轨道");
-    public static final Item EXPORT_ITEM = registerMenuItem("export", "导出（右键打开）");
+    public static final Item NOTE_EDIT_ITEM = registerMenuItem("note_edit", "修改音符");
+    public static final Item EXPORT_ITEM = registerMenuItem("export", "导出");
+    public static final Item TAP_NOTE_ITEM = registerNoteItem("tap_note", "TAP \u97f3\u7b26");
+    public static final Item LOOK_NOTE_ITEM = registerNoteItem("look_note", "LOOK \u97f3\u7b26");
+    public static final Item HOLD_NOTE_ITEM = registerNoteItem("hold_note", "HOLD \u97f3\u7b26");
+    public static final Item DODGE_NOTE_ITEM = registerNoteItem("dodge_note", "DODGE \u97f3\u7b26");
+    public static final Item HOLD_GROUP_NOTE_ITEM = registerNoteItem("hold_group_note", "HOLD\u7ec4 \u97f3\u7b26");
     private static final Map<UUID, String> ACTIVE_CHARTS = new ConcurrentHashMap<>();
     private static final Map<UUID, Integer> ACTIVE_CHART_LANES = new ConcurrentHashMap<>();
     private static final Map<UUID, Integer> PENDING_PLAYER_SETUP = new ConcurrentHashMap<>();
+    private static final Map<UUID, PendingHoldGroup> PENDING_HOLD_GROUPS = new ConcurrentHashMap<>();
     private static final Map<UUID, String> PENDING_EDITOR_ENTRIES = new ConcurrentHashMap<>();
     private static final Set<UUID> DIMENSION_TRAVEL_READY = ConcurrentHashMap.newKeySet();
     private static final Map<UUID, Integer> SELECTED_START_BEATS = new ConcurrentHashMap<>();
@@ -261,6 +277,7 @@ public final class RhythmcMaker implements ModInitializer {
             if (isEditorWorld(world)) configureEditorWorld(server, world);
         });
         ServerTickEvents.END_SERVER_TICK.register(server -> {
+            updatePendingHoldGroups(server);
             for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
                 Integer remaining = PENDING_PLAYER_SETUP.get(player.getUuid());
                 if (remaining == null) continue;
@@ -307,6 +324,7 @@ public final class RhythmcMaker implements ModInitializer {
         });
         UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
             if (!(world instanceof ServerWorld serverWorld) || !isEditorWorld(world) || !(player instanceof ServerPlayerEntity serverPlayer)) return ActionResult.PASS;
+            if (isNoteEditTool(serverPlayer.getStackInHand(hand))) return ActionResult.SUCCESS;
             if (isSceneOperationBusy(serverPlayer.getUuid())) return ActionResult.FAIL;
             if (rejectEditorTrackAdjustment(serverPlayer)) return ActionResult.FAIL;
             if (hasPlaybackSession(serverPlayer.getUuid())) return ActionResult.FAIL;
@@ -320,31 +338,42 @@ public final class RhythmcMaker implements ModInitializer {
                     && sceneArea != null && sceneArea.index == activeScene ? ActionResult.PASS : ActionResult.FAIL;
             if (sceneArea != null) return ActionResult.FAIL;
             ItemStack stack = serverPlayer.getStackInHand(hand);
+            ItemStack mainHandStack = serverPlayer.getMainHandStack();
+            PendingHoldGroup pendingHold = PENDING_HOLD_GROUPS.get(serverPlayer.getUuid());
+            if (pendingHold != null && (!mainHandStack.isOf(HOLD_GROUP_NOTE_ITEM)
+                    || serverPlayer.getInventory().getSelectedSlot() != pendingHold.selectedSlot())) {
+                cancelPendingHoldGroup(serverPlayer.getUuid());
+            }
+            if (hand == net.minecraft.util.Hand.MAIN_HAND && stack.isOf(HOLD_GROUP_NOTE_ITEM)) {
+                return placeHoldGroupEndpoint(serverPlayer, serverWorld, hand, chart, target);
+            }
             if (!isNoteItem(stack)) return ActionResult.FAIL;
             if (!isValidNotePosition(target, chart, serverWorld)) return ActionResult.FAIL;
             int type = noteType(stack);
             if (!isAllowedNoteTypeAtHeight(target.getY(), type)) return ActionResult.FAIL;
             if (containsNote(chart, serverWorld, target)) return ActionResult.FAIL;
-            serverWorld.setBlockState(target, stack.getItem() == Blocks.OBSERVER.asItem() ? Blocks.OBSERVER.getDefaultState()
-                : stack.getItem() == Blocks.REDSTONE_BLOCK.asItem() ? Blocks.REDSTONE_BLOCK.getDefaultState()
-                : stack.getItem() == Blocks.DIAMOND_BLOCK.asItem() ? Blocks.DIAMOND_BLOCK.getDefaultState()
-                : Blocks.TNT.getDefaultState());
+            serverWorld.setBlockState(target, blockStateForType(type));
+            playNotePlacementFeedback(serverPlayer, serverWorld, hand, target, type);
             ChartManifest.Note note = new ChartManifest.Note();
             note.id = UUID.randomUUID().toString();
             note.type = type;
+            note.trackId = activeNoteTrack(chart);
             note.x = target.getX();
             note.y = target.getY();
             note.z = target.getZ();
             note.beat = PlaybackCoordinates.editorBeatAtBlockZ(chart, target.getZ());
             note.time = ChartTiming.beatToSeconds(chart, note.beat);
             chart.notes.add(note);
+            invalidateTrackSnapUndo(serverPlayer.getUuid());
             try { saveChart(serverWorld.getServer(), chart); } catch (IOException ignored) { }
+            updateNoteWorldRepresentation(serverWorld, chart, note, note.x, note.y, note.z, note.type);
             return ActionResult.SUCCESS;
         });
         UseItemCallback.EVENT.register((player, world, hand) -> {
             if (!(world instanceof ServerWorld) || !isEditorWorld(world) || !(player instanceof ServerPlayerEntity serverPlayer)) {
                 return ActionResult.PASS;
             }
+            if (isNoteEditTool(serverPlayer.getStackInHand(hand))) return ActionResult.SUCCESS;
             if (isSceneOperationBusy(serverPlayer.getUuid())) return ActionResult.FAIL;
             return rejectEditorTrackAdjustment(serverPlayer)
                     ? ActionResult.FAIL
@@ -364,13 +393,20 @@ public final class RhythmcMaker implements ModInitializer {
             if (sceneArea != null) return false;
             if (chart == null) return false;
             if (!isNoteBlock(state.getBlock())) return false;
-            // A stale note block left by a previous layout must remain breakable.
-            if (!containsNote(chart, serverWorld, pos)) return true;
-            removeNote(chart, serverWorld, pos);
-            return true;
+return true;
+        });
+        PlayerBlockBreakEvents.AFTER.register((world, player, pos, state, blockEntity) -> {
+            if (!(world instanceof ServerWorld serverWorld) || !isEditorWorld(world)
+                    || !(player instanceof ServerPlayerEntity serverPlayer) || !isNoteBlock(state.getBlock())) return;
+            ChartManifest chart = loadActiveChart(serverPlayer, serverWorld.getServer());
+            int brokenType = noteTypeForBlockState(state);
+            boolean exactNoteBlock = chart != null && chart.notes != null && chart.notes.stream()
+                    .anyMatch(note -> NoteEditRules.hasBlockRepresentationAt(note, brokenType, pos.getX(), pos.getY(), pos.getZ()));
+            if (exactNoteBlock) removeNote(chart, serverWorld, pos, brokenType, serverPlayer.getUuid());
         });
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
             ServerPlayerEntity player = handler.getPlayer();
+            cancelPendingHoldGroup(player.getUuid());
             boolean returningFromChart = player.getEntityWorld() instanceof ServerWorld world && isEditorWorld(world);
             PENDING_PLAYER_SETUP.remove(player.getUuid());
             PENDING_EDITOR_ENTRIES.remove(player.getUuid());
@@ -413,11 +449,73 @@ public final class RhythmcMaker implements ModInitializer {
                     .then(net.minecraft.server.command.CommandManager.argument("lanes", com.mojang.brigadier.arguments.IntegerArgumentType.integer(EditorTrackLayout.MIN_LANE_COUNT, EditorTrackLayout.MAX_LANE_COUNT))
                         .executes(context -> setEditorLayout(context.getSource(),
                             com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "divisions"),
-                            com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "lanes"))))));
+                            com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "lanes")))
+                        .then(net.minecraft.server.command.CommandManager.argument("height", com.mojang.brigadier.arguments.IntegerArgumentType.integer(3, 5))
+                            .executes(context -> setEditorLayout(context.getSource(),
+                                com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "divisions"),
+                                com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "lanes"),
+                                com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "height")))))));
             dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_track_snap")
                 .executes(context -> snapFractionalNotes(context.getSource())));
             dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_track_snap_undo")
                 .executes(context -> undoFractionalNoteSnap(context.getSource())));
+            dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_note_edit")
+                .then(net.minecraft.server.command.CommandManager.argument("noteId", com.mojang.brigadier.arguments.StringArgumentType.word())
+                    .then(net.minecraft.server.command.CommandManager.argument("x", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg(-300000.0, 300000.0))
+                        .then(net.minecraft.server.command.CommandManager.argument("y", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg(-2048.0, 2048.0))
+                            .then(net.minecraft.server.command.CommandManager.argument("beat", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg(0.0, 1000000.0))
+                                .executes(context -> editChartNote(context.getSource(),
+                                    com.mojang.brigadier.arguments.StringArgumentType.getString(context, "noteId"),
+                                    com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "x"),
+                                    com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "y"),
+                                    com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "beat"))))))));
+            dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_note_timing")
+                .then(net.minecraft.server.command.CommandManager.argument("noteId", com.mojang.brigadier.arguments.StringArgumentType.word())
+                    .then(net.minecraft.server.command.CommandManager.argument("beat", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg(0.0, 1000000.0))
+                        .executes(context -> editChartNoteTiming(context.getSource(),
+                            com.mojang.brigadier.arguments.StringArgumentType.getString(context, "noteId"),
+                            com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "beat"))))));
+            dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_note_fraction")
+                .then(net.minecraft.server.command.CommandManager.argument("noteId", com.mojang.brigadier.arguments.StringArgumentType.word())
+                    .then(net.minecraft.server.command.CommandManager.argument("whole", com.mojang.brigadier.arguments.IntegerArgumentType.integer(0, 1000000))
+                        .then(net.minecraft.server.command.CommandManager.argument("numerator", com.mojang.brigadier.arguments.IntegerArgumentType.integer(0, 999))
+                            .then(net.minecraft.server.command.CommandManager.argument("denominator", com.mojang.brigadier.arguments.IntegerArgumentType.integer(1, 1000))
+                                .executes(context -> editChartNoteFraction(context.getSource(),
+                                    com.mojang.brigadier.arguments.StringArgumentType.getString(context, "noteId"),
+                                    com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "whole"),
+                                    com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "numerator"),
+                                    com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "denominator"))))))));
+            var coordinateTarget = net.minecraft.server.command.CommandManager.argument("noteId", com.mojang.brigadier.arguments.StringArgumentType.word());
+            for (cn.frkovo.rhythmcmaker.common.note.NoteCoordinateField field : cn.frkovo.rhythmcmaker.common.note.NoteCoordinateField.values()) {
+                coordinateTarget.then(net.minecraft.server.command.CommandManager.literal(field.name().toLowerCase(java.util.Locale.ROOT))
+                    .then(net.minecraft.server.command.CommandManager.argument("value", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg(-300000.0, 300000.0))
+                        .executes(context -> editChartNoteCoordinate(context.getSource(),
+                            com.mojang.brigadier.arguments.StringArgumentType.getString(context, "noteId"), field,
+                            com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "value")))));
+            }
+            dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_note_coordinate").then(coordinateTarget));
+            var transformCommand = net.minecraft.server.command.CommandManager.literal("rhythmc_note_transform");
+            var transformTarget = net.minecraft.server.command.CommandManager.argument("noteId", com.mojang.brigadier.arguments.StringArgumentType.word());
+            for (NoteTransformField field : NoteTransformField.values()) {
+                transformTarget.then(net.minecraft.server.command.CommandManager.literal(field.name().toLowerCase(java.util.Locale.ROOT))
+                    .then(net.minecraft.server.command.CommandManager.argument("value", com.mojang.brigadier.arguments.DoubleArgumentType.doubleArg(field.minimum(), field.maximum()))
+                        .executes(context -> editChartNoteTransform(context.getSource(),
+                            com.mojang.brigadier.arguments.StringArgumentType.getString(context, "noteId"), field,
+                            com.mojang.brigadier.arguments.DoubleArgumentType.getDouble(context, "value")))));
+            }
+            dispatcher.register(transformCommand.then(transformTarget));
+            dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_note_type")
+                .then(net.minecraft.server.command.CommandManager.argument("noteId", com.mojang.brigadier.arguments.StringArgumentType.word())
+                    .then(net.minecraft.server.command.CommandManager.argument("type", com.mojang.brigadier.arguments.IntegerArgumentType.integer(0, 3))
+                        .executes(context -> changeChartNoteType(context.getSource(),
+                            com.mojang.brigadier.arguments.StringArgumentType.getString(context, "noteId"),
+                            com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "type"))))));
+            dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_note_delete")
+                .then(net.minecraft.server.command.CommandManager.argument("noteId", com.mojang.brigadier.arguments.StringArgumentType.word())
+                    .executes(context -> deleteChartNote(context.getSource(),
+                        com.mojang.brigadier.arguments.StringArgumentType.getString(context, "noteId")))));
+            dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_hold_toggle")
+                .executes(context -> toggleHoldGroupItem(context.getSource())));
             dispatcher.register(net.minecraft.server.command.CommandManager.literal("rhythmc_start_beat")
                 .then(net.minecraft.server.command.CommandManager.argument("delta", com.mojang.brigadier.arguments.IntegerArgumentType.integer(-16, 16))
                 .executes(context -> adjustStartBeat(context.getSource(), com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(context, "delta")))));
@@ -576,15 +674,14 @@ public final class RhythmcMaker implements ModInitializer {
     }
     private static void giveEditorItems(ServerPlayerEntity player) {
         player.getInventory().clear();
-        player.getInventory().setStack(0, new ItemStack(Blocks.OBSERVER.asItem()));
-        player.getInventory().setStack(1, new ItemStack(Blocks.REDSTONE_BLOCK.asItem()));
-        player.getInventory().setStack(2, new ItemStack(Blocks.DIAMOND_BLOCK.asItem()));
-        player.getInventory().setStack(3, new ItemStack(Blocks.TNT.asItem()));
+        player.getInventory().setStack(0, new ItemStack(LOOK_NOTE_ITEM));
+        player.getInventory().setStack(1, new ItemStack(DODGE_NOTE_ITEM));
+        player.getInventory().setStack(2, new ItemStack(HOLD_NOTE_ITEM));
+        player.getInventory().setStack(3, new ItemStack(TAP_NOTE_ITEM));
         player.getInventory().setStack(4, menuStack(PLAY_ITEM));
-        player.getInventory().setStack(5, menuStack(BEAT_SCORE_ITEM));
-        player.getInventory().setStack(6, menuStack(CHART_SETTINGS_ITEM));
+        player.getInventory().setStack(5, menuStack(NOTE_EDIT_ITEM));
         player.getInventory().setStack(7, menuStack(MORE_SETTINGS_ITEM));
-        player.getInventory().setStack(8, menuStack(QUICK_FUNCTIONS_ITEM));
+        player.getInventory().setStack(8, menuStack(CHART_MENU_ITEM));
         player.currentScreenHandler.sendContentUpdates();
     }
     private static int openMoreOptions(net.minecraft.server.command.ServerCommandSource source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
@@ -594,10 +691,10 @@ public final class RhythmcMaker implements ModInitializer {
         for (int slot = 0; slot < 9; slot++) hotbar.add(player.getInventory().getStack(slot).copy());
         SAVED_HOTBARS.put(player.getUuid(), hotbar);
         player.getInventory().clear();
-        player.getInventory().setStack(0, menuStack(CHART_INFO_ITEM));
-        player.getInventory().setStack(1, menuStack(SCENE_EDIT_ITEM));
-        player.getInventory().setStack(2, menuStack(EFFECT_TRACK_ITEM));
+        player.getInventory().setStack(0, menuStack(SCENE_EDITOR_ITEM));
+        player.getInventory().setStack(1, menuStack(EFFECT_TRACK_ITEM));
         player.getInventory().setStack(4, menuStack(EXPORT_ITEM));
+
         player.getInventory().setStack(7, menuStack(SETTINGS_ITEM));
         player.getInventory().setStack(8, menuStack(MORE_OPTIONS_RETURN_ITEM));
         player.currentScreenHandler.sendContentUpdates();
@@ -761,6 +858,7 @@ public final class RhythmcMaker implements ModInitializer {
     }
     private static int returnHub(net.minecraft.server.command.ServerCommandSource source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayerEntity player = source.getPlayerOrThrow();
+        cancelPendingHoldGroup(player.getUuid());
         ServerWorld hub = source.getServer().getOverworld();
         if (!isCharterWorld(source.getServer(), hub)) { player.sendMessage(Text.literal("当前存档没有制谱器大厅"), false); return 0; }
         stopPlayback(source.getServer(), player, false);
@@ -821,6 +919,15 @@ public final class RhythmcMaker implements ModInitializer {
     }
 
     private static int updateEditorLayout(net.minecraft.server.command.ServerCommandSource source, ChartManifest chart, int targetDivisions, int targetLaneCount) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        return updateEditorLayout(source, chart, targetDivisions, targetLaneCount, EditorTrackLayout.of(chart).trackHeight());
+    }
+
+    private static int setEditorLayout(net.minecraft.server.command.ServerCommandSource source, int divisions, int lanes, int height) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ChartManifest chart = loadActiveChart(source.getPlayerOrThrow(), source.getServer());
+        return chart == null ? 0 : updateEditorLayout(source, chart, divisions, lanes, height);
+    }
+
+    private static int updateEditorLayout(net.minecraft.server.command.ServerCommandSource source, ChartManifest chart, int targetDivisions, int targetLaneCount, int targetHeight) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayerEntity player = source.getPlayerOrThrow();
         if (rejectEditorTrackAdjustment(player)) return 0;
         targetDivisions = EditorTrackLayout.boundedDivisionsPerBeat(targetDivisions);
@@ -829,10 +936,17 @@ public final class RhythmcMaker implements ModInitializer {
             return 0;
         }
 
+        if (!EditorTrackLayout.isSupportedHeight(targetHeight)) return 0;
+        EditorTrackLayout previousLayout = EditorTrackLayout.of(chart);
+        EditorTrackLayout targetLayout = EditorTrackLayout.of(targetLaneCount, targetDivisions, targetHeight);
+        if (targetHeight < previousLayout.trackHeight() && targetLayout.hasNotesAbove(chart)) {
+            player.sendMessage(Text.literal("无法降低轨道：请先移动或删除超高音符"), true);
+            return 0;
+        }
         int previousDivisions = divisionsPerBeat(chart);
         int previousLaneCount = laneCount(chart);
         int previousTrackLength = Math.max(chart.trackLength, calculateTrackLength(chart));
-        if (targetDivisions == previousDivisions && targetLaneCount == previousLaneCount) {
+        if (targetDivisions == previousDivisions && targetLaneCount == previousLaneCount && targetHeight == previousLayout.trackHeight()) {
             player.sendMessage(Text.literal("制谱器轨道已是 " + targetLaneCount + " × " + targetDivisions), true);
             return 1;
         }
@@ -843,6 +957,7 @@ public final class RhythmcMaker implements ModInitializer {
 
         int previousBeat = currentBeat(player, chart, previousDivisions);
         Map<String, BlockPos> oldNotePositions = captureNotePositions(chart);
+        java.util.List<ChartManifest.Note> originalNotes = copyNotes(chart.notes);
         ServerWorld editor = null;
         try { editor = source.getServer().getWorld(ChartDimensionManager.key(chart)); } catch (IOException ignored) { }
         try {
@@ -855,11 +970,12 @@ public final class RhythmcMaker implements ModInitializer {
                 EDITOR_AREA_TASKS.remove(editor.getRegistryKey());
                 EDITOR_NOTE_REFRESH_TASKS.remove(editor.getRegistryKey());
                 EDITOR_NOTE_DISPLAY_SWEEP_TASKS.remove(editor.getRegistryKey());
-                clearNoteBlocks(editor, oldNotePositions);
             }
-            EditorTrackLayout.of(targetLaneCount, targetDivisions).applyTo(chart);
+            targetLayout.applyTo(chart);
             ACTIVE_CHART_LANES.put(player.getUuid(), targetLaneCount);
             repositionNotes(chart);
+            HoldGroupModel.getInstance().reconcile(chart);
+            if (editor != null) clearNoteBlocks(editor, chart, oldNotePositions);
             chart.trackLength = calculateTrackLength(chart);
             saveChart(source.getServer(), chart);
             invalidateTrackSnapUndo(player.getUuid());
@@ -875,7 +991,8 @@ public final class RhythmcMaker implements ModInitializer {
         } catch (IOException exception) {
             EDITOR_TRACK_ADJUSTMENTS.remove(player.getUuid());
             EDITOR_TRACK_ADJUSTMENT_NOTICES.remove(player.getUuid());
-            EditorTrackLayout.of(previousLaneCount, previousDivisions).applyTo(chart);
+            previousLayout.applyTo(chart);
+            chart.notes = originalNotes;
             ACTIVE_CHART_LANES.put(player.getUuid(), previousLaneCount);
             repositionNotes(chart);
             chart.trackLength = calculateTrackLength(chart);
@@ -917,21 +1034,22 @@ public final class RhythmcMaker implements ModInitializer {
             while (budget-- > 0 && task.cursor < task.total) {
                 ChartManifest.Note note = task.original.get(task.cursor);
                 int index = task.cursor++;
-                if (note == null) continue;
+                if (note == null || note.visualOnly) continue;
                 boolean fractional = hasFraction(note.z);
-                double targetZ = fractional ? Math.ceil(note.z - 0.5) : note.z;
-                TrackSnapKey key = new TrackSnapKey(note.x, note.y, targetZ, note.type);
+                double targetZ = cn.frkovo.rhythmcmaker.common.note.NoteSnapModel.getInstance().targetZ(task.chart, note);
+                TrackSnapKey key = new TrackSnapKey(note.x, note.y, targetZ, note.type, note.trackId,
+                        note.holdGroup < 0 ? "" : note.id);
                 if (task.retainedKeys.contains(key)) {
                     task.removed.add(new TrackSnapRemovedNote(index, copyNote(note)));
                     continue;
                 }
                 ChartManifest.Note retained = copyNote(note);
-                if (fractional) {
+                if (Math.abs(targetZ - note.z) > 1.0e-6) {
                     task.changed.add(new TrackSnapChangedNote(retained.id, retained.z, retained.beat, retained.time));
-                    retained.id = UUID.randomUUID().toString();
                     retained.z = targetZ;
                     retained.beat = PlaybackCoordinates.editorBeatAtBlockZ(task.chart, targetZ);
                     retained.time = ChartTiming.beatToSeconds(task.chart, retained.beat);
+                    retained.editorBeat = null;
                 }
                 task.retained.add(retained);
                 task.retainedKeys.add(key);
@@ -953,6 +1071,7 @@ public final class RhythmcMaker implements ModInitializer {
                 return;
             }
             task.chart.notes = task.retained;
+            HoldGroupModel.getInstance().reconcile(task.chart);
             updateChartTotalBeats(task.chart);
             saveChartSynchronously(server, task.chart);
             Set<String> snappedNoteIds = new java.util.HashSet<>();
@@ -997,7 +1116,7 @@ public final class RhythmcMaker implements ModInitializer {
     private static void finishTrackSnapUndoTask(MinecraftServer server, UUID playerId, TrackSnapUndoTask task) {
         if (!TRACK_SNAP_UNDO_TASKS.remove(playerId, task)) return;
         try {
-            clearNoteBlocks(task.world, captureNotePositions(task.chart));
+            clearCurrentNoteBlocks(task.world, task.chart);
             java.util.List<ChartManifest.Note> restored = new java.util.ArrayList<>();
             java.util.Set<String> snappedNoteIds = task.undo.snappedNoteIds;
             for (ChartManifest.Note note : task.undo.originalNotes) {
@@ -1029,9 +1148,22 @@ public final class RhythmcMaker implements ModInitializer {
         target.id = source.id; target.type = source.type; target.trackId = source.trackId; target.beat = source.beat; target.time = source.time;
         target.x = source.x; target.y = source.y; target.z = source.z; target.sourceX = source.sourceX; target.sourceY = source.sourceY; target.sourceZ = source.sourceZ;
         target.scaleX = source.scaleX; target.scaleY = source.scaleY; target.scaleZ = source.scaleZ; target.rotationX = source.rotationX; target.rotationY = source.rotationY; target.rotationZ = source.rotationZ; target.holdGroup = source.holdGroup;
+        target.holdRole = source.holdRole; target.visualOnly = source.visualOnly; target.editorBeat = source.editorBeat;
         return target;
     }
 
+private static void flushActiveChart(MinecraftServer server, ServerPlayerEntity player) {
+        String id = ACTIVE_CHARTS.get(player.getUuid());
+        if (id == null) return;
+        CachedChartState state = CHART_CACHE_BY_ID.get(id);
+        try {
+            if (state == null) state = cacheChart(server, ChartStorage.find(server, id));
+            if (state != null) saveChartSynchronously(server, state.chart);
+        } catch (IOException exception) {
+            LOGGER.error("Failed to flush active chart {}", id, exception);
+            player.sendMessage(Text.literal("谱面写回失败，已保留当前编辑状态"), false);
+        }
+    }
     private static boolean saveActiveChart(MinecraftServer server, ServerPlayerEntity player) {
         String id = ACTIVE_CHARTS.get(player.getUuid());
         if (id == null) return false;
@@ -1070,6 +1202,7 @@ public final class RhythmcMaker implements ModInitializer {
         if (state != null) queueChartSave(server, state);
     }
     public static String activeChart(ServerPlayerEntity player) { return ACTIVE_CHARTS.get(player.getUuid()); }
+    public static boolean canUndoTrackSnap(UUID playerId) { return playerId != null && TRACK_SNAP_UNDOS.containsKey(playerId); }
     public static void saveEffectEditor(MinecraftServer server, ServerPlayerEntity player,
                                        java.util.List<com.google.gson.JsonObject> effects,
                                        cn.frkovo.rhythmcmaker.common.effect.editor.EffectEditorLayout layout) throws IOException {
@@ -1114,6 +1247,282 @@ public final class RhythmcMaker implements ModInitializer {
         if (cached != null) return cached.chart;
         try { return cachedChart(server, id); } catch (IOException ignored) { return null; }
     }
+    private static int editChartNote(net.minecraft.server.command.ServerCommandSource source, String noteId,
+                                     double x, double y, double beat) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayerEntity player = source.getPlayerOrThrow();
+        if (!(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world)
+                || !isNoteEditTool(player.getMainHandStack())) return 0;
+        ChartManifest chart = loadActiveChart(player, source.getServer());
+        if (chart == null || chart.notes == null) return 0;
+        ChartManifest.Note note = chart.notes.stream().filter(candidate -> candidate != null && noteId.equals(candidate.id)).findFirst().orElse(null);
+        if (note == null) return 0;
+        List<ChartManifest.Note> previous = editedNoteSnapshot(chart, note);
+        if (!cn.frkovo.rhythmcmaker.common.note.NoteEditingModel.getInstance().setPosition(chart, note, x, y, beat)) return 0;
+        return finishNoteEdit(player, world, chart, note, previous);
+    }
+
+    private static int editChartNoteCoordinate(net.minecraft.server.command.ServerCommandSource source, String noteId,
+                                               cn.frkovo.rhythmcmaker.common.note.NoteCoordinateField field, double value)
+            throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ChartManifest chart = loadActiveChart(source.getPlayerOrThrow(), source.getServer());
+        if (chart == null || chart.notes == null) return 0;
+        ChartManifest.Note note = chart.notes.stream().filter(candidate -> candidate != null && noteId.equals(candidate.id)).findFirst().orElse(null);
+        if (note == null) return 0;
+        double x = field == cn.frkovo.rhythmcmaker.common.note.NoteCoordinateField.X ? value : note.x;
+        double y = field == cn.frkovo.rhythmcmaker.common.note.NoteCoordinateField.Y ? value : NoteEditRules.editorRelativeY(note.y, note.type);
+        return editChartNote(source, noteId, x, y, note.beat);
+    }
+
+    private static List<ChartManifest.Note> editedNoteSnapshot(ChartManifest chart, ChartManifest.Note note) {
+        return (note.holdGroup < 0 ? List.of(note) : HoldGroupRules.members(chart, note.trackId, note.holdGroup))
+                .stream().map(RhythmcMaker::copyNote).toList();
+    }
+
+    private static int finishNoteEdit(ServerPlayerEntity player, ServerWorld world, ChartManifest chart,
+                                      ChartManifest.Note note, List<ChartManifest.Note> previous) {
+        List<ChartManifest.Note> current = note.holdGroup < 0 ? List.of(note)
+                : HoldGroupRules.members(chart, note.trackId, note.holdGroup);
+        for (ChartManifest.Note old : previous) {
+            if (current.stream().noneMatch(candidate -> candidate.id.equals(old.id))) removeStoredNote(world, chart, old);
+        }
+        for (ChartManifest.Note updated : current) {
+            ChartManifest.Note old = previous.stream().filter(candidate -> candidate.id.equals(updated.id)).findFirst().orElse(updated);
+            updateNoteWorldRepresentation(world, chart, updated, old);
+        }
+        invalidateTrackSnapUndo(player.getUuid());
+        updateChartTotalBeats(chart);
+        CachedChartState state = cacheChart(world.getServer(), chart);
+        synchronized (state) { state.revision++; state.dirty = true; }
+        queueChartSave(world.getServer(), state);
+        player.sendMessage(Text.literal("音符已更新"), true);
+        return 1;
+    }
+
+    private static int changeChartNoteType(net.minecraft.server.command.ServerCommandSource source, String noteId, int type)
+            throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayerEntity player = source.getPlayerOrThrow();
+        if (!(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world)
+                || !isNoteEditTool(player.getMainHandStack())) return 0;
+        ChartManifest chart = loadActiveChart(player, source.getServer());
+        if (chart == null || chart.notes == null || (type < 0 || type > 3)) return 0;
+        ChartManifest.Note note = chart.notes.stream().filter(candidate -> candidate != null && noteId.equals(candidate.id)).findFirst().orElse(null);
+        if (note == null || note.type == type || note.holdGroup >= 0) return 0;
+        int oldType = note.type;
+        double oldX = note.x;
+        double oldY = note.y;
+        double oldZ = note.z;
+        if (!cn.frkovo.rhythmcmaker.common.note.NoteEditingModel.getInstance().setType(chart, note, type)) return 0;
+        updateNoteWorldRepresentation(world, chart, note, oldX, oldY, oldZ, oldType);
+        invalidateTrackSnapUndo(player.getUuid());
+        CachedChartState state = cacheChart(source.getServer(), chart);
+        synchronized (state) { state.revision++; state.dirty = true; }
+        queueChartSave(source.getServer(), state);
+        player.sendMessage(Text.literal("音符类型已改为 " + noteTypeName(type)), true);
+        return 1;
+    }
+
+    private static int editChartNoteTiming(net.minecraft.server.command.ServerCommandSource source, String noteId, double beat)
+            throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        if (!Double.isFinite(beat) || beat < 0.0 || beat > EditorBeat.MAX_WHOLE) return 0;
+        ServerPlayerEntity player = source.getPlayerOrThrow();
+        ChartManifest chart = loadActiveChart(player, source.getServer());
+        if (chart == null || chart.notes == null) return 0;
+        ChartManifest.Note note = chart.notes.stream().filter(candidate -> candidate != null && noteId.equals(candidate.id)).findFirst().orElse(null);
+        return note == null ? 0 : editChartNote(source, noteId, note.x, NoteEditRules.editorRelativeY(note.y, note.type), beat);
+    }
+
+    private static int editChartNoteFraction(net.minecraft.server.command.ServerCommandSource source, String noteId,
+                                               int whole, int numerator, int denominator)
+            throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayerEntity player = source.getPlayerOrThrow();
+        if (!(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world)
+                || !isNoteEditTool(player.getMainHandStack())) return 0;
+        ChartManifest chart = loadActiveChart(player, source.getServer());
+        if (chart == null || chart.notes == null) return 0;
+        ChartManifest.Note note = chart.notes.stream().filter(candidate -> candidate != null && noteId.equals(candidate.id)).findFirst().orElse(null);
+        if (note == null) return 0;
+        List<ChartManifest.Note> previous = editedNoteSnapshot(chart, note);
+        if (!cn.frkovo.rhythmcmaker.common.note.NoteEditingModel.getInstance().setBeat(chart, note, new EditorBeat(whole, numerator, denominator))) return 0;
+        return finishNoteEdit(player, world, chart, note, previous);
+    }
+
+    private static int editChartNoteTransform(net.minecraft.server.command.ServerCommandSource source, String noteId,
+                                                NoteTransformField field, double value)
+            throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayerEntity player = source.getPlayerOrThrow();
+        if (!(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world)
+                || !isNoteEditTool(player.getMainHandStack())) return 0;
+        ChartManifest chart = loadActiveChart(player, source.getServer());
+        if (chart == null || chart.notes == null) return 0;
+        ChartManifest.Note note = chart.notes.stream().filter(candidate -> candidate != null && noteId.equals(candidate.id)).findFirst().orElse(null);
+        if (note == null) return 0;
+        List<ChartManifest.Note> previous = editedNoteSnapshot(chart, note);
+        if (!cn.frkovo.rhythmcmaker.common.note.NoteEditingModel.getInstance().setTransform(chart, note, field, value)) return 0;
+        return finishNoteEdit(player, world, chart, note, previous);
+    }
+
+    private static int deleteChartNote(net.minecraft.server.command.ServerCommandSource source, String noteId)
+            throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayerEntity player = source.getPlayerOrThrow();
+        if (!(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world)
+                || !isNoteEditTool(player.getMainHandStack())) return 0;
+        ChartManifest chart = loadActiveChart(player, source.getServer());
+        if (chart == null || chart.notes == null) return 0;
+        ChartManifest.Note selected = chart.notes.stream().filter(note -> note != null && noteId.equals(note.id)).findFirst().orElse(null);
+        if (selected == null) return 0;
+        int removedGroup = selected.holdGroup;
+        List<ChartManifest.Note> removed = selected.holdGroup < 0
+                ? List.of(selected) : HoldGroupRules.members(chart, selected.trackId, selected.holdGroup);
+        if (removedGroup >= 0) clearEditorHoldDisplays(world, chart.id, selected.trackId, removedGroup);
+        for (ChartManifest.Note note : removed) removeStoredNote(world, chart, note);
+        chart.notes.removeAll(removed);
+        CachedChartState state = cacheChart(source.getServer(), chart);
+        synchronized (state) { state.revision++; state.dirty = true; }
+        queueChartSave(source.getServer(), state);
+        updateChartTotalBeats(chart);
+        return removed.size();
+    }
+
+    private static int toggleHoldGroupItem(net.minecraft.server.command.ServerCommandSource source)
+            throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayerEntity player = source.getPlayerOrThrow();
+        if (!(player.getEntityWorld() instanceof ServerWorld world) || !isEditorWorld(world)) return 0;
+        if (PENDING_HOLD_GROUPS.containsKey(player.getUuid())) {
+            cancelPendingHoldGroup(player.getUuid());
+            return 1;
+        }
+        int slot = player.getInventory().getSelectedSlot();
+        ItemStack held = player.getInventory().getStack(slot);
+        if (held.isOf(HOLD_NOTE_ITEM)) player.getInventory().setStack(slot, new ItemStack(HOLD_GROUP_NOTE_ITEM));
+        else if (held.isOf(HOLD_GROUP_NOTE_ITEM)) player.getInventory().setStack(slot, new ItemStack(HOLD_NOTE_ITEM));
+        else return 0;
+        player.currentScreenHandler.sendContentUpdates();
+        return 1;
+    }
+
+    private static ActionResult placeHoldGroupEndpoint(ServerPlayerEntity player, ServerWorld world,
+                                                       net.minecraft.util.Hand hand, ChartManifest chart, BlockPos target) {
+        if (chart == null || !isValidNotePosition(target, chart, world) || target.getY() != 65
+                || containsNote(chart, world, target)) return ActionResult.FAIL;
+        if (player.getInventory().getStack(player.getInventory().getSelectedSlot()).isOf(HOLD_GROUP_NOTE_ITEM) == false) {
+            return ActionResult.FAIL;
+        }
+        double beat = PlaybackCoordinates.editorBeatAtBlockZ(chart, target.getZ());
+        int trackId = activeNoteTrack(chart);
+        PendingHoldGroup pending = PENDING_HOLD_GROUPS.get(player.getUuid());
+        if (pending != null) {
+            if (!pending.chart().id.equals(chart.id) || pending.world() != world
+                    || pending.selectedSlot() != player.getInventory().getSelectedSlot()) {
+                cancelPendingHoldGroup(player.getUuid());
+                return ActionResult.FAIL;
+            }
+            if (!HoldGroupRules.canAppend(pending.head(), trackId, beat)) {
+                player.sendMessage(Text.literal("\u5c3e\u97f3\u7b26\u5fc5\u987b\u4f4d\u4e8e\u540c\u8f68\u9053\u4e14 Beat \u665a\u4e8e\u5934\u97f3\u7b26"), true);
+                return ActionResult.FAIL;
+            }
+        }
+        ChartManifest.Note note = new ChartManifest.Note();
+        note.id = UUID.randomUUID().toString();
+        note.type = 2;
+        note.trackId = trackId;
+        note.x = target.getX();
+        note.y = target.getY();
+        note.z = target.getZ();
+        note.beat = beat;
+        note.time = ChartTiming.beatToSeconds(chart, beat);
+        BlockState previousState = world.getBlockState(target);
+        world.setBlockState(target, Blocks.DIAMOND_BLOCK.getDefaultState());
+        playNotePlacementFeedback(player, world, hand, target, 4);
+        chart.notes.add(note);
+        if (pending == null) {
+            PENDING_HOLD_GROUPS.put(player.getUuid(), new PendingHoldGroup(chart, world, note,
+                    player.getInventory().getSelectedSlot(), previousState));
+            player.sendMessage(Text.literal("\u8bf7\u653e\u7f6e\u5c3e\u97f3\u7b26"), true);
+        } else {
+            int groupId = HoldGroupRules.nextGroupId(chart);
+            pending.head().holdGroup = groupId;
+            pending.head().holdRole = HoldRole.HEAD;
+            note.holdGroup = groupId;
+            note.holdRole = HoldRole.TAIL;
+            updateNoteWorldRepresentation(world, chart, pending.head(), pending.head().x, pending.head().y, pending.head().z, pending.head().type);
+            updateNoteWorldRepresentation(world, chart, note, note.x, note.y, note.z, note.type);
+            PENDING_HOLD_GROUPS.remove(player.getUuid(), pending);
+            player.getInventory().setStack(pending.selectedSlot(), new ItemStack(HOLD_NOTE_ITEM));
+            player.currentScreenHandler.sendContentUpdates();
+            player.sendMessage(Text.literal("Hold \u97f3\u7b26\u7ec4\u5df2\u521b\u5efa"), true);
+            rebuildEditorHoldDisplays(world, chart, trackId, groupId);
+        }
+        invalidateTrackSnapUndo(player.getUuid());
+        updateNoteWorldRepresentation(world, chart, note, note.x, note.y, note.z, note.type);
+        CachedChartState state = cacheChart(world.getServer(), chart);
+        synchronized (state) { state.revision++; state.dirty = true; }
+        queueChartSave(world.getServer(), state);
+        return ActionResult.SUCCESS;
+    }
+
+    private static int activeNoteTrack(ChartManifest chart) {
+        return chart.tracks == null || chart.tracks.isEmpty() ? 0 : chart.tracks.getFirst().id;
+    }
+
+    private static void playNotePlacementFeedback(ServerPlayerEntity player, ServerWorld world,
+                                                  net.minecraft.util.Hand hand, BlockPos position, int noteType) {
+        net.minecraft.sound.SoundEvent sound = switch (noteType) {
+            case 0 -> Blocks.TNT.getDefaultState().getSoundGroup().getPlaceSound();
+            case 1 -> Blocks.OBSERVER.getDefaultState().getSoundGroup().getPlaceSound();
+            case 2 -> Blocks.DIAMOND_BLOCK.getDefaultState().getSoundGroup().getPlaceSound();
+            case 3 -> Blocks.REDSTONE_BLOCK.getDefaultState().getSoundGroup().getPlaceSound();
+            default -> net.minecraft.sound.SoundEvents.BLOCK_NOTE_BLOCK_PLING.value();
+        };
+        player.swingHand(hand);
+        world.playSound(null, position, sound, net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 1.0f);
+    }
+
+    private static void updatePendingHoldGroups(MinecraftServer server) {
+        for (Map.Entry<UUID, PendingHoldGroup> entry : List.copyOf(PENDING_HOLD_GROUPS.entrySet())) {
+            ServerPlayerEntity player = server.getPlayerManager().getPlayer(entry.getKey());
+            PendingHoldGroup pending = entry.getValue();
+            if (player == null || player.getEntityWorld() != pending.world()
+                    || !pending.chart().id.equals(ACTIVE_CHARTS.get(entry.getKey()))
+                    || player.getInventory().getSelectedSlot() != pending.selectedSlot()
+                    || !player.getInventory().getStack(pending.selectedSlot()).isOf(HOLD_GROUP_NOTE_ITEM)) {
+                cancelPendingHoldGroup(entry.getKey());
+            }
+        }
+    }
+
+    private static void cancelPendingHoldGroup(UUID playerId) {
+        PendingHoldGroup pending = PENDING_HOLD_GROUPS.remove(playerId);
+        if (pending == null) return;
+        removeStoredNote(pending.world(), pending.chart(), pending.head());
+        pending.chart().notes.remove(pending.head());
+        BlockPos headPosition = BlockPos.ofFloored(pending.head().x, pending.head().y, pending.head().z);
+        if (pending.world().getBlockState(headPosition).isOf(Blocks.AIR)
+                || noteTypeForBlockState(pending.world().getBlockState(headPosition)) == pending.head().type) {
+            pending.world().setBlockState(headPosition, pending.previousState(), 3);
+        }
+        ServerPlayerEntity player = pending.world().getServer().getPlayerManager().getPlayer(playerId);
+        if (player != null && player.getInventory().getStack(pending.selectedSlot()).isOf(HOLD_GROUP_NOTE_ITEM)) {
+            player.getInventory().setStack(pending.selectedSlot(), new ItemStack(HOLD_NOTE_ITEM));
+            player.currentScreenHandler.sendContentUpdates();
+        }
+        CachedChartState state = cacheChart(pending.world().getServer(), pending.chart());
+        synchronized (state) { state.revision++; state.dirty = true; }
+        queueChartSave(pending.world().getServer(), state);
+    }
+
+    private static void removeStoredNote(ServerWorld world, ChartManifest chart, ChartManifest.Note note) {
+        removeNoteDisplay(world, noteTag(chart.id, note.id));
+        if (NoteEditRules.requiresDisplayEntity(note.x, note.y, note.z)) return;
+        BlockPos position = BlockPos.ofFloored(note.x, note.y, note.z);
+        boolean shared = chart.notes.stream().anyMatch(candidate -> candidate != null && candidate != note && isBlockNoteAt(candidate, position));
+        if (!shared && noteTypeForBlockState(world.getBlockState(position)) == note.type) {
+            world.setBlockState(position, Blocks.AIR.getDefaultState(), 3);
+        }
+    }
+
+    private record PendingHoldGroup(ChartManifest chart, ServerWorld world, ChartManifest.Note head, int selectedSlot,
+                                    BlockState previousState) {}
+
     private static int trackLength(MinecraftServer server, String id) {
         ChartManifest chart = CHART_CACHE_BY_ID.containsKey(id) ? CHART_CACHE_BY_ID.get(id).chart : null;
         if (chart == null) try { chart = cachedChart(server, id); } catch (IOException ignored) { }
@@ -1143,6 +1552,12 @@ public final class RhythmcMaker implements ModInitializer {
         return chart != null && ((chart.tracks != null && !chart.tracks.isEmpty())
                 || (chart.notes != null && !chart.notes.isEmpty())
                 || (chart.effects != null && !chart.effects.isEmpty()));
+    }
+
+    public static ChartManifest activeChartSnapshot(MinecraftServer server, String chartId) {
+        CachedChartState state = CHART_CACHE_BY_ID.get(chartId);
+        if (state == null) return null;
+        synchronized (state) { return copyChart(state.chart); }
     }
 
     private static ChartManifest cachedChart(MinecraftServer server, String chartId) throws IOException {
@@ -1176,7 +1591,6 @@ public final class RhythmcMaker implements ModInitializer {
                     if (savedCurrentRevision) state.dirty = false;
                     state.saving = false;
                 }
-                if (savedCurrentRevision) server.execute(() -> notifyAutoSaveSuccess(server, state.chart.id));
             } catch (IOException exception) {
                 synchronized (state) { state.saving = false; }
                 server.execute(() -> LOGGER.warn("Failed to persist chart {}", state.chart.id, exception));
@@ -1186,7 +1600,7 @@ public final class RhythmcMaker implements ModInitializer {
     }
 
     private static ChartManifest copyChart(ChartManifest chart) {
-        return CHART_SNAPSHOT_GSON.fromJson(CHART_SNAPSHOT_GSON.toJson(chart), ChartManifest.class);
+        return cn.frkovo.rhythmcmaker.common.note.NoteEditorDraft.snapshot(chart);
     }
 
     private static void flushChartPersistence(MinecraftServer server) {
@@ -1239,12 +1653,19 @@ public final class RhythmcMaker implements ModInitializer {
                 String noteId = display.getCommandTags().stream().filter(tag -> tag.startsWith(prefix)).findFirst()
                         .map(tag -> tag.substring(prefix.length())).orElse("");
                 ChartManifest.Note note = notesById.get(noteId);
-                if (note == null) continue;
-                double x = display.getX();
-                double y = display.getY();
-                double z = display.getZ();
+                if (note == null || note.visualOnly || !NoteEditRules.usesDisplayEntity(note)) continue;
+                double x = NoteEditRules.editorNoteCoordinate(display.getX());
+                double y = NoteEditRules.editorNoteCoordinate(display.getY());
+                double z = NoteEditRules.editorNoteCoordinate(display.getZ());
                 int type = noteTypeForBlockState(display.getBlockState());
-                if (note.x != x || note.y != y || note.z != z || note.type != type) {
+                if (type < 0 || !Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(z)) continue;
+                if (Math.abs(note.x - x) > 1.0e-7 || Math.abs(note.y - y) > 1.0e-7
+                        || Math.abs(note.z - z) > 1.0e-7 || note.type != type) {
+                    if (Math.abs(note.z - z) > 1.0e-7) {
+                        note.beat = PlaybackCoordinates.editorBeatAtBlockZ(chart, z);
+                        note.time = ChartTiming.beatToSeconds(chart, note.beat);
+                        note.editorBeat = null;
+                    }
                     note.x = x;
                     note.y = y;
                     note.z = z;
@@ -1253,7 +1674,7 @@ public final class RhythmcMaker implements ModInitializer {
                 }
             }
             for (ChartManifest.Note note : chart.notes) {
-                if (note == null || hasFraction(note.x) || hasFraction(note.y) || hasFraction(note.z)) continue;
+                if (note == null || NoteEditRules.usesDisplayEntity(note)) continue;
                 int type = noteTypeForBlockState(world.getBlockState(BlockPos.ofFloored(note.x, note.y, note.z)));
                 if (type >= 0 && note.type != type) {
                     note.type = type;
@@ -1261,9 +1682,12 @@ public final class RhythmcMaker implements ModInitializer {
                 }
             }
         }
-        if (changed) synchronized (state) {
-            state.revision++;
-            state.dirty = true;
+        if (changed) {
+            for (var entry : ACTIVE_CHARTS.entrySet()) if (chart.id.equals(entry.getValue())) invalidateTrackSnapUndo(entry.getKey());
+            synchronized (state) {
+                state.revision++;
+                state.dirty = true;
+            }
         }
     }
 
@@ -1274,12 +1698,6 @@ public final class RhythmcMaker implements ModInitializer {
         if (state.isOf(Blocks.REDSTONE_BLOCK)) return 3;
         if (state.isOf(Blocks.TNT)) return 0;
         return -1;
-    }
-    private static void notifyAutoSaveSuccess(MinecraftServer server, String chartId) {
-        Text message = Text.literal("保存成功！").styled(style -> style.withColor(0xB7E66A));
-        for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
-            if (chartId.equals(ACTIVE_CHARTS.get(player.getUuid()))) player.sendMessage(message, true);
-        }
     }
 
     private static final class CachedChartState {
@@ -1431,7 +1849,7 @@ public final class RhythmcMaker implements ModInitializer {
             player.sendMessage(Text.literal("当前不在制谱器谱面世界"), true);
             return 0;
         }
-        player.teleport(world, EDITOR_SPAWN.getX(), EDITOR_SPAWN.getY(), EDITOR_SPAWN.getZ(), Set.of(), 0.0f, 0.0f, false);
+        player.teleport(world, 0.5, 66.0, 0.5, Set.of(), 0.0f, 0.0f, false);
         player.sendMessage(Text.literal("已传送到制谱器平台"), true);
         return 1;
     }
@@ -2401,7 +2819,9 @@ public final class RhythmcMaker implements ModInitializer {
         }
         chart.totalBeats = chart.notes.stream().filter(java.util.Objects::nonNull)
                 .mapToDouble(note -> note.beat).max().orElse(0.0);
+        invalidateTrackSnapUndo(playerId);
         try { saveChart(server, chart); } catch (IOException exception) { LOGGER.warn("Failed to sync WorldEdit note", exception); }
+        refreshNoteDisplays(world, chart);
     }
 
     private static boolean isWorldEditTrackBlock(String blockId) {
@@ -2766,7 +3186,9 @@ private static void showSceneBoundary(MinecraftServer server) {
                 }
             }
             if (session.formal) {
+                session.advanceHoldPlayback(PlaybackCoordinates.beatAtSongTime(session.chart, session.timing, songTime), player);
                 session.playHiddenNoteJudgements(player, songTime);
+                session.updateHoldDisplays(player, songTime, updateDisplayPositions);
                 int preloadedThisTick = 0;
                 for (var iterator = session.displays.entrySet().iterator(); iterator.hasNext();) {
                     var entry = iterator.next();
@@ -2777,7 +3199,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                     display.setGlowing(true);
                     double noteTime = session.noteTimes.getOrDefault(note.id, Double.POSITIVE_INFINITY);
                     double relativeDistance = session.relativeDistance(note, songTime);
-                    if (noteTime <= songTime && session.hitNotes.add(note.id)) playHitSound(session, player, note);
+                    if (noteTime <= songTime && session.hitNotes.add(note.id) && !session.isGroupedHoldNote(note)) playHitSound(session, player, note);
                     if (relativeDistance <= 0.0) {
                         session.recycle(note, display); iterator.remove(); continue;
                     }
@@ -2805,7 +3227,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                     }
                     if (relativeDistance > PLAYBACK_APPROACH_DISTANCE) break;
                     session.nextNoteIndex++;
-                    if (session.shouldHide(note)) continue;
+                    if (session.shouldHide(note) || session.isGroupedHoldNote(note)) continue;
                     double displayZ = PLAYBACK_FRAME_Z - Math.max(0.0, relativeDistance);
                     double[] position = session.displayPosition(note, songTime, displayZ);
                     DisplayEntity.BlockDisplayEntity display = session.acquire(note, blockStateForType(note.type), position[0], position[1], position[2]);
@@ -2878,6 +3300,8 @@ private static void showSceneBoundary(MinecraftServer server) {
                     session.playing = false;
                     if (session.effectSession != null) {
                         session.effectSession.resetClientTime(player);
+                        session.effectSession.resetWorldTime(player);
+                        session.effectSession.resetWorldWeather();
                         session.effectSession.clearTextDisplays();
                         session.effectSession.clearGlowTeam();
                         session.effectSession = null;
@@ -2940,6 +3364,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         double z = effectDouble(effect, "z", PLAYBACK_PLATFORM_Z + 0.5);
         switch (type) {
             case "GLOW_COLOR" -> session.applyGlowColor(effect);
+            case "JUDGE_FRAME_COLOR" -> session.applyJudgeFrameColor(effect);
             case "HIDE_NOTES" -> {
                 session.updateHiddenNotes(effect);
                 session.applyVisualState();
@@ -2948,7 +3373,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             case "MESSAGE" -> sendMessageEffect(player, effect, text);
             case "TEXT_DISPLAY", "TEXT_DISPLAY_EFFECT", "TEXT_DISPLAY_SYNC_TRACK", "TEXT_DISPLAY_DESYNC_TRACK", "TEXT_DISPLAY_REMOVE", "HOLOGRAM", "REMOVE_HOLOGRAM" -> session.applyTextEffect(effect);
             case "TIME" -> session.applyTime(player, effect);
-            case "WEATHER" -> session.applyWeather(player, effect);
+            case "WEATHER" -> session.applyWeather(effect);
             case "EFFECT" -> session.applyPotionProxy(player, effect);
             case "CLEAR_EFFECT" -> session.clearPotionEffect(player, effect);
             case "ARENA", "CHANGE_ARENA" -> session.applyArena(effect);
@@ -2985,8 +3410,13 @@ private static void showSceneBoundary(MinecraftServer server) {
     private static String effectString(JsonObject effect, String key, String fallback) {
         return EffectPayload.string(effect, key, fallback);
     }
-    private static double effectDouble(JsonObject effect, String key, double fallback) {
-        return EffectPayload.doubleValue(effect, key, fallback);
+        private static double effectDouble(JsonObject effect, String key, double fallback) {
+            return EffectPayload.doubleValue(effect, key, fallback);
+        }
+    private static long effectLong(JsonObject effect, String key, long fallback) {
+        JsonElement value = effectValue(effect, key);
+        if (value == null || value.isJsonNull()) return fallback;
+        try { return value.getAsLong(); } catch (RuntimeException ignored) { return fallback; }
     }
     private static Formatting effectFormatting(JsonObject effect, String key, Formatting fallback) {
         Formatting formatting = Formatting.byName(effectString(effect, key, "white").toLowerCase(java.util.Locale.ROOT));
@@ -3174,14 +3604,21 @@ private static void showSceneBoundary(MinecraftServer server) {
         long scaled = (long) Math.ceil(Math.max(1L, durationTicks) / playbackRate);
         return (int) Math.min(Integer.MAX_VALUE, Math.max(1L, scaled));
     }
-    private static void sendPlayerWeather(ServerPlayerEntity player, boolean raining, boolean thunder) {
-        player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket(
-                raining ? net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket.RAIN_STARTED
-                        : net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket.RAIN_STOPPED, 0.0F));
-        player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket(
-                net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket.RAIN_GRADIENT_CHANGED, raining ? 1.0F : 0.0F));
-        player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket(
-                net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket.THUNDER_GRADIENT_CHANGED, thunder ? 1.0F : 0.0F));
+    private static void broadcastWorldTime(ServerWorld world, long timeOfDay, boolean advanceTime) {
+        var packet = new net.minecraft.network.packet.s2c.play.WorldTimeUpdateS2CPacket(world.getTime(), timeOfDay, advanceTime);
+        for (ServerPlayerEntity player : world.getPlayers()) player.networkHandler.sendPacket(packet);
+    }
+    private static void setWorldWeather(ServerWorld world, int clearDuration, int weatherDuration, boolean raining, boolean thunder) {
+        world.setWeather(clearDuration, weatherDuration, raining, thunder);
+        for (ServerPlayerEntity player : world.getPlayers()) {
+            player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket(
+                    raining ? net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket.RAIN_STARTED
+                            : net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket.RAIN_STOPPED, 0.0F));
+            player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket(
+                    net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket.RAIN_GRADIENT_CHANGED, raining ? 1.0F : 0.0F));
+            player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket(
+                    net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket.THUNDER_GRADIENT_CHANGED, thunder ? 1.0F : 0.0F));
+        }
     }
     private static void stopPlayback(MinecraftServer server, ServerPlayerEntity player, boolean returnPlayer) {
         releasePlaybackChunkTickets(server, player.getUuid());
@@ -3189,9 +3626,10 @@ private static void showSceneBoundary(MinecraftServer server) {
         ScrollJudgementSession scrollSession = SCROLL_JUDGEMENT_SESSIONS.remove(player.getUuid());
         if (scrollSession != null) {
             cleanupPlaybackDisplayEntities(scrollSession.world, player.getUuid(), scrollSession.chart.id);
-            sendPlayerWeather(player, false, false);
             if (scrollSession.effectSession != null) {
                 scrollSession.effectSession.resetClientTime(player);
+                scrollSession.effectSession.resetWorldTime(player);
+                scrollSession.effectSession.resetWorldWeather();
                 scrollSession.effectSession.clearTextDisplays();
                 scrollSession.effectSession.clearGlowTeam();
             }
@@ -3199,13 +3637,16 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
         PlaybackSession session = PLAYBACK_SESSIONS.remove(player.getUuid());
         if (session == null) return;
+        session.cancelHoldPlayback();
         cancelPlaybackSceneImports(session);
         cleanupPlaybackDisplayEntities(session.world, player.getUuid(), session.chart.id);
         try {
-            sendPlayerWeather(player, false, false);
             session.resetClientTime(player);
+            session.resetWorldTime(player);
+            session.resetWorldWeather();
             session.clearGlowTeam();
             for (DisplayEntity.BlockDisplayEntity display : session.displays.values()) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+            session.clearHoldDisplays();
             session.clearDisplayPools();
             session.clearTextDisplays();
             session.displays.clear();
@@ -3315,8 +3756,8 @@ private static void showSceneBoundary(MinecraftServer server) {
             this.timing = ChartTiming.prepare(chart);
             this.startSeconds = 0.0;
             this.startNanos = Long.MAX_VALUE;
-            this.rate = 1.0;
-            this.notes = new java.util.ArrayList<>(chart.notes == null ? java.util.List.of() : chart.notes);
+this.rate = 1.0;
+            this.notes = new java.util.ArrayList<>(HoldGroupModel.getInstance().runtimeNotes(chart));
             this.notes.removeIf(note -> note == null || note.id == null);
             this.notes.sort(java.util.Comparator.comparingDouble(note -> effectiveNoteTime(note, chart)));
             this.noteTimes = new java.util.ArrayList<>(notes.size());
@@ -3357,6 +3798,8 @@ private static void showSceneBoundary(MinecraftServer server) {
         private void clearEffectSession(ServerPlayerEntity player) {
             if (effectSession == null) return;
             effectSession.resetClientTime(player);
+            effectSession.resetWorldTime(player);
+            effectSession.resetWorldWeather();
             effectSession.clearTextDisplays();
             effectSession.clearGlowTeam();
             for (DisplayEntity.BlockDisplayEntity display : effectSession.displays.values()) {
@@ -3423,17 +3866,31 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final boolean formal;
         private final double rate;
         private final java.util.List<ChartManifest.Note> notes;
+        private final java.util.List<HoldInterval> holdIntervals;
+        private final Set<String> groupedHoldNoteIds = new java.util.HashSet<>();
+        private final HoldPlaybackStateMachine holdPlayback = new HoldPlaybackStateMachine();
+        private final Map<String, HoldInterval> holdIntervalsById = new java.util.HashMap<>();
+        private final Set<String> activeHoldIntervalIds = new java.util.HashSet<>();
+        private int nextHoldVisualIndex;
         private final java.util.List<JsonObject> effects;
         private final java.util.List<Double> effectTimes;
         private final java.util.List<String> effectTypes;
         private final Set<Integer> hiddenNoteTypes = new java.util.HashSet<>();
         private final Set<Integer> hiddenNoteTracks = new java.util.HashSet<>();
-        private boolean hideAllNotes;
         private final Map<HiddenNoteKey, java.util.ArrayDeque<DisplayEntity.BlockDisplayEntity>> displayPools = new java.util.HashMap<>();
         private final Map<Integer, Team> glowTeams = new java.util.HashMap<>();
         private Formatting observerGlowColor = Formatting.WHITE;
-        private Long clientTime;
-        private long clientTimeExpiresAtNanos;
+        private String judgeFrameColor = "border";
+        private Long worldTime;
+        private int lastShownTime = Integer.MIN_VALUE;
+        private final long originalWorldTimeOfDay;
+        private int originalClearWeatherTime;
+        private int originalRainTime;
+        private int originalThunderTime;
+        private boolean originalRaining;
+        private boolean originalThundering;
+        private long originalWeatherCapturedAtTick;
+        private boolean weatherChanged;
         private final Map<String, ChartManifest.Note> notesById = new java.util.HashMap<>();
         private final Map<String, Double> noteTimes = new java.util.HashMap<>();
 
@@ -3443,6 +3900,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final long originalStatusEffectsCapturedAtTick;
         private int nextNoteIndex;
         private final Map<String, DisplayEntity.BlockDisplayEntity> displays = new java.util.HashMap<>();
+        private final Map<String, java.util.List<DisplayEntity.BlockDisplayEntity>> holdDisplays = new java.util.HashMap<>();
         private final Map<String, DisplayEntity.TextDisplayEntity> textDisplays = new java.util.HashMap<>();
         private final java.util.ArrayDeque<DisplayEntity.TextDisplayEntity> textDisplayPool;
         private final Map<String, double[]> textDisplayAnchors = new java.util.HashMap<>();
@@ -3454,6 +3912,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final Map<String, Double> textDisplaySyncUntilSeconds = new java.util.HashMap<>();
         private final Set<String> activeChartPotionEffects = new java.util.HashSet<>();
         private final java.util.Set<String> hitNotes = new java.util.HashSet<>();
+        private double currentPlaybackBeat;
         private int nextEffectIndex;
         private int nextHiddenNoteIndex;
         private long lastDisplayUpdateTick = Long.MIN_VALUE;
@@ -3475,10 +3934,17 @@ private static void showSceneBoundary(MinecraftServer server) {
             double corrected = Math.max(0.0, songSeconds);
             startSeconds = corrected;
             startNanos = now;
+            currentPlaybackBeat = PlaybackCoordinates.beatAtSongTime(chart, timing, corrected);
+            holdPlayback.seek(currentPlaybackBeat);
+            reconcileActiveHolds(currentPlaybackBeat);
+            nextHoldVisualIndex = 0;
+            while (nextHoldVisualIndex < holdIntervals.size()
+                    && holdIntervals.get(nextHoldVisualIndex).endBeat() <= currentPlaybackBeat) nextHoldVisualIndex++;
             long rebuildStarted = System.nanoTime();
             cancelPlaybackSceneImports(this);
             for (DisplayEntity.BlockDisplayEntity display : displays.values()) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
             displays.clear();
+            clearHoldDisplays();
             clearDisplayPools();
             String ownerDisplayTag = "rhythmc_preview:" + ownerId;
             for (DisplayEntity.BlockDisplayEntity display : world.getEntitiesByType(EntityType.BLOCK_DISPLAY,
@@ -3499,10 +3965,13 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
         private void rebuildPersistentEffectState(ServerPlayerEntity player, double targetSeconds) {
             resetClientTime(player);
+            resetWorldTime(player);
+            resetWorldWeather();
             clearTextDisplays();
             clearGlowTeam();
             clearHiddenNoteFilter();
             observerGlowColor = Formatting.WHITE;
+            judgeFrameColor = "border";
             resetChartPotionEffects(player);
             for (int index = 0; index < effects.size(); index++) {
                 JsonObject effect = effects.get(index);
@@ -3520,6 +3989,8 @@ private static void showSceneBoundary(MinecraftServer server) {
                 if (PersistentEffectStateFold.isArenaType(effectTypes.get(index))) restoresArena = true;
                 playTrackEffectSafely(this, player, effects.get(index));
             }
+            restoreWorldWeatherAtBeat(PlaybackCoordinates.beatAtSongTime(chart, timing, targetSeconds));
+            updateTimeEffect(player, PlaybackCoordinates.beatAtSongTime(chart, timing, targetSeconds));
             if (sceneChanged && !restoresArena) restoreInitialPlaybackScene(world.getServer(), this);
             initializeTextDisplays(targetSeconds);
             applyVisualState();
@@ -3534,6 +4005,8 @@ private static void showSceneBoundary(MinecraftServer server) {
             this.returnYaw = returnYaw;
             this.returnPitch = returnPitch;
             this.chart = chart;
+            this.originalWorldTimeOfDay = world.getTimeOfDay();
+            captureOriginalWorldWeather();
             this.timing = ChartTiming.prepare(chart);
             this.demandProfile = PlaybackDemandProfile.from(chart);
             this.textDisplayPool = new java.util.ArrayDeque<>(demandProfile.recommendedTextPoolCapacity());
@@ -3550,7 +4023,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 net.minecraft.util.Identifier id = net.minecraft.registry.Registries.STATUS_EFFECT.getId(effect.getEffectType().value());
                 if (id != null) originalStatusEffectsById.put(id, new net.minecraft.entity.effect.StatusEffectInstance(effect));
             }
-            this.notes = new java.util.ArrayList<>(chart.notes == null ? java.util.List.of() : chart.notes);
+            this.notes = new java.util.ArrayList<>(HoldGroupModel.getInstance().runtimeNotes(chart));
             this.effects = new java.util.ArrayList<>(chart.effects == null ? java.util.List.of() : chart.effects);
             this.effects.sort(java.util.Comparator.comparingDouble(this::effectSeconds));
             this.effectTimes = new java.util.ArrayList<>(this.effects.size());
@@ -3567,6 +4040,17 @@ private static void showSceneBoundary(MinecraftServer server) {
                 noteTimes.put(note.id, noteTime);
 
             }
+            this.holdIntervals = HoldInterval.fromChart(chart);
+            for (HoldInterval interval : holdIntervals) {
+                holdIntervalsById.put(interval.id(), interval);
+                for (ChartManifest.Note note : interval.members()) {
+                    if (note.id != null) groupedHoldNoteIds.add(note.id);
+                }
+            }
+            double initialBeat = PlaybackCoordinates.beatAtSongTime(chart, timing, startSeconds);
+            this.currentPlaybackBeat = initialBeat;
+            holdPlayback.reset(holdIntervals, Math.nextDown(initialBeat));
+            reconcileActiveHolds(initialBeat);
             this.endSeconds = calculateEndSeconds();
             while (nextNoteIndex < notes.size() && noteTimes.getOrDefault(notes.get(nextNoteIndex).id, Double.POSITIVE_INFINITY) < startSeconds) {
                 hitNotes.add(notes.get(nextNoteIndex).id);
@@ -3583,15 +4067,199 @@ private static void showSceneBoundary(MinecraftServer server) {
                 double noteTime = noteTimes.getOrDefault(note.id, Double.POSITIVE_INFINITY);
                 if (noteTime > songTime) break;
                 nextHiddenNoteIndex++;
-                if (shouldHide(note) && hitNotes.add(note.id)) playHitSound(this, player, note);
+                if (shouldHide(note) && hitNotes.add(note.id) && !isGroupedHoldNote(note)) playHitSound(this, player, note);
+            }
+        }
+        private boolean isGroupedHoldNote(ChartManifest.Note note) {
+            return note != null && groupedHoldNoteIds.contains(note.id);
+        }
+        private void advanceHoldPlayback(double beat, ServerPlayerEntity player) {
+            currentPlaybackBeat = beat;
+            for (HoldPlaybackStateMachine.Transition transition : holdPlayback.update(beat)) {
+                if (transition.type() == HoldPlaybackStateMachine.TransitionType.STARTED) {
+                    activeHoldIntervalIds.add(transition.intervalId());
+                    playHoldBoundarySound(player, true);
+                } else if (transition.type() == HoldPlaybackStateMachine.TransitionType.ENDED) {
+                    activeHoldIntervalIds.remove(transition.intervalId());
+                    HoldInterval interval = holdIntervalsById.get(transition.intervalId());
+                    if (interval != null && interval.hasEndJudgementBoundary()) playHoldBoundarySound(player, false);
+                } else if (transition.type() == HoldPlaybackStateMachine.TransitionType.CANCELLED) {
+                    activeHoldIntervalIds.remove(transition.intervalId());
+                }
+            }
+        }
+        private void reconcileActiveHolds(double beat) {
+            activeHoldIntervalIds.clear();
+            for (HoldInterval interval : holdIntervals) {
+                if (beat >= interval.startBeat() && beat < interval.endBeat()) activeHoldIntervalIds.add(interval.id());
+            }
+        }
+        private void playHoldBoundarySound(ServerPlayerEntity player, boolean start) {
+            net.minecraft.sound.SoundEvent sound = start
+                    ? net.minecraft.sound.SoundEvents.BLOCK_STONE_PRESSURE_PLATE_CLICK_ON
+                    : net.minecraft.sound.SoundEvents.BLOCK_STONE_PRESSURE_PLATE_CLICK_OFF;
+            world.playSound(null, player.getX(), player.getY(), player.getZ(), sound,
+                    net.minecraft.sound.SoundCategory.PLAYERS,
+                    (float) Math.max(0.1, Math.min(5.0, config.noteJudgementVolumeMultiplier)), 1.0f);
+        }
+        private void updateHoldDisplays(ServerPlayerEntity player, double songTime, boolean updatePositions) {
+            double beat = PlaybackCoordinates.beatAtSongTime(chart, timing, songTime);
+            while (nextHoldVisualIndex < holdIntervals.size()) {
+                HoldInterval interval = holdIntervals.get(nextHoldVisualIndex);
+                ChartManifest.Note start = interval.members().getFirst();
+                double startTime = noteTimes.getOrDefault(start.id, Double.POSITIVE_INFINITY);
+                if (startTime - songTime > PLAYBACK_MAX_PRELOAD_SECONDS) break;
+                if (shouldHide(start)) {
+                    nextHoldVisualIndex++;
+                    continue;
+                }
+                double distance = relativeDistance(start, songTime);
+                if (cn.frkovo.rhythmcmaker.client.playback.HoldVisualPreloadRules.shouldWaitForApproach(distance, PLAYBACK_APPROACH_DISTANCE)) break;
+                nextHoldVisualIndex++;
+                if (!Double.isFinite(distance) || distance < 0.0) continue;
+                createHoldDisplays(player, interval, songTime);
+            }
+            for (String intervalId : activeHoldIntervalIds) {
+                if (holdDisplays.containsKey(intervalId)) continue;
+                HoldInterval interval = holdIntervalsById.get(intervalId);
+                if (interval != null && !shouldHide(interval.members().getFirst())) createHoldDisplays(player, interval, songTime);
+            }
+            for (var iterator = holdDisplays.entrySet().iterator(); iterator.hasNext();) {
+                var entry = iterator.next();
+                HoldInterval interval = holdIntervalsById.get(entry.getKey());
+                if (interval == null || shouldHide(interval.members().getFirst())) {
+                    recycleHoldDisplays(interval, entry.getValue());
+                    iterator.remove();
+                    continue;
+                }
+                List<ChartManifest.Note> visualNotes = holdVisualNotes(interval);
+                List<DisplayEntity.BlockDisplayEntity> displays = entry.getValue();
+                for (int index = 0; index < displays.size() && index < visualNotes.size(); index++) {
+                    DisplayEntity.BlockDisplayEntity display = displays.get(index);
+                    if (display == null) continue;
+                    ChartManifest.Note visualNote = visualNotes.get(index);
+                    double distance = relativeDistance(visualNote, songTime);
+                    if (!Double.isFinite(distance) || distance <= 0.0) {
+                        recycle(visualNote, display);
+                        displays.set(index, null);
+                        continue;
+                    }
+                    if (updatePositions) applyNotePose(display, visualNote, songTime, PLAYBACK_FRAME_Z - distance);
+                }
+                if (displays.stream().allMatch(java.util.Objects::isNull)) iterator.remove();
+            }
+        }
+        private void createHoldDisplays(ServerPlayerEntity player, HoldInterval interval, double songTime) {
+            ChartManifest.Note representative = interval.members().getFirst();
+            List<ChartManifest.Note> visualNotes = holdVisualNotes(interval);
+            List<DisplayEntity.BlockDisplayEntity> displays = new java.util.ArrayList<>(visualNotes.size());
+            Team team = glowTeams.computeIfAbsent(representative.type, this::createGlowTeam);
+            for (ChartManifest.Note visualNote : visualNotes) {
+                double distance = relativeDistance(visualNote, songTime);
+                if (!Double.isFinite(distance) || distance <= 0.0) {
+                    displays.add(null);
+                    continue;
+                }
+                double displayZ = PLAYBACK_FRAME_Z - distance;
+                double[] position = displayPosition(visualNote, songTime, displayZ);
+                DisplayEntity.BlockDisplayEntity display = acquire(visualNote, blockStateForType(visualNote.type), position[0], position[1], position[2]);
+                if (display == null) {
+                    displays.add(null);
+                    continue;
+                }
+                applyNotePose(display, visualNote, songTime, displayZ);
+                display.addCommandTag("rhythmc_preview:" + player.getUuid());
+                display.setGlowing(true);
+                if (world.getScoreboard().getScoreHolderTeam(display.getNameForScoreboard()) != team) {
+                    world.getScoreboard().addScoreHolderToTeam(display.getNameForScoreboard(), team);
+                }
+                displays.add(display);
+            }
+            if (displays.stream().anyMatch(java.util.Objects::nonNull)) holdDisplays.put(interval.id(), displays);
+        }
+        private List<ChartManifest.Note> holdVisualNotes(HoldInterval interval) {
+            List<ChartManifest.Note> members = interval.members();
+            if (members.size() < 2) return members;
+            List<ChartManifest.Note> visualNotes = new java.util.ArrayList<>();
+            TrackPlayback.Prepared track = trackProfiles.getOrDefault(interval.trackId(), trackProfiles.get(0));
+            for (int pairIndex = 0; pairIndex + 1 < members.size(); pairIndex++) {
+                ChartManifest.Note start = members.get(pairIndex);
+                ChartManifest.Note end = members.get(pairIndex + 1);
+                visualNotes.add(start);
+                double travel = PlaybackCoordinates.distanceBetweenBeats(chart, track, start.beat, end.beat, config.playerSpeed);
+                double startOffset = start.sourceZ == null ? 0.0 : start.sourceZ;
+                double endOffset = end.sourceZ == null ? 0.0 : end.sourceZ;
+                double span = Math.abs(travel + endOffset - startOffset);
+                int fillCount = HoldFillPlanner.fillCount(span, start.scaleZ, end.scaleZ);
+                for (int fillIndex = 1; fillIndex <= fillCount; fillIndex++) {
+                    double progress = (double) fillIndex / (fillCount + 1);
+                    ChartManifest.Note fill = copyNote(start);
+                    fill.id = interval.id() + ":fill:" + pairIndex + ":" + fillIndex;
+                    fill.holdGroup = -1;
+                    fill.beat = HoldFillPlanner.interpolate(start.beat, end.beat, progress);
+                    fill.time = ChartTiming.beatToSeconds(chart, fill.beat);
+                    fill.x = HoldFillPlanner.interpolate(start.x, end.x, progress);
+                    fill.y = HoldFillPlanner.interpolate(start.y, end.y, progress);
+                    fill.sourceX = interpolateNullable(start.sourceX, end.sourceX, progress);
+                    fill.sourceY = interpolateNullable(start.sourceY, end.sourceY, progress);
+                    fill.sourceZ = interpolateNullable(start.sourceZ, end.sourceZ, progress);
+                    fill.scaleX = HoldFillPlanner.interpolate(start.scaleX, end.scaleX, progress);
+                    fill.scaleY = HoldFillPlanner.interpolate(start.scaleY, end.scaleY, progress);
+                    fill.scaleZ = HoldFillPlanner.interpolate(start.scaleZ, end.scaleZ, progress);
+                    visualNotes.add(fill);
+                }
+            }
+            visualNotes.add(members.getLast());
+            return visualNotes;
+        }
+        private static Double interpolateNullable(Double start, Double end, double progress) {
+            if (start == null && end == null) return null;
+            double startValue = start == null ? end : start;
+            double endValue = end == null ? start : end;
+            return HoldFillPlanner.interpolate(startValue, endValue, progress);
+        }
+        private void clearHoldDisplays() {
+            for (Map.Entry<String, List<DisplayEntity.BlockDisplayEntity>> entry : holdDisplays.entrySet()) {
+                recycleHoldDisplays(holdIntervalsById.get(entry.getKey()), entry.getValue());
+            }
+            holdDisplays.clear();
+        }
+        private void cancelHoldPlayback() {
+            holdPlayback.cancelAll();
+            activeHoldIntervalIds.clear();
+            clearHoldDisplays();
+        }
+        private void recycleHoldDisplays(HoldInterval interval, List<DisplayEntity.BlockDisplayEntity> displays) {
+            for (DisplayEntity.BlockDisplayEntity display : displays) {
+                if (display == null) continue;
+                if (interval == null) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+                else recycle(interval.members().getFirst(), display);
             }
         }
         private void applyVisualState() {
+            holdPlayback.seek(currentPlaybackBeat);
+            activeHoldIntervalIds.clear();
+            for (HoldInterval interval : holdIntervals) {
+                if (currentPlaybackBeat < interval.startBeat() || currentPlaybackBeat >= interval.endBeat()) continue;
+                if (shouldHide(interval.members().getFirst())) holdPlayback.cancel(interval.id());
+                else activeHoldIntervalIds.add(interval.id());
+            }
+            nextHoldVisualIndex = 0;
+            while (nextHoldVisualIndex < holdIntervals.size()
+                    && holdIntervals.get(nextHoldVisualIndex).endBeat() <= currentPlaybackBeat) nextHoldVisualIndex++;
             for (var iterator = displays.entrySet().iterator(); iterator.hasNext();) {
                 var entry = iterator.next();
                 ChartManifest.Note note = notesById.get(entry.getKey());
                 if (note != null && shouldHide(note)) {
                     recycle(note, entry.getValue());
+                    iterator.remove();
+                }
+            }
+            for (var iterator = holdDisplays.entrySet().iterator(); iterator.hasNext();) {
+                var entry = iterator.next();
+                HoldInterval interval = holdIntervalsById.get(entry.getKey());
+                if (interval != null && shouldHide(interval.members().getFirst())) {
+                    recycleHoldDisplays(interval, entry.getValue());
                     iterator.remove();
                 }
             }
@@ -3603,7 +4271,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             int end = Math.min(notes.size(), Math.max(nextNoteIndex + PLAYBACK_MAX_ACTIVE_DISPLAYS, start + PLAYBACK_MAX_ACTIVE_DISPLAYS));
             for (int index = start; index < end; index++) {
                 ChartManifest.Note note = notes.get(index);
-                if (restored >= PLAYBACK_MAX_PRELOADS_PER_TICK || shouldHide(note) || displays.containsKey(note.id)) continue;
+                if (restored >= PLAYBACK_MAX_PRELOADS_PER_TICK || shouldHide(note) || isGroupedHoldNote(note) || displays.containsKey(note.id)) continue;
                 double noteTime = noteTimes.getOrDefault(note.id, Double.POSITIVE_INFINITY);
                 if (!Double.isFinite(noteTime) || noteTime <= songTime) continue;
                 double relativeDistance = relativeDistance(note, songTime);
@@ -3621,7 +4289,7 @@ private static void showSceneBoundary(MinecraftServer server) {
             if (restored > 0) updateGlowTeam();
         }
         private boolean shouldHide(ChartManifest.Note note) {
-            return hideAllNotes || hiddenNoteTypes.contains(note.type) || hiddenNoteTracks.contains(note.trackId);
+            return hiddenNoteTypes.contains(note.type) || hiddenNoteTracks.contains(note.trackId);
         }
         private void updateHiddenNotes(JsonObject effect) {
             if (effect == null) return;
@@ -3631,7 +4299,6 @@ private static void showSceneBoundary(MinecraftServer server) {
             com.google.gson.JsonElement tracks = effect.has("tracks") ? effect.get("tracks") : properties.get("tracks");
             hiddenNoteTypes.clear();
             hiddenNoteTracks.clear();
-            hideAllNotes = false;
             java.util.Set<Integer> selectedTypes = new java.util.HashSet<>();
             java.util.Set<Integer> selectedTracks = new java.util.HashSet<>();
             if (noteTypes != null && noteTypes.isJsonArray()) for (com.google.gson.JsonElement value : noteTypes.getAsJsonArray()) addHiddenNoteType(selectedTypes, value);
@@ -3640,17 +4307,12 @@ private static void showSceneBoundary(MinecraftServer server) {
             else if (tracks != null && tracks.isJsonPrimitive()) addHiddenTrack(selectedTracks, tracks);
             boolean legacyHiddenAction = hidden != null && hidden.isJsonPrimitive() && hidden.getAsJsonPrimitive().isBoolean();
             if (legacyHiddenAction && !hidden.getAsBoolean()) return;
-            if (selectedTypes.isEmpty() && selectedTracks.isEmpty()) {
-                hideAllNotes = true;
-                return;
-            }
             hiddenNoteTypes.addAll(selectedTypes);
             hiddenNoteTracks.addAll(selectedTracks);
         }
         private void clearHiddenNoteFilter() {
             hiddenNoteTypes.clear();
             hiddenNoteTracks.clear();
-            hideAllNotes = false;
         }
         private void addHiddenNoteType(java.util.Set<Integer> selectedTypes, com.google.gson.JsonElement value) {
             if (value == null || !value.isJsonPrimitive()) return;
@@ -3684,6 +4346,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         private void clearHiddenNotesForArenaSwitch() {
             clearHiddenNoteFilter();
             clearDisplayPools();
+            applyVisualState();
         }
         private void updateGlowTeam() {
             for (var entry : displays.entrySet()) {
@@ -3709,6 +4372,10 @@ private static void showSceneBoundary(MinecraftServer server) {
             Team observerTeam = glowTeams.get(1);
             if (observerTeam != null) observerTeam.setColor(observerGlowColor);
             updateGlowTeam();
+        }
+        private void applyJudgeFrameColor(JsonObject effect) {
+            String color = effectString(effect, "color", "border").trim();
+            judgeFrameColor = color.isBlank() ? "border" : color;
         }
         private void clearGlowTeam() {
             for (DisplayEntity.BlockDisplayEntity display : displays.values()) {
@@ -3761,6 +4428,10 @@ private static void showSceneBoundary(MinecraftServer server) {
                     } catch (RuntimeException ignored) {
                     }
                 }
+                if (requestedEffects.isEmpty()) {
+                    clearAllPotionEffects(player);
+                    return;
+                }
                 for (String id : PotionEffectClearPolicy.matchingActiveEffects(activeChartPotionEffects, requestedEffects, false, true)) {
                     clearPotionEffectValue(player, id);
                 }
@@ -3781,9 +4452,20 @@ private static void showSceneBoundary(MinecraftServer server) {
                 }
                 return;
             }
-            for (String id : PotionEffectClearPolicy.matchingActiveEffects(activeChartPotionEffects, Set.of(), true, !explicitList)) {
+            if (!explicitList) {
+                clearAllPotionEffects(player);
+                return;
+            }
+            for (String id : PotionEffectClearPolicy.matchingActiveEffects(activeChartPotionEffects, Set.of(), true, false)) {
                 clearPotionEffectValue(player, id);
             }
+        }
+        private void clearAllPotionEffects(ServerPlayerEntity player) {
+            for (net.minecraft.entity.effect.StatusEffectInstance activeEffect : new java.util.ArrayList<>(player.getStatusEffects())) {
+                player.removeStatusEffect(activeEffect.getEffectType());
+            }
+            activeChartPotionEffects.clear();
+            originalStatusEffectsById.clear();
         }
         private void clearPotionEffectValue(ServerPlayerEntity player, String type) {
             try {
@@ -3822,48 +4504,120 @@ private static void showSceneBoundary(MinecraftServer server) {
                     original.getAmplifier(), original.isAmbient(), original.shouldShowParticles(), original.shouldShowIcon()));
         }
         private void applyTime(ServerPlayerEntity player, JsonObject effect) {
-            long time = Math.max(0L, (long) effectDouble(effect, "time", effectDouble(effect, "timeOfDay", effectDouble(effect, "worldTime", effectDouble(effect, "value", world.getTimeOfDay())))));
-            boolean clientOnly = effectBoolean(effect, "client", true);
-            if (!clientOnly) {
-                resetClientTime(player);
-                world.setTimeOfDay(time);
-                player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.WorldTimeUpdateS2CPacket(
-                        world.getTime(), time, world.getGameRules().getValue(GameRules.ADVANCE_TIME)));
+            long time = TimeFade.wrap(effectLong(effect, "time", effectLong(effect, "timeOfDay", effectLong(effect, "worldTime", effectLong(effect, "value", world.getTimeOfDay())))));
+            if (effect.has("durationBeats") && effectDouble(effect, "durationBeats", 0.0) > 0.0) {
+                worldTime = time;
+                lastShownTime = Integer.MIN_VALUE;
+                updateTimeEffect(player, effectDouble(effect, "beat", 0.0));
                 return;
             }
-            clientTime = time;
-            double durationMillis = effectDouble(effect, "duration", Double.POSITIVE_INFINITY);
-            double elapsedMillis = Math.max(0.0, (System.nanoTime() - startNanos) / 1_000_000.0 * rate
-                    + (startSeconds - effectSeconds(effect)) * 1000.0);
-            double remainingNanos = Math.max(0.0, durationMillis - elapsedMillis) * 1_000_000.0 / rate;
-            long now = System.nanoTime();
-            clientTimeExpiresAtNanos = remainingNanos >= Long.MAX_VALUE - now ? Long.MAX_VALUE : now + (long) remainingNanos;
-            updateClientTime(player);
+            worldTime = time;
+            lastShownTime = (int) time;
+            world.setTimeOfDay(time);
+            broadcastWorldTime(world, time, world.getGameRules().getValue(GameRules.ADVANCE_TIME));
         }
         private void updateClientTime(ServerPlayerEntity player) {
-            if (clientTime == null) return;
-            if (System.nanoTime() >= clientTimeExpiresAtNanos) {
-                resetClientTime(player);
-                return;
+            double beat = PlaybackCoordinates.beatAtSongTime(chart, timing,
+                    startSeconds + (System.nanoTime() - startNanos) / 1_000_000_000.0 * rate);
+            updateTimeEffect(player, beat);
+        }
+        private void updateTimeEffect(ServerPlayerEntity player, double beat) {
+            if (worldTime == null) return;
+            JsonObject active = latestTimeEffectAt(beat);
+            if (active == null) return;
+            double durationBeats = effectDouble(active, "durationBeats", 0.0);
+            if (!(durationBeats > 0.0) || !Double.isFinite(durationBeats)) return;
+            double startBeat = effectDouble(active, "beat", 0.0);
+            double progress = (beat - startBeat) / durationBeats;
+            long from = timeBeforeEffect(active, beat);
+            long target = TimeFade.wrap(effectLong(active, "time", effectLong(active, "timeOfDay", world.getTimeOfDay())));
+            long shown = TimeFade.at(from, target, TimeFade.Direction.parse(effectString(active, "direction", "CLOCKWISE")), progress);
+            worldTime = shown;
+            if (shown != lastShownTime) {
+                lastShownTime = (int) shown;
+                world.setTimeOfDay(shown);
+                broadcastWorldTime(world, shown, world.getGameRules().getValue(GameRules.ADVANCE_TIME));
             }
-            player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.WorldTimeUpdateS2CPacket(
-                    world.getTime(), clientTime, false));
+        }
+        private JsonObject latestTimeEffectAt(double beat) {
+            JsonObject latest = null;
+            for (JsonObject effect : effects) {
+                if (!effectType(effect).equals("TIME")) continue;
+                if (effectDouble(effect, "beat", Double.POSITIVE_INFINITY) > beat) break;
+                latest = effect;
+            }
+            return latest;
+        }
+        private long timeBeforeEffect(JsonObject target, double beat) {
+            long time = originalWorldTimeOfDay;
+            for (JsonObject effect : effects) {
+                if (!effectType(effect).equals("TIME")) continue;
+                if (effect == target) break;
+                double startBeat = effectDouble(effect, "beat", Double.POSITIVE_INFINITY);
+                if (startBeat > beat) break;
+                double duration = effectDouble(effect, "durationBeats", 0.0);
+                long targetTime = TimeFade.wrap(effectLong(effect, "time", time));
+                time = duration > 0.0
+                        ? TimeFade.at(time, targetTime, TimeFade.Direction.parse(effectString(effect, "direction", "CLOCKWISE")),
+                                (effectDouble(target, "beat", 0.0) - startBeat) / duration)
+                        : targetTime;
+            }
+            return time;
         }
         private void resetClientTime(ServerPlayerEntity player) {
-            if (clientTime == null) return;
-            clientTime = null;
-            player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.WorldTimeUpdateS2CPacket(
-                    world.getTime(), world.getTimeOfDay(), world.getGameRules().getValue(GameRules.ADVANCE_TIME)));
+            resetWorldTime(player);
         }
-        private void applyWeather(ServerPlayerEntity player, JsonObject effect) {
+        private void resetWorldTime(ServerPlayerEntity player) {
+            if (worldTime == null) return;
+            worldTime = null;
+            lastShownTime = Integer.MIN_VALUE;
+            world.setTimeOfDay(originalWorldTimeOfDay);
+            broadcastWorldTime(world, world.getTimeOfDay(), world.getGameRules().getValue(GameRules.ADVANCE_TIME));
+        }
+        private void applyWeather(JsonObject effect) {
             String weather = effectString(effect, "weather", effectString(effect, "type", "clear")).trim().toUpperCase(java.util.Locale.ROOT);
             boolean thunder = weather.equals("THUNDER") || weather.equals("THUNDERSTORM") || weather.equals("STORM");
             boolean raining = thunder || weather.equals("RAIN") || weather.equals("DOWNFALL");
-            sendPlayerWeather(player, raining, thunder);
+            weatherChanged = true;
+            setWorldWeather(world, raining ? 0 : Integer.MAX_VALUE, Integer.MAX_VALUE, raining, thunder);
+        }
+        private void resetWorldWeather() {
+            if (!weatherChanged) return;
+            weatherChanged = false;
+            long elapsedTicks = Math.max(0L, world.getTime() - originalWeatherCapturedAtTick);
+            int clearTime = Math.max(0, originalClearWeatherTime - (int) Math.min(Integer.MAX_VALUE, elapsedTicks));
+            int rainTime = Math.max(0, originalRainTime - (int) Math.min(Integer.MAX_VALUE, elapsedTicks));
+            int thunderTime = Math.max(0, originalThunderTime - (int) Math.min(Integer.MAX_VALUE, elapsedTicks));
+            setWorldWeather(world, clearTime, originalThundering ? thunderTime : rainTime, originalRaining, originalThundering);
+        }
+        private void captureOriginalWorldWeather() {
+            var properties = (ServerWorldProperties) world.getLevelProperties();
+            originalClearWeatherTime = properties.getClearWeatherTime();
+            originalRainTime = properties.getRainTime();
+            originalThunderTime = properties.getThunderTime();
+            originalRaining = world.isRaining();
+            originalThundering = world.isThundering();
+            originalWeatherCapturedAtTick = world.getTime();
+        }
+        private void restoreWorldWeatherAtBeat(double beat) {
+            JsonObject latestWeather = null;
+            for (JsonObject effect : effects) {
+                if (!effectType(effect).equals("WEATHER")) continue;
+                if (effectDouble(effect, "beat", Double.POSITIVE_INFINITY) > beat) break;
+                latestWeather = effect;
+            }
+            if (latestWeather == null) {
+                resetWorldWeather();
+                captureOriginalWorldWeather();
+            }
+            else applyWeather(latestWeather);
         }
         private double calculateEndSeconds() {
             double end = chart.durationSeconds + chart.offsetMillis / 1000.0;
             for (double noteTime : noteTimes.values()) if (Double.isFinite(noteTime)) end = Math.max(end, noteTime);
+            for (HoldInterval interval : holdIntervals) {
+                end = Math.max(end, PlaybackCoordinates.songTimeAtBeat(chart, timing, interval.endBeat()));
+            }
             for (double effectTime : effectTimes) end = Math.max(end, effectTime);
             return Math.max(0.0, end) + 0.1;
         }
@@ -3931,10 +4685,10 @@ private static void showSceneBoundary(MinecraftServer server) {
             TrackPlayback.Pose pose = trackProfiles.getOrDefault(note.trackId, trackProfiles.get(0)).poseAt(beat);
             double[] position = displayPosition(note, songTime, displayZ);
             display.setPosition(position[0], position[1], position[2]);
-            Quaternionf rotation = trackRotation(pose);
+            Quaternionf rotation = trackRotation(pose).mul(cn.frkovo.rhythmcmaker.common.note.NoteGeometry.rotation(note));
             Vector3f scale = new Vector3f((float) (note.scaleX * pose.scaleX()),
                     (float) (note.scaleY * pose.scaleY()), (float) (note.scaleZ * pose.scaleZ()));
-            display.setTransformation(new AffineTransformation(new Vector3f(), rotation, scale, new Quaternionf()));
+            display.setTransformation(cn.frkovo.rhythmcmaker.common.note.NoteGeometry.centeredTransform(rotation, scale));
         }
         private static Quaternionf trackRotation(TrackPlayback.Pose pose) {
             return new Quaternionf().rotationXYZ((float) Math.toRadians(pose.rotationX()),
@@ -3943,9 +4697,9 @@ private static void showSceneBoundary(MinecraftServer server) {
         private void applyTitle(ServerPlayerEntity player, JsonObject effect) {
             String title = effectString(effect, "title", effectString(effect, "text", ""));
             String subtitle = effectString(effect, "subtitle", "");
-            int fadeIn = Math.max(0, Math.min(200, effectInt(effect, "fadeIn", 10)));
-            int stay = Math.max(0, Math.min(600, effectInt(effect, "stay", 40)));
-            int fadeOut = Math.max(0, Math.min(200, effectInt(effect, "fadeOut", 10)));
+            int fadeIn = millisecondsToPotionTicks(Math.max(0, effectInt(effect, "fadeIn", 500)));
+            int stay = millisecondsToPotionTicks(Math.max(0, effectInt(effect, "stay", 2000)));
+            int fadeOut = millisecondsToPotionTicks(Math.max(0, effectInt(effect, "fadeOut", 500)));
             player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.TitleFadeS2CPacket(fadeIn, stay, fadeOut));
             if (!title.isBlank()) player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.TitleS2CPacket(EffectTextFormatter.getInstance().text(title, 0xFFFFFF)));
             if (!subtitle.isBlank()) player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.SubtitleS2CPacket(EffectTextFormatter.getInstance().text(subtitle, 0xFFFFFF)));
@@ -4355,11 +5109,23 @@ private static void showSceneBoundary(MinecraftServer server) {
         return Math.max(0.0, end) + 0.1;
     }
     private static double effectiveNoteTime(ChartManifest.Note note, ChartManifest chart) { return note.time + chart.offsetMillis / 1000.0; }
+    public static ItemStack createNoteEditTool() {
+        return new ItemStack(NOTE_EDIT_ITEM);
+    }
+    public static boolean isNoteEditTool(ItemStack stack) {
+        if (stack.isOf(NOTE_EDIT_ITEM)) return true;
+        if (!stack.isOf(Items.BREEZE_ROD)) return false;
+        Text customName = stack.get(DataComponentTypes.CUSTOM_NAME);
+        return customName != null && customName.getString().equals("修改音符");
+    }
     private static ItemStack menuStack(Item item) {
         return new ItemStack(item);
     }
     private static boolean isNoteItem(ItemStack stack) {
-        return stack.isOf(Blocks.OBSERVER.asItem()) || stack.isOf(Blocks.REDSTONE_BLOCK.asItem()) || stack.isOf(Blocks.DIAMOND_BLOCK.asItem()) || stack.isOf(Blocks.TNT.asItem());
+        return stack.isOf(TAP_NOTE_ITEM) || stack.isOf(LOOK_NOTE_ITEM) || stack.isOf(HOLD_NOTE_ITEM)
+                || stack.isOf(DODGE_NOTE_ITEM) || stack.isOf(Blocks.OBSERVER.asItem())
+                || stack.isOf(Blocks.REDSTONE_BLOCK.asItem()) || stack.isOf(Blocks.DIAMOND_BLOCK.asItem())
+                || stack.isOf(Blocks.TNT.asItem());
     }
     private static boolean isNoteBlock(net.minecraft.block.Block block) {
         return block == Blocks.OBSERVER || block == Blocks.REDSTONE_BLOCK || block == Blocks.DIAMOND_BLOCK || block == Blocks.TNT;
@@ -4368,16 +5134,17 @@ private static void showSceneBoundary(MinecraftServer server) {
         if (chart == null) return false;
         int x = pos.getX();
         int z = -pos.getZ() - 3;
-        return x >= laneMinX(chart) && x <= laneMaxX(chart) && pos.getY() >= 65 && pos.getY() <= 68 && z >= 0 && z < calculateTrackLength(chart);
+        return x >= laneMinX(chart) && x <= laneMaxX(chart) && pos.getY() >= 65
+                && pos.getY() <= EditorTrackLayout.of(chart).maximumWorldY() && z >= 0 && z < calculateTrackLength(chart);
     }
     private static double noteHeightBase(int type) { return type == 2 ? 65.0 : 66.0; }
     private static boolean isAllowedNoteTypeAtHeight(int y, int type) {
-        return type >= 0 && (y == 65 ? type == 2 : y >= 66 && y <= 68 && type != 2);
+        return type >= 0 && (y == 65 ? type == 2 : y >= 66 && y <= 65 + EditorTrackLayout.MAX_HEIGHT && type != 2);
     }
     private static int noteType(ItemStack stack) {
-        if (stack.isOf(Blocks.OBSERVER.asItem())) return 1;
-        if (stack.isOf(Blocks.DIAMOND_BLOCK.asItem())) return 2;
-        if (stack.isOf(Blocks.REDSTONE_BLOCK.asItem())) return 3;
+        if (stack.isOf(LOOK_NOTE_ITEM) || stack.isOf(Blocks.OBSERVER.asItem())) return 1;
+        if (stack.isOf(HOLD_NOTE_ITEM) || stack.isOf(HOLD_GROUP_NOTE_ITEM) || stack.isOf(Blocks.DIAMOND_BLOCK.asItem())) return 2;
+        if (stack.isOf(DODGE_NOTE_ITEM) || stack.isOf(Blocks.REDSTONE_BLOCK.asItem())) return 3;
         return 0;
     }
     private static boolean containsNote(ChartManifest chart, ServerWorld world, BlockPos pos) {
@@ -4385,47 +5152,56 @@ private static void showSceneBoundary(MinecraftServer server) {
     }
 
     private static boolean isBlockNoteAt(ChartManifest.Note note, BlockPos pos) {
-        return !hasFraction(note.x) && !hasFraction(note.y) && !hasFraction(note.z)
-            && Math.round(note.x) == pos.getX()
-            && Math.round(note.y) == pos.getY()
-            && Math.round(note.z) == pos.getZ();
+        return note != null && !NoteEditRules.usesDisplayEntity(note)
+            && note.x == pos.getX() && note.y == pos.getY() && note.z == pos.getZ();
     }
-    private static void removeNote(ChartManifest chart, ServerWorld world, BlockPos pos) {
+    private static void removeNote(ChartManifest chart, ServerWorld world, BlockPos pos, int brokenType, UUID playerId) {
         chart.notes.removeIf(note -> {
-            // Fractional notes are represented by BlockDisplay entities and can visually overlap
-            // a block grid position. Breaking a newly placed block must not delete that note.
-            boolean matches = isBlockNoteAt(note, pos);
+            boolean matches = note != null && note.type == brokenType && isBlockNoteAt(note, pos);
             if (matches) removeNoteDisplay(world, noteTag(chart.id, note.id));
             return matches;
         });
+        invalidateTrackSnapUndo(playerId);
         try { saveChart(world.getServer(), chart); } catch (IOException ignored) { }
     }
     private static void repositionNotes(ChartManifest chart) {
-        if (chart.notes == null) return;
-        ChartTiming.Prepared timing = ChartTiming.prepare(chart);
-        for (ChartManifest.Note note : chart.notes) {
-            double beat = Double.isFinite(note.beat) ? Math.max(0.0, note.beat) : timing.secondsToBeat(note.time);
-            note.beat = beat;
-            note.time = timing.beatToSeconds(beat);
-            note.z = PlaybackCoordinates.editorWorldZAtBeat(chart, beat) - 0.5;
-        }
+        EditorNoteLayout.repositionNotes(chart);
     }
     private static Map<String, BlockPos> captureNotePositions(ChartManifest chart) {
         Map<String, BlockPos> positions = new java.util.HashMap<>();
         if (chart.notes == null) return positions;
         for (ChartManifest.Note note : chart.notes) {
-            if (note.id == null || hasFraction(note.x) || hasFraction(note.y) || hasFraction(note.z)) continue;
+            if (note == null || note.id == null || NoteEditRules.usesDisplayEntity(note)) continue;
             positions.put(note.id, BlockPos.ofFloored(note.x, note.y, note.z));
         }
         return positions;
     }
-    private static void clearNoteBlocks(ServerWorld world, Map<String, BlockPos> positions) {
-        for (BlockPos pos : positions.values()) {
-            if (isNoteBlock(world.getBlockState(pos).getBlock())) world.setBlockState(pos, Blocks.AIR.getDefaultState(), 3);
+    private static void clearNoteBlocks(ServerWorld world, ChartManifest chart, Map<String, BlockPos> positions) {
+        for (Map.Entry<String, BlockPos> entry : positions.entrySet()) {
+            BlockPos position = entry.getValue();
+            boolean occupied = chart.notes.stream().anyMatch(note -> note != null && isBlockNoteAt(note, position));
+            if (!occupied && isNoteBlock(world.getBlockState(position).getBlock())) world.setBlockState(position, Blocks.AIR.getDefaultState(), 3);
+        }
+    }
+    private static void clearCurrentNoteBlocks(ServerWorld world, ChartManifest chart) {
+        Map<String, BlockPos> positions = captureNotePositions(chart);
+        for (Map.Entry<String, BlockPos> entry : positions.entrySet()) {
+            ChartManifest.Note note = chart.notes.stream().filter(candidate -> candidate != null
+                    && entry.getKey().equals(candidate.id)).findFirst().orElse(null);
+            if (note != null && noteTypeForBlockState(world.getBlockState(entry.getValue())) == note.type) {
+                world.setBlockState(entry.getValue(), Blocks.AIR.getDefaultState(), 3);
+            }
         }
     }
     private static void clearChartNoteBlocks(ServerWorld world, ChartManifest chart) {
-        clearNoteBlocks(world, captureNotePositions(chart));
+        Map<String, BlockPos> positions = captureNotePositions(chart);
+        for (Map.Entry<String, BlockPos> entry : positions.entrySet()) {
+            ChartManifest.Note note = chart.notes.stream().filter(candidate -> candidate != null
+                    && entry.getKey().equals(candidate.id)).findFirst().orElse(null);
+            if (note != null && noteTypeForBlockState(world.getBlockState(entry.getValue())) == note.type) {
+                world.setBlockState(entry.getValue(), Blocks.AIR.getDefaultState(), 3);
+            }
+        }
     }
     private static void cleanupStaleNoteDisplays(ServerWorld world, ChunkPos chunkPos) {
         ChartManifest chart = chartForWorld(world);
@@ -4456,7 +5232,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         int maximumHalfWidth = Math.max(EditorTrackLayout.MAX_LANE_COUNT / 2 + 1, chart.noteDisplayCleanupLaneCount / 2 + 1);
         int cleanupLength = Math.max(chart.trackLength, chart.noteDisplayCleanupTrackLength);
         return display.getX() >= -maximumHalfWidth && display.getX() <= maximumHalfWidth
-                && display.getY() >= 65.0 && display.getY() <= 68.0
+                && display.getY() >= 63.0 && display.getY() <= 73.0
                 && display.getZ() >= -3.0 - Math.max(0, cleanupLength) && display.getZ() <= -3.0;
     }
     private static void scheduleNoteDisplayChunkCleanup(ServerWorld world, ChunkPos chunkPos, boolean releaseForcedChunk) {
@@ -4465,6 +5241,7 @@ private static void showSceneBoundary(MinecraftServer server) {
     }
     private static void processNoteDisplayChunkCleanupTasks(MinecraftServer server) {
         int budget = 32;
+        Set<RegistryKey<World>> completedWorlds = new java.util.HashSet<>();
         for (var iterator = NOTE_DISPLAY_CHUNK_CLEANUP_TASKS.iterator(); iterator.hasNext() && budget-- > 0;) {
             NoteDisplayChunkCleanup task = iterator.next();
             ServerWorld world = server.getWorld(task.worldKey());
@@ -4478,6 +5255,14 @@ private static void showSceneBoundary(MinecraftServer server) {
                 }
             }
             iterator.remove();
+            if (task.releaseForcedChunk() && task.retriesRemaining() == 0) completedWorlds.add(task.worldKey());
+        }
+        for (RegistryKey<World> worldKey : completedWorlds) {
+            if (hasPendingNoteDisplayChunkCleanup(worldKey) || EDITOR_NOTE_REFRESH_TASKS.containsKey(worldKey)
+                    || EDITOR_NOTE_DISPLAY_SWEEP_TASKS.containsKey(worldKey)) continue;
+            ServerWorld world = server.getWorld(worldKey);
+            ChartManifest chart = CHART_CACHE_BY_WORLD.get(worldKey);
+            if (world != null && chart != null) rebuildAllEditorHoldDisplays(world, chart);
         }
     }
     private static void scheduleNoteDisplaySweep(ServerWorld world, ChartManifest chart) {
@@ -4550,6 +5335,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         refreshNoteDisplays(world, chart, chart.trackLength, laneCount(chart));
     }
     private static void refreshNoteDisplays(ServerWorld world, ChartManifest chart, int previousTrackLength, int previousLaneCount) {
+        HoldGroupModel.getInstance().reconcile(chart);
         long generation = prepareNoteDisplayGeneration(world, chart, previousTrackLength, previousLaneCount);
         if (generation < 1) return;
         CHART_CACHE_BY_WORLD.put(world.getRegistryKey(), chart);
@@ -4557,6 +5343,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         if (chart.notes == null) {
             EDITOR_NOTE_REFRESH_TASKS.remove(world.getRegistryKey());
             removeStaleNoteDisplays(world, chart.id, generation);
+            rebuildAllEditorHoldDisplays(world, chart);
             return;
         }
         EDITOR_NOTE_REFRESH_TASKS.put(world.getRegistryKey(), new EditorNoteRefreshTask(chart, generation));
@@ -4573,24 +5360,15 @@ private static void showSceneBoundary(MinecraftServer server) {
             int budget = 64;
             while (budget-- > 0 && task.cursor < task.notes.size()) {
                 ChartManifest.Note note = task.notes.get(task.cursor++);
-                if (note == null) continue;
-                if (!hasFraction(note.x) && !hasFraction(note.y) && !hasFraction(note.z)) {
-                    world.setBlockState(BlockPos.ofFloored(note.x, note.y, note.z), blockStateForType(note.type), 3);
-                    continue;
-                }
-                DisplayEntity.BlockDisplayEntity display = EntityType.BLOCK_DISPLAY.create(world, SpawnReason.COMMAND);
-                if (display == null) continue;
-                display.setBlockState(blockStateForType(note.type));
-                display.setPosition(note.x, note.y, note.z);
-                display.setNoGravity(true);
-                display.setInvulnerable(true);
-                display.addCommandTag(noteTag(task.chartId, note.id));
-                display.addCommandTag(noteDisplayGenerationTag(task.chartId, task.generation));
-                ensureEffectPreviewDisplayRange(display);
-                world.spawnEntity(display);
+                if (note == null || note.id == null || note.id.isBlank() || task.chart.notes == null
+                        || task.chart.notes.stream().noneMatch(current -> current != null && note.id.equals(current.id))) continue;
+                updateNoteWorldRepresentation(world, task.chart, note, note.x, note.y, note.z, note.type);
             }
             if (task.cursor >= task.notes.size()) {
                 removeStaleNoteDisplays(world, task.chartId, task.generation);
+                if (!EDITOR_NOTE_DISPLAY_SWEEP_TASKS.containsKey(world.getRegistryKey())) {
+                    rebuildAllEditorHoldDisplays(world, task.chart);
+                }
                 iterator.remove();
             }
         }
@@ -4598,11 +5376,13 @@ private static void showSceneBoundary(MinecraftServer server) {
     private static final class EditorNoteRefreshTask {
         private final String chartId;
         private final long generation;
+        private final ChartManifest chart;
         private final java.util.List<ChartManifest.Note> notes;
         private int cursor;
         private EditorNoteRefreshTask(ChartManifest chart, long generation) {
             this.chartId = chart.id;
             this.generation = generation;
+            this.chart = chart;
             this.notes = new java.util.ArrayList<>(chart.notes == null ? java.util.List.of() : chart.notes);
         }
     }
@@ -4619,7 +5399,133 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
     }
     private static boolean hasFraction(double value) { return Math.abs(value - Math.rint(value)) > 0.000001; }
+    private static void rebuildEditorHoldDisplays(ServerWorld world, ChartManifest chart, int trackId, int holdGroup) {
+        clearEditorHoldDisplays(world, chart.id, trackId, holdGroup);
+        List<ChartManifest.Note> previous = HoldGroupRules.members(chart, trackId, holdGroup).stream().map(RhythmcMaker::copyNote).toList();
+        HoldGroupModel.getInstance().initializeRoles(chart);
+        HoldGroupModel.getInstance().reconcileGroup(chart, trackId, holdGroup);
+        List<ChartManifest.Note> current = HoldGroupRules.members(chart, trackId, holdGroup);
+        for (ChartManifest.Note old : previous) {
+            if (current.stream().noneMatch(note -> note.id.equals(old.id))) removeStoredNote(world, chart, old);
+        }
+        for (ChartManifest.Note note : current) {
+            ChartManifest.Note old = previous.stream().filter(candidate -> candidate.id.equals(note.id)).findFirst().orElse(note);
+            updateNoteWorldRepresentation(world, chart, note, old.x, old.y, old.z, old.type);
+        }
+    }
+    private static boolean hasPendingNoteDisplayChunkCleanup(RegistryKey<World> worldKey) {
+        return NOTE_DISPLAY_CHUNK_CLEANUP_TASKS.stream()
+                .anyMatch(task -> task.releaseForcedChunk() && task.worldKey().equals(worldKey));
+    }
+
+    private static void rebuildAllEditorHoldDisplays(ServerWorld world, ChartManifest chart) {
+        String prefix = "rhythmc_hold_fill:" + chart.id + ":";
+        for (DisplayEntity.BlockDisplayEntity display : world.getEntitiesByType(EntityType.BLOCK_DISPLAY,
+                entity -> entity.getCommandTags().stream().anyMatch(tag -> tag.startsWith(prefix)))) {
+            display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+        }
+        if (chart.notes == null) return;
+        Set<EditorHoldGroupKey> holdGroups = new java.util.HashSet<>();
+        for (ChartManifest.Note note : chart.notes) {
+            if (note != null && note.holdGroup >= 0) holdGroups.add(new EditorHoldGroupKey(note.trackId, note.holdGroup));
+        }
+        for (EditorHoldGroupKey holdGroup : holdGroups) {
+            List<ChartManifest.Note> members = chart.notes.stream()
+                    .filter(note -> note != null && note.trackId == holdGroup.trackId() && note.holdGroup == holdGroup.holdGroup())
+                    .toList();
+            if (!members.isEmpty()) rebuildEditorHoldDisplays(world, chart, holdGroup.trackId(), holdGroup.holdGroup());
+        }
+    }
+
+    private record EditorHoldGroupKey(int trackId, int holdGroup) {}
+
+    private static void clearEditorHoldDisplays(ServerWorld world, String chartId, int trackId, int holdGroup) {
+        String prefix = holdFillPrefix(chartId, trackId, holdGroup);
+        for (DisplayEntity.BlockDisplayEntity display : world.getEntitiesByType(EntityType.BLOCK_DISPLAY,
+                entity -> entity.getCommandTags().stream().anyMatch(tag -> tag.startsWith(prefix)))) {
+            display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+        }
+    }
+
+    private static String holdFillPrefix(String chartId, int trackId, int holdGroup) {
+        return "rhythmc_hold_fill:" + chartId + ":" + trackId + ":" + holdGroup + ":";
+    }
+
+    private static String holdFillTag(String chartId, int trackId, int holdGroup, int fillIndex) {
+        return holdFillPrefix(chartId, trackId, holdGroup) + fillIndex;
+    }
+
+    private static void updateNoteWorldRepresentation(ServerWorld world, ChartManifest chart, ChartManifest.Note note,
+                                                      double previousX, double previousY, double previousZ, int previousType) {
+        ChartManifest.Note previous = copyNote(note);
+        previous.x = previousX;
+        previous.y = previousY;
+        previous.z = previousZ;
+        previous.type = previousType;
+        updateNoteWorldRepresentation(world, chart, note, previous);
+    }
+
+    private static void updateNoteWorldRepresentation(ServerWorld world, ChartManifest chart, ChartManifest.Note note,
+                                                      ChartManifest.Note previous) {
+        double previousX = previous.x;
+        double previousY = previous.y;
+        double previousZ = previous.z;
+        int previousType = previous.type;
+        boolean previousUsesDisplay = NoteEditRules.usesDisplayEntity(previous);
+        boolean currentUsesDisplay = NoteEditRules.usesDisplayEntity(note);
+        BlockPos previousPosition = BlockPos.ofFloored(previousX, previousY, previousZ);
+        BlockPos currentPosition = BlockPos.ofFloored(note.x, note.y, note.z);
+        boolean samePosition = previousPosition.equals(currentPosition);
+        boolean otherAtPreviousPosition = chart.notes.stream().anyMatch(candidate -> candidate != null
+                && !note.id.equals(candidate.id) && isBlockNoteAt(candidate, previousPosition));
+        if (!previousUsesDisplay && (currentUsesDisplay || !samePosition)
+                && noteTypeForBlockState(world.getBlockState(previousPosition)) == previousType && !otherAtPreviousPosition) {
+            world.setBlockState(previousPosition, Blocks.AIR.getDefaultState(), 3);
+        }
+        List<? extends DisplayEntity.BlockDisplayEntity> taggedDisplays = world.getEntitiesByType(EntityType.BLOCK_DISPLAY,
+                entity -> entity.getCommandTags().contains(noteTag(chart.id, note.id)));
+        if (currentUsesDisplay) {
+            DisplayEntity.BlockDisplayEntity display = taggedDisplays.isEmpty() ? null : taggedDisplays.getFirst();
+            for (int index = 1; index < taggedDisplays.size(); index++) taggedDisplays.get(index).remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+            boolean newDisplay = display == null;
+            if (newDisplay) {
+                display = EntityType.BLOCK_DISPLAY.create(world, SpawnReason.COMMAND);
+                if (display == null) return;
+                display.addCommandTag(noteTag(chart.id, note.id));
+                display.setDisplayWidth(1.0f);
+                display.setDisplayHeight(1.0f);
+                display.setNoGravity(true);
+                display.setInvulnerable(true);
+                ensureEffectPreviewDisplayRange(display);
+            }
+            display.setCustomName(Text.literal(noteReferenceName(chart.id, note.id)));
+            display.setCustomNameVisible(false);
+            display.setDisplayWidth(1.0f);
+            display.setDisplayHeight(1.0f);
+            display.setBlockState(blockStateForType(note.type));
+            display.setTransformation(cn.frkovo.rhythmcmaker.common.note.NoteGeometry.editorTransform(note));
+            display.setPosition(note.x + 0.5, note.y + 0.5, note.z + 0.5);
+            net.minecraft.util.math.Box bounds = cn.frkovo.rhythmcmaker.common.note.NoteGeometry.transformedBounds(
+                    display.getX(), display.getY(), display.getZ(), cn.frkovo.rhythmcmaker.common.note.NoteGeometry.editorTransform(note).getMatrix());
+            display.setBoundingBox(bounds);
+            display.setDisplayWidth((float) Math.max(bounds.getLengthX(), bounds.getLengthZ()));
+            display.setDisplayHeight((float) (bounds.getLengthY() * 2.0));
+            String generation = noteDisplayGenerationTag(chart.id, noteDisplayGeneration(chart));
+            if (!display.getCommandTags().contains(generation)) display.addCommandTag(generation);
+            if (newDisplay) world.spawnEntity(display);
+            return;
+        }
+        for (DisplayEntity.BlockDisplayEntity display : taggedDisplays) display.remove(net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+        boolean otherAtCurrentPosition = chart.notes.stream().anyMatch(candidate -> candidate != null
+                && !note.id.equals(candidate.id) && isBlockNoteAt(candidate, currentPosition));
+        int currentBlockType = noteTypeForBlockState(world.getBlockState(currentPosition));
+        boolean replaceOwnBlock = !previousUsesDisplay && samePosition && currentBlockType == previousType;
+        if (!otherAtCurrentPosition && (world.getBlockState(currentPosition).isAir() || replaceOwnBlock)) {
+            world.setBlockState(currentPosition, blockStateForType(note.type), 3);
+        }
+    }
     private static String noteTag(String chartId, String noteId) { return "rhythmc_note:" + chartId + ":" + noteId; }
+    private static String noteReferenceName(String chartId, String noteId) { return "rhythmc_note_ref:" + chartId + ":" + noteId; }
     private static long noteDisplayGeneration(ChartManifest chart) { return Math.max(1L, chart.noteDisplayRevision); }
     private static long prepareNoteDisplayGeneration(ServerWorld world, ChartManifest chart, int previousTrackLength, int previousLaneCount) {
         long previousRevision = chart.noteDisplayRevision;
@@ -4648,6 +5554,9 @@ private static void showSceneBoundary(MinecraftServer server) {
             case 3 -> Blocks.REDSTONE_BLOCK.getDefaultState();
             default -> Blocks.TNT.getDefaultState();
         };
+    }
+    private static String noteTypeName(int type) {
+        return cn.frkovo.rhythmcmaker.common.note.NoteKind.ofType(type).label();
     }
     private static void installHubMap(Path worldRoot) {
         Path marker = worldRoot.resolve(HUB_MAP_MARKER);
@@ -4701,37 +5610,38 @@ private static void showSceneBoundary(MinecraftServer server) {
         }
     }
     private static void restoreEditorTrackFoundation(ServerWorld world, int x, int length, int laneCount) {
+        int top = 65 + editorTrackHeight(world);
         int laneHalfWidth = laneCount / 2;
         int leftWall = -laneHalfWidth - 1;
         int rightWall = laneHalfWidth + 1;
         int maximumHalfWidth = EditorTrackLayout.MAX_LANE_COUNT / 2 + 1;
-        for (int dx = -maximumHalfWidth; dx <= maximumHalfWidth; dx++) for (int y = 64; y <= 69; y++) for (int z = -2; z <= 2; z++) {
+        for (int dx = -maximumHalfWidth; dx <= maximumHalfWidth; dx++) for (int y = 64; y <= 66 + EditorTrackLayout.MAX_HEIGHT; y++) for (int z = -2; z <= 2; z++) {
             world.setBlockState(new BlockPos(x + dx, y, z), Blocks.AIR.getDefaultState(), 2);
         }
         for (int dx = leftWall; dx <= rightWall; dx++) for (int dz = -2; dz <= 2; dz++) {
             world.setBlockState(new BlockPos(x + dx, 65, dz), Blocks.WHITE_CONCRETE.getDefaultState(), 2);
         }
         world.setBlockState(new BlockPos(x, 65, 0), Blocks.VERDANT_FROGLIGHT.getDefaultState(), 2);
-        for (int y = 66; y <= 67; y++) {
+        for (int y = 66; y < top; y++) {
             for (int dx = leftWall; dx <= rightWall; dx++) world.setBlockState(new BlockPos(x + dx, y, 2), Blocks.WHITE_CONCRETE.getDefaultState(), 2);
             for (int dz = -1; dz <= 1; dz++) {
                 world.setBlockState(new BlockPos(x + leftWall, y, dz), Blocks.WHITE_CONCRETE.getDefaultState(), 2);
                 world.setBlockState(new BlockPos(x + rightWall, y, dz), Blocks.WHITE_CONCRETE.getDefaultState(), 2);
             }
         }
-        for (int dx = leftWall; dx <= rightWall; dx++) world.setBlockState(new BlockPos(x + dx, 68, 2), Blocks.WHITE_STAINED_GLASS.getDefaultState(), 2);
+        for (int dx = leftWall; dx <= rightWall; dx++) world.setBlockState(new BlockPos(x + dx, top, 2), Blocks.WHITE_STAINED_GLASS.getDefaultState(), 2);
         for (int dz = -1; dz <= 1; dz++) {
-            world.setBlockState(new BlockPos(x + leftWall, 68, dz), Blocks.WHITE_STAINED_GLASS.getDefaultState(), 2);
-            world.setBlockState(new BlockPos(x + rightWall, 68, dz), Blocks.WHITE_STAINED_GLASS.getDefaultState(), 2);
+            world.setBlockState(new BlockPos(x + leftWall, top, dz), Blocks.WHITE_STAINED_GLASS.getDefaultState(), 2);
+            world.setBlockState(new BlockPos(x + rightWall, top, dz), Blocks.WHITE_STAINED_GLASS.getDefaultState(), 2);
         }
         for (int dx = -laneHalfWidth; dx <= laneHalfWidth; dx++) for (int dz = -1; dz <= 1; dz++) {
-            world.setBlockState(new BlockPos(x + dx, 69, dz), Blocks.WHITE_STAINED_GLASS.getDefaultState(), 2);
+            world.setBlockState(new BlockPos(x + dx, top + 1, dz), Blocks.WHITE_STAINED_GLASS.getDefaultState(), 2);
         }
         for (int dx = leftWall; dx <= rightWall; dx++) {
-            world.setBlockState(new BlockPos(x + dx, 69, -2), Blocks.CYAN_CONCRETE.getDefaultState(), 2);
+            world.setBlockState(new BlockPos(x + dx, top + 1, -2), Blocks.CYAN_CONCRETE.getDefaultState(), 2);
             world.setBlockState(new BlockPos(x + dx, 65, -2), Blocks.CYAN_CONCRETE.getDefaultState(), 2);
         }
-        for (int y = 66; y <= 68; y++) {
+        for (int y = 66; y <= top; y++) {
             world.setBlockState(new BlockPos(x + leftWall, y, -2), Blocks.CYAN_CONCRETE.getDefaultState(), 2);
             world.setBlockState(new BlockPos(x + rightWall, y, -2), Blocks.CYAN_CONCRETE.getDefaultState(), 2);
         }
@@ -4743,7 +5653,8 @@ private static void showSceneBoundary(MinecraftServer server) {
     private static boolean hasEditorTrack(ChartManifest chart) {
         return chart.editorTrackBuiltLength == chart.trackLength
                 && chart.editorTrackBuiltLaneCount == laneCount(chart)
-                && chart.editorTrackBuiltDivisionsPerBeat == divisionsPerBeat(chart);
+                && chart.editorTrackBuiltDivisionsPerBeat == divisionsPerBeat(chart)
+                && chart.editorTrackBuiltHeight == EditorTrackLayout.of(chart).trackHeight();
     }
     private static void markEditorTrackBuilt(MinecraftServer server, RegistryKey<World> worldKey, int length, int lanes, int divisions) {
         ChartManifest chart = CHART_CACHE_BY_WORLD.get(worldKey);
@@ -4751,6 +5662,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         chart.editorTrackBuiltLength = length;
         chart.editorTrackBuiltLaneCount = lanes;
         chart.editorTrackBuiltDivisionsPerBeat = divisions;
+        chart.editorTrackBuiltHeight = EditorTrackLayout.of(chart).trackHeight();
         try { updateChart(server, chart); }
         catch (IOException exception) { LOGGER.warn("Failed to persist completed editor track for chart {}", chart.id, exception); }
     }
@@ -4766,8 +5678,8 @@ private static void showSceneBoundary(MinecraftServer server) {
         final int targetDivisions = divisions;
         final int targetLaneCount = laneCount;
         EDITOR_AREA_TASKS.compute(world.getRegistryKey(), (key, existing) -> {
-            if (existing == null || existing.x != x || existing.divisions != targetDivisions || existing.laneCount != targetLaneCount) {
-                EditorAreaTask task = new EditorAreaTask(x, totalBeats, targetDivisions, targetLaneCount, operationPlayerId);
+            if (existing == null || existing.x != x || existing.divisions != targetDivisions || existing.laneCount != targetLaneCount || existing.height != editorTrackHeight(world)) {
+                EditorAreaTask task = new EditorAreaTask(x, totalBeats, targetDivisions, targetLaneCount, editorTrackHeight(world), operationPlayerId);
                 copyDecorationColumn(world, x, -3, DECORATION_TEMPLATES.get("start"), targetLaneCount);
                 task.cursor = 1;
                 return task;
@@ -4839,7 +5751,7 @@ private static void showSceneBoundary(MinecraftServer server) {
                 if (slot < task.newLength) continue;
                 int z = -3 - slot;
                 for (int dx = -(EditorTrackLayout.MAX_LANE_COUNT / 2 + 1); dx <= EditorTrackLayout.MAX_LANE_COUNT / 2 + 1; dx++) {
-                    for (int y = 64; y <= 68; y++) {
+                    for (int y = 64; y <= 65 + EditorTrackLayout.MAX_HEIGHT; y++) {
                         BlockPos pos = new BlockPos(task.x + dx, y, z);
                         if (!isNoteBlock(world.getBlockState(pos).getBlock())) world.setBlockState(pos, Blocks.AIR.getDefaultState(), 2);
                     }
@@ -4882,7 +5794,7 @@ private static void showSceneBoundary(MinecraftServer server) {
         for (int slot = 0; slot <= Math.max(0, length); slot++) {
             int z = -3 - slot;
             for (int dx = -maximumHalfWidth; dx <= maximumHalfWidth; dx++) {
-                for (int y = 64; y <= 68; y++) {
+                for (int y = 64; y <= 65 + EditorTrackLayout.MAX_HEIGHT; y++) {
                     world.setBlockState(new BlockPos(x + dx, y, z), Blocks.AIR.getDefaultState(), 2);
                 }
             }
@@ -4890,12 +5802,13 @@ private static void showSceneBoundary(MinecraftServer server) {
     }
 
     private static void buildEditorTrackEndBarrier(ServerWorld world, int x, int trackLength, int laneCount) {
+        int top = 65 + editorTrackHeight(world);
         int laneHalfWidth = laneCount / 2;
         int leftWall = -laneHalfWidth - 1;
         int rightWall = laneHalfWidth + 1;
         int z = -3 - Math.max(0, trackLength);
         for (int dx = leftWall; dx <= rightWall; dx++) {
-            for (int y = 64; y <= 68; y++) {
+            for (int y = 64; y <= top; y++) {
                 world.setBlockState(new BlockPos(x + dx, y, z), Blocks.RED_STAINED_GLASS.getDefaultState(), 2);
             }
         }
@@ -5031,14 +5944,16 @@ private static void showSceneBoundary(MinecraftServer server) {
         private final int x;
         private final int divisions;
         private final int laneCount;
+        private final int height;
         private int totalBeats;
         private int cursor;
         private UUID operationPlayerId;
-        private EditorAreaTask(int x, int totalBeats, int divisions, int laneCount, UUID operationPlayerId) {
+        private EditorAreaTask(int x, int totalBeats, int divisions, int laneCount, int height, UUID operationPlayerId) {
             this.x = x;
             this.totalBeats = totalBeats;
             this.divisions = divisions;
             this.laneCount = laneCount;
+            this.height = height;
             this.operationPlayerId = operationPlayerId;
         }
     }
@@ -5066,16 +5981,24 @@ private static void showSceneBoundary(MinecraftServer server) {
         return result;
     }
 
+    private static int editorTrackHeight(ServerWorld world) {
+        ChartManifest chart = CHART_CACHE_BY_WORLD.get(world.getRegistryKey());
+        return chart == null ? EditorTrackLayout.DEFAULT_HEIGHT : EditorTrackLayout.of(chart).trackHeight();
+    }
+
     private static void copyDecorationColumn(ServerWorld world, int x, int targetZ, Map<Integer, BlockState> template, int laneCount) {
+        int top = 65 + editorTrackHeight(world);
         int laneHalfWidth = laneCount / 2;
         int leftWall = -laneHalfWidth - 1;
         int rightWall = laneHalfWidth + 1;
         int maximumHalfWidth = EditorTrackLayout.MAX_LANE_COUNT / 2 + 1;
         for (int dx = -maximumHalfWidth; dx <= maximumHalfWidth; dx++) {
-            for (int y = 64; y <= 68; y++) {
+            for (int y = 64; y <= 65 + EditorTrackLayout.MAX_HEIGHT; y++) {
                 BlockPos target = new BlockPos(x + dx, y, targetZ);
                 if (isNoteBlock(world.getBlockState(target).getBlock())) continue;
-                BlockState desired = decorationState(template, dx, y, laneHalfWidth, leftWall, rightWall);
+                int templateY = y <= 65 ? y : y == top ? 68 : Math.min(67, y);
+                BlockState desired = y > top ? Blocks.AIR.getDefaultState()
+                        : decorationState(template, dx, templateY, laneHalfWidth, leftWall, rightWall);
                 if (!world.getBlockState(target).equals(desired)) world.setBlockState(target, desired, 2);
             }
         }
@@ -5099,7 +6022,13 @@ private static void showSceneBoundary(MinecraftServer server) {
         return Registry.register(Registries.ITEM, key, new MenuItem(new Item.Settings().registryKey(key).maxCount(1), name));
     }
 
-    private record TrackSnapKey(double x, double y, double z, int type) {}
+    private static Item registerNoteItem(String id, String name) {
+        Identifier identifier = Identifier.of(MOD_ID, id);
+        RegistryKey<Item> key = RegistryKey.of(RegistryKeys.ITEM, identifier);
+        return Registry.register(Registries.ITEM, key, new MenuItem(new Item.Settings().registryKey(key), name));
+    }
+
+    private record TrackSnapKey(double x, double y, double z, int type, int trackId, String groupNoteId) {}
     private record TrackSnapChangedNote(String id, double z, double beat, double time) {}
     private record TrackSnapRemovedNote(int index, ChartManifest.Note note) {}
     private record TrackSnapUndo(String chartId, java.util.List<ChartManifest.Note> originalNotes, Set<String> snappedNoteIds) {}

@@ -93,6 +93,23 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         clearSidebarSnapshot();
     }
 
+    public static void refreshEditorLayout() {
+        ClientChartAccess.refreshActiveChartNow();
+        requestSidebarRefresh();
+        if (MinecraftClient.getInstance().currentScreen instanceof ChartMenuScreen menu) menu.refreshLayoutFields();
+    }
+
+    public static boolean interceptNoteItemDrop(net.minecraft.client.network.ClientPlayerEntity player) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.player != player || client.world == null
+                || !(cn.frkovo.rhythmcmaker.ChartDimensionManager.isChartWorld(client.world.getRegistryKey())
+                    || client.world.getRegistryKey().equals(RhythmcMaker.CHARTER_DIMENSION))) return false;
+        Item held = player.getMainHandStack().getItem();
+        if (held != RhythmcMaker.HOLD_NOTE_ITEM && held != RhythmcMaker.HOLD_GROUP_NOTE_ITEM) return false;
+        player.networkHandler.sendChatCommand("rhythmc_hold_toggle");
+        return true;
+    }
+
     @Override public void onInitializeClient() {
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> cn.frkovo.rhythmcmaker.client.render.ImGuiRuntime.dispose());
         WorldRenderEvents.AFTER_ENTITIES.register(RhythmcMakerClient::renderScrollPlaybackBox);
@@ -112,19 +129,22 @@ public final class RhythmcMakerClient implements ClientModInitializer {
                 (drawContext, tickCounter) -> renderOperationProgress(drawContext));
         UseItemCallback.EVENT.register((player, world, hand) -> {
             if (!world.isClient()) return ActionResult.PASS;
-            Item item = player.getStackInHand(hand).getItem();
+            var stack = player.getStackInHand(hand);
+            if (RhythmcMaker.isNoteEditTool(stack)) {
+                return cn.frkovo.rhythmcmaker.ChartDimensionManager.isChartWorld(world.getRegistryKey())
+                        ? ActionResult.SUCCESS : ActionResult.PASS;
+            }
+            Item item = stack.getItem();
             if (ClientSceneAccess.operationBusy() && isRhythmcMenuItem(item)) return ActionResult.SUCCESS;
             MinecraftClient client = MinecraftClient.getInstance();
             if (item == RhythmcMaker.START_CHART_ITEM) client.setScreen(new ChartListScreen());
             else if (item == RhythmcMaker.AWA_ITEM) client.setScreen(new PlaceholderScreen("awa~", "awa-menu"));
-            else if (item == RhythmcMaker.SETTINGS_ITEM) client.setScreen(new PlaceholderScreen("设置"));
-            else if (item == RhythmcMaker.CHART_SETTINGS_ITEM) client.setScreen(new PlaceholderScreen("谱面设置", "chart-settings"));
+            else if (item == RhythmcMaker.SETTINGS_ITEM) client.setScreen(new SettingsScreen());
+            else if (item == RhythmcMaker.CHART_MENU_ITEM) client.setScreen(new ChartMenuScreen());
             else if (item == RhythmcMaker.MORE_SETTINGS_ITEM) sendCommand(client, "rhythmc_more_options");
-            else if (item == RhythmcMaker.QUICK_FUNCTIONS_ITEM) client.setScreen(new PlaceholderScreen("快捷功能", "quick-functions"));
             else if (item == RhythmcMaker.MORE_OPTIONS_RETURN_ITEM) sendCommand(client, "rhythmc_more_return");
             else if (item == RhythmcMaker.EXPORT_ITEM) client.setScreen(new ExportChartScreen());
-            else if (item == RhythmcMaker.CHART_INFO_ITEM) { if (ClientChartAccess.activeChart() != null) client.setScreen(new ChartInfoScreen(ClientChartAccess.activeChart())); else if (client.player != null) client.player.sendMessage(Text.literal("当前未加载谱面"), true); }
-            else if (item == RhythmcMaker.SCENE_EDIT_ITEM) client.setScreen(new SceneEditScreen());
+            else if (item == RhythmcMaker.SCENE_EDITOR_ITEM) client.setScreen(new SceneEditScreen());
             else if (item == RhythmcMaker.EFFECT_TRACK_ITEM) client.setScreen(new EffectTrackScreen());
             else if (item == RhythmcMaker.SAVE_SCENE_ITEM) sendCommand(client, "rhythmc_scene_save");
             else if (item == RhythmcMaker.PLAY_ITEM) {
@@ -134,16 +154,13 @@ public final class RhythmcMakerClient implements ClientModInitializer {
                 }
                 if (isShiftPressed(client)) {
                     syncPlaybackPreference();
-                    client.setScreen(new PlaybackSettingsScreen());
+                    client.setScreen(new SettingsScreen());
                     return ActionResult.SUCCESS;
                 }
                 if (playbackToggleCooldownTicks > 0) return ActionResult.SUCCESS;
                 syncPlaybackPreference();
                 beginPlayback(client);
             }
-            else if (item == RhythmcMaker.BEAT_SCORE_ITEM) client.setScreen(new PlaceholderScreen("修改制谱器轨道", "beat-score"));
-            else if (item == RhythmcMaker.INCREASE_BEATS_ITEM) sendCommand(client, "rhythmc_beats 1");
-            else if (item == RhythmcMaker.DECREASE_BEATS_ITEM) sendCommand(client, "rhythmc_beats -1");
             else return ActionResult.PASS;
             return ActionResult.SUCCESS;
         });
@@ -180,7 +197,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             }
             if (ClientSceneAccess.operationBusy() && client.currentScreen != null && isRhythmcScreen(client.currentScreen)) client.setScreen(null);
             updateEditorSidebarSnapshot(client);
-            while (settingsKey.wasPressed()) if (!ClientSceneAccess.operationBusy()) client.setScreen(new PlaceholderScreen("设置"));
+            while (settingsKey.wasPressed()) if (!ClientSceneAccess.operationBusy()) client.setScreen(new SettingsScreen());
             boolean inPlaybackArea = client.player != null && isEditorDimension(client) && Math.abs(client.player.getX() - 200.5) < 2.0 && Math.abs(client.player.getY() - 66.0) < 2.0 && Math.abs(client.player.getZ() - 0.0) < 2.0;
             boolean inChartDimension = client.player != null && isEditorDimension(client);
             if (playbackToggleCooldownTicks > 0) playbackToggleCooldownTicks--;
@@ -683,12 +700,13 @@ public final class RhythmcMakerClient implements ClientModInitializer {
             "歌曲时间 " + formatHudTime(currentSeconds) + "/" + formatHudTime(totalSeconds),
             "beat数 " + currentBeat + "/" + totalBeatCount,
             "当前每beat分数 " + divisions,
-            "当前轨道宽度 " + Math.max(1, Math.min(9, chart.laneCount))
+            "当前轨道宽度 " + Math.max(1, Math.min(9, chart.laneCount)),
+            "当前轨道高度 " + chart.trackHeight
         });
     }
 
     private static SidebarSnapshot hubSidebar() {
-        return new SidebarSnapshot("制谱器大厅", new String[] { ClientChartAccess.config().lobbySidebarContent });
+        return new SidebarSnapshot("制谱器大厅", ClientChartAccess.config().lobbySidebarContent.split("\\R", -1));
     }
 
     private static double sidebarRefreshIntervalSeconds() {
@@ -704,7 +722,7 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         String dimension = client.player == null ? "" : client.player.getEntityWorld().getRegistryKey().getValue().toString();
         if (chart == null) return mode + "|" + dimension + "|" + ClientChartAccess.config().lobbySidebarContent;
         return mode + "|" + dimension + "|" + String.valueOf(chart.id) + "|" + chart.divisionsPerBeat + "|"
-                + chart.beatsPerMeasure + "|" + chart.laneCount + "|" + chart.beatCount + "|" + chart.totalBeats + "|"
+                + chart.beatsPerMeasure + "|" + chart.laneCount + "|" + chart.trackHeight + "|" + chart.beatCount + "|" + chart.totalBeats + "|"
                 + chart.durationSeconds + "|" + playbackStartBeat + "|" + playbackStartSeconds;
     }
 
@@ -906,18 +924,27 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         context.matrices().pop();
     }
     public static boolean isSceneOperationBusy() { return ClientSceneAccess.operationBusy(); }
+    public static boolean tryOpenNoteEditor(MinecraftClient client) {
+        if (client.player == null || client.currentScreen != null || !isEditorDimension(client)
+                || !RhythmcMaker.isNoteEditTool(client.player.getMainHandStack())) return false;
+        ChartManifest chart = ClientChartAccess.resolveActiveChart();
+        NoteTarget target = NoteTargetResolver.resolve(client, chart);
+        if (target == null) return false;
+        client.setScreen(new NoteEditScreen(target.chart(), target.note()));
+        return true;
+    }
     private static boolean isRhythmcScreen(net.minecraft.client.gui.screen.Screen screen) {
-        return screen instanceof RhythmcScreen || screen instanceof EffectTrackScreen;
+        return screen instanceof RhythmcScreen || screen instanceof EffectTrackScreen || screen instanceof NoteEditScreen
+                || screen instanceof ChartMenuScreen || screen instanceof SnapConfirmScreen;
     }
     private static boolean isRhythmcMenuItem(Item item) {
         return item == RhythmcMaker.START_CHART_ITEM || item == RhythmcMaker.AWA_ITEM
-                || item == RhythmcMaker.SETTINGS_ITEM || item == RhythmcMaker.CHART_SETTINGS_ITEM
-                || item == RhythmcMaker.MORE_SETTINGS_ITEM || item == RhythmcMaker.QUICK_FUNCTIONS_ITEM
+                || item == RhythmcMaker.SETTINGS_ITEM || item == RhythmcMaker.CHART_MENU_ITEM
+                || item == RhythmcMaker.MORE_SETTINGS_ITEM
                 || item == RhythmcMaker.MORE_OPTIONS_RETURN_ITEM || item == RhythmcMaker.EXPORT_ITEM
-                || item == RhythmcMaker.CHART_INFO_ITEM || item == RhythmcMaker.SCENE_EDIT_ITEM
+                || item == RhythmcMaker.SCENE_EDITOR_ITEM
                 || item == RhythmcMaker.EFFECT_TRACK_ITEM || item == RhythmcMaker.SAVE_SCENE_ITEM
-                || item == RhythmcMaker.PLAY_ITEM || item == RhythmcMaker.BEAT_SCORE_ITEM
-                || item == RhythmcMaker.INCREASE_BEATS_ITEM || item == RhythmcMaker.DECREASE_BEATS_ITEM;
+                || item == RhythmcMaker.PLAY_ITEM;
     }
     private static void renderOperationProgress(DrawContext drawContext) {
         MinecraftClient client = MinecraftClient.getInstance();
@@ -934,6 +961,6 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         Text label = Text.literal(progress.label() + " " + progress.percent() + "%");
         drawContext.drawTextWithShadow(client.textRenderer, label, left, top - 12, 0xFFFFFFFF);
     }
-    static void sendChartCommand(String command) { sendCommand(MinecraftClient.getInstance(), command); }
+    public static void sendChartCommand(String command) { sendCommand(MinecraftClient.getInstance(), command); }
     private static void sendCommand(MinecraftClient client, String command) { if (client.player != null) client.player.networkHandler.sendChatCommand(command); }
 }

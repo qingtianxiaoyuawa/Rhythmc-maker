@@ -246,18 +246,18 @@ public final class Rhythmc3Exporter {
         return note.beat;
     }
 
-    private static JsonObject trackJson(ChartManifest chart, ChartManifest.Track track, double endBeat) {
+    static JsonObject trackJson(ChartManifest chart, ChartManifest.Track track, double endBeat) {
         JsonObject result = new JsonObject(); result.addProperty("id", track.id);
         for (TrackEventChannel channel : TrackEventChannel.values()) {
             JsonArray fallback = new JsonArray();
             if (channel == TrackEventChannel.SPEED) fallback = speedEventList(chart, endBeat);
             result.add(channel.jsonKey(), numEventList(channel.events(track), fallback));
         }
-        JsonArray notes = new JsonArray(); if (chart.notes != null) for (ChartManifest.Note note : chart.notes) if (note != null && note.trackId == track.id) {
+        JsonArray notes = new JsonArray(); if (chart.notes != null) for (ChartManifest.Note note : chart.notes) if (note != null && !note.visualOnly && note.trackId == track.id) {
             JsonObject value = new JsonObject(); value.addProperty("noteType", Math.max(0, Math.min(3, note.type))); value.addProperty("beat", exportBeat(note));
             JsonArray position = new JsonArray(); position.add(note.x); position.add(note.y - noteHeightBase(note.type)); position.add(note.sourceZ == null ? 0.0 : note.sourceZ); value.add("pos", position);
             JsonArray scale = new JsonArray(); scale.add(note.scaleX); scale.add(note.scaleY); scale.add(note.scaleZ); value.add("scale", scale);
-            JsonArray rotation = new JsonArray(); rotation.add(note.rotationX); rotation.add(note.rotationY); rotation.add(note.rotationZ); value.add("rotation", rotation); if (note.holdGroup >= 0) value.addProperty("holdGroup", note.holdGroup); notes.add(value);
+            JsonArray rotation = new JsonArray(); rotation.add(note.rotationX); rotation.add(note.rotationY); rotation.add(note.rotationZ); value.add("rotation", rotation); if (note.type == 2 && note.holdGroup >= 0) value.addProperty("holdGroup", note.holdGroup); notes.add(value);
         }
         result.add("notes", notes); return result;
     }

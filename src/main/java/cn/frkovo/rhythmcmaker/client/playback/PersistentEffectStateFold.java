@@ -6,7 +6,7 @@ import java.util.List;
 
 public final class PersistentEffectStateFold {
     private enum Kind {
-        TIME, WEATHER, ARENA, GLOW_COLOR, HIDE_NOTES;
+        TIME, WEATHER, ARENA, GLOW_COLOR, JUDGE_FRAME_COLOR, HIDE_NOTES;
 
         private static Kind from(String effectType) {
             return switch (effectType) {
@@ -14,6 +14,7 @@ public final class PersistentEffectStateFold {
                 case "WEATHER" -> WEATHER;
                 case "ARENA", "CHANGE_ARENA" -> ARENA;
                 case "GLOW_COLOR" -> GLOW_COLOR;
+                case "JUDGE_FRAME_COLOR" -> JUDGE_FRAME_COLOR;
                 case "HIDE_NOTES" -> HIDE_NOTES;
                 default -> null;
             };

@@ -137,6 +137,7 @@ public final class ImGuiRuntime {
             ImGui.endFrame();
             frameOpen = false;
         }
+        saveWindowSettings();
         RENDERER.dispose();
         PLATFORM.dispose();
         ImGui.destroyContext();
@@ -146,6 +147,10 @@ public final class ImGuiRuntime {
 
     public static synchronized boolean isInitialized() {
         return initialized;
+    }
+
+    public static synchronized void saveWindowSettings() {
+        if (initialized) ImGui.saveIniSettingsToDisk(ImGui.getIO().getIniFilename());
     }
 
     /**

@@ -1,6 +1,11 @@
 package cn.frkovo.rhythmcmaker.mixin.client;
 
 import cn.frkovo.rhythmcmaker.client.EffectTrackScreen;
+import cn.frkovo.rhythmcmaker.client.ChartMenuScreen;
+import cn.frkovo.rhythmcmaker.client.NoteEditScreen;
+import cn.frkovo.rhythmcmaker.client.RhythmcMakerClient;
+import cn.frkovo.rhythmcmaker.client.SettingsScreen;
+import cn.frkovo.rhythmcmaker.client.SnapConfirmScreen;
 import cn.frkovo.rhythmcmaker.client.render.ImGuiRuntime;
 import net.minecraft.client.MinecraftClient;
 import org.spongepowered.asm.mixin.Mixin;
@@ -27,6 +32,12 @@ abstract class MinecraftClientMixin {
         if (MinecraftClient.getInstance().currentScreen instanceof EffectTrackScreen) callback.cancel();
     }
 
+    @Inject(method = "doItemUse", at = @At("HEAD"), cancellable = true)
+    private void rhythmcMaker$openNoteEditor(CallbackInfo callback) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (RhythmcMakerClient.tryOpenNoteEditor(client)) callback.cancel();
+    }
+
     @Inject(method = "handleBlockBreaking", at = @At("HEAD"), cancellable = true)
     private void rhythmcMaker$blockEditorBreaking(boolean breaking, CallbackInfo callback) {
         if (MinecraftClient.getInstance().currentScreen instanceof EffectTrackScreen) callback.cancel();
@@ -43,6 +54,12 @@ abstract class MinecraftClientMixin {
     private void rhythmcMaker$renderEffectEditor(boolean tick, CallbackInfo callback) {
         if (MinecraftClient.getInstance().currentScreen instanceof EffectTrackScreen editor) {
             editor.presentPreview(MinecraftClient.getInstance());
+            ImGuiRuntime.markRenderCallback();
+            ImGuiRuntime.renderPendingDrawData();
+        } else if (MinecraftClient.getInstance().currentScreen instanceof NoteEditScreen
+                || MinecraftClient.getInstance().currentScreen instanceof SettingsScreen
+                || MinecraftClient.getInstance().currentScreen instanceof ChartMenuScreen
+                || MinecraftClient.getInstance().currentScreen instanceof SnapConfirmScreen) {
             ImGuiRuntime.markRenderCallback();
             ImGuiRuntime.renderPendingDrawData();
         }

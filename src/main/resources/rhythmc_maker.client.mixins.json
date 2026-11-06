@@ -9,7 +9,8 @@
     "CameraMixin",
     "GameRendererCameraMixin",
     "GameRendererMixin",
-    "InGameHudMixin"
+    "InGameHudMixin",
+    "ClientPlayerEntityMixin"
   ],
   "injectors": {
     "defaultRequire": 1
