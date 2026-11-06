@@ -13,8 +13,6 @@ public final class EditorNoteLayout {
             note.beat = beat;
             note.time = timing.beatToSeconds(beat);
             note.z = PlaybackCoordinates.editorWorldZAtBeat(chart, beat) - 0.5;
-            if (note.holdStartBeat != null) note.holdStartZ = PlaybackCoordinates.editorWorldZAtBeat(chart, note.holdStartBeat) - 0.5;
-            if (note.holdEndBeat != null) note.holdEndZ = PlaybackCoordinates.editorWorldZAtBeat(chart, note.holdEndBeat) - 0.5;
         }
     }
 }

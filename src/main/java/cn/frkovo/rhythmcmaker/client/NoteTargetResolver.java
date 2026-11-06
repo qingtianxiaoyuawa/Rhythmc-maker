@@ -2,6 +2,7 @@ package cn.frkovo.rhythmcmaker.client;
 
 import cn.frkovo.rhythmcmaker.chart.ChartManifest;
 import cn.frkovo.rhythmcmaker.chart.NoteEditRules;
+import cn.frkovo.rhythmcmaker.chart.HoldGroupRules;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.decoration.DisplayEntity;
@@ -24,22 +25,23 @@ final class NoteTargetResolver {
     static NoteTarget resolve(MinecraftClient client, ChartManifest chart) {
         ChartManifest resolvedChart = ClientChartAccess.refreshActiveChartNow();
         if (client.player == null || resolvedChart == null || resolvedChart.notes == null) return null;
-        chart = resolvedChart;
+        ChartManifest activeChart = resolvedChart;
         HitResult target = client.crosshairTarget;
         if (target instanceof EntityHitResult entityHit) {
-            ChartManifest.Note note = resolveTaggedEntity(entityHit.getEntity(), chart.notes, chart.id);
-            if (note != null) return new NoteTarget(chart, note, entityHit.getEntity(), target);
+            ChartManifest.Note note = resolveTaggedEntity(entityHit.getEntity(), activeChart);
+            if (note != null) return new NoteTarget(activeChart, note, entityHit.getEntity(), target);
         }
-        NoteTarget displayTarget = resolveDisplayTarget(client, chart, target);
+        NoteTarget displayTarget = resolveDisplayTarget(client, activeChart, target);
         if (displayTarget != null) return displayTarget;
         if (target instanceof BlockHitResult blockHit) {
             BlockPos hitPosition = blockHit.getBlockPos();
-            ChartManifest.Note note = chart.notes.stream()
+            ChartManifest.Note note = activeChart.notes.stream()
                     .filter(candidate -> candidate != null
+                            && HoldGroupRules.isEndpoint(activeChart, candidate)
                             && !cn.frkovo.rhythmcmaker.chart.NoteEditRules.requiresDisplayEntity(candidate.x, candidate.y, candidate.z))
                     .filter(candidate -> BlockPos.ofFloored(candidate.x, candidate.y, candidate.z).equals(hitPosition))
                     .findFirst().orElse(null);
-            return note == null ? null : new NoteTarget(chart, note, null, target);
+            return note == null ? null : new NoteTarget(activeChart, note, null, target);
         }
         return null;
     }
@@ -54,7 +56,7 @@ final class NoteTargetResolver {
         for (DisplayEntity display : client.world.getEntitiesByClass(DisplayEntity.class,
                 new Box(origin, origin).expand(maximumDistance + 1.0),
                 entity -> hasNoteBinding(entity, chart.id))) {
-            ChartManifest.Note note = resolveTaggedEntity(display, chart.notes, chart.id);
+            ChartManifest.Note note = resolveTaggedEntity(display, chart);
             if (note == null) continue;
             RayCandidate candidate = rayCandidate(note, display, origin, direction, maximumDistance,
                     maximumDistanceSquared);
@@ -85,19 +87,20 @@ final class NoteTargetResolver {
 
     private record RayCandidate(ChartManifest.Note note, Entity entity, double distanceSquared, double alongRay) {}
 
-    private static ChartManifest.Note resolveTaggedEntity(Entity entity, List<ChartManifest.Note> notes, String chartId) {
+    private static ChartManifest.Note resolveTaggedEntity(Entity entity, ChartManifest chart) {
         String noteId = entity.getCommandTags().stream()
-                .filter(tag -> tag.startsWith(NOTE_TAG_PREFIX + chartId + ":"))
-                .map(tag -> tag.substring((NOTE_TAG_PREFIX + chartId + ":").length()))
+                .filter(tag -> tag.startsWith(NOTE_TAG_PREFIX + chart.id + ":"))
+                .map(tag -> tag.substring((NOTE_TAG_PREFIX + chart.id + ":").length()))
                 .findFirst().orElse(null);
         if (noteId == null && entity.getCustomName() != null) {
             String reference = entity.getCustomName().getString();
-            String prefix = "rhythmc_note_ref:" + chartId + ":";
+            String prefix = "rhythmc_note_ref:" + chart.id + ":";
             if (reference.startsWith(prefix)) noteId = reference.substring(prefix.length());
         }
         if (noteId == null || noteId.isBlank()) return null;
         String resolvedNoteId = noteId;
-        return notes.stream().filter(note -> note != null && resolvedNoteId.equals(note.id)).findFirst().orElse(null);
+        return chart.notes.stream().filter(note -> note != null && resolvedNoteId.equals(note.id)
+                && HoldGroupRules.isEndpoint(chart, note)).findFirst().orElse(null);
     }
 
     private static boolean hasNoteBinding(Entity entity, String chartId) {

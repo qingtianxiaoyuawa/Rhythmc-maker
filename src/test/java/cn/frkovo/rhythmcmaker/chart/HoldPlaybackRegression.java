@@ -12,32 +12,33 @@ public final class HoldPlaybackRegression {
                 List.of("JUDGE_FRAME_COLOR"), List.of(1.0), 1.0).equals(List.of(0)),
                 "judge frame color persists through seek rebuild");
         ChartManifest.Note editableNote = note("editable", 1.0, -1);
-        ChartManifest.Note longHold = note("long-hold", 1.0, -1);
-        longHold.holdStartBeat = 1.0;
-        longHold.holdEndBeat = 4.0;
-        longHold.holdStartX = longHold.x;
-        longHold.holdEndX = longHold.x;
-        longHold.holdStartY = longHold.y;
-        longHold.holdEndY = longHold.y;
-        longHold.holdStartZ = longHold.z;
-        longHold.holdEndZ = longHold.z - 3.0;
+        ChartManifest.Note longHold = note("long-hold-head", 1.0, 2);
+        ChartManifest.Note longHoldTail = note("long-hold-tail", 4.0, 2);
+        longHoldTail.x = 2.0;
         require(NoteEditRules.canEdit(longHold), "long Hold notes remain editable");
-        require(NoteEditRules.usesDisplayEntity(longHold), "long Hold notes use a display entity");
+        require(!NoteEditRules.usesDisplayEntity(longHold), "integer Hold endpoints retain block representation");
         require(NoteEditRules.hasBlockRepresentationAt(editableNote, editableNote.type, editableNote.x, editableNote.y, editableNote.z), "exact note block break identity matches");
         require(!NoteEditRules.hasBlockRepresentationAt(editableNote, editableNote.type + 1, editableNote.x, editableNote.y, editableNote.z), "breaking another block type cannot delete a note");
         ChartManifest layoutChart = new ChartManifest();
         layoutChart.bpm = 120.0;
         layoutChart.divisionsPerBeat = 2;
         layoutChart.notes.add(longHold);
+        layoutChart.notes.add(longHoldTail);
         EditorTrackLayout.of(5, 8).applyTo(layoutChart);
         EditorNoteLayout.repositionNotes(layoutChart);
         require(longHold.z == PlaybackCoordinates.editorWorldZAtBeat(layoutChart, longHold.beat) - 0.5, "layout changes reposition Hold representative by beat");
-        require(longHold.holdStartZ == PlaybackCoordinates.editorWorldZAtBeat(layoutChart, longHold.holdStartBeat) - 0.5, "layout changes reposition Hold start by beat");
-        require(longHold.holdEndZ == PlaybackCoordinates.editorWorldZAtBeat(layoutChart, longHold.holdEndBeat) - 0.5, "layout changes reposition Hold end by beat");
-        require(NoteEditRules.editorDisplayCenter(0.0, -3.0) == -1.0, "hold model centers use visible integer block centers");
-        require(NoteEditRules.editorDisplaySpan(0.0, -3.0) == 4.0, "hold model spans touch both outer block faces");
-        require(NoteEditRules.editorDisplayCenter(0.0, -3.5) == -1.5, "mixed fractional hold coordinates remain centered");
-        require(NoteEditRules.editorDisplaySpan(0.0, -3.5) == 5.0, "mixed fractional hold span follows rendered centers");
+        require(longHoldTail.z == PlaybackCoordinates.editorWorldZAtBeat(layoutChart, longHoldTail.beat) - 0.5,
+                "layout repositions each Hold endpoint by its own beat");
+        require(HoldGroupRules.canAppend(longHold, longHoldTail.trackId, longHoldTail.beat),
+                "Hold endpoints may use different X coordinates on the same track");
+        require(!HoldGroupRules.canAppend(longHoldTail, longHold.trackId, longHold.beat),
+                "Hold tails cannot precede their heads");
+        require(!HoldGroupRules.canAppend(longHold, longHoldTail.trackId + 1, longHoldTail.beat),
+                "Hold tails cannot cross tracks");
+        require(!HoldGroupRules.canAppend(longHold, longHold.trackId, Double.NaN),
+                "Hold tails reject non-finite beats");
+        require(HoldFillPlanner.fillCount(1.0, 1.0, 1.0) == 0, "touching Hold blocks need no visual fill");
+        require(HoldFillPlanner.fillCount(3.0, 1.0, 1.0) == 2, "wide Hold gaps use evenly spaced visual fills");
         require(NoteEditRules.requiresDisplayEntity(1.25, 66.0, -4.5),
                 "fractional note coordinates require a display entity");
         require(!NoteEditRules.requiresDisplayEntity(1.0, 66.0, -4.0),
@@ -49,6 +50,9 @@ public final class HoldPlaybackRegression {
         otherTrack.trackId = 1;
         ChartManifest chart = new ChartManifest();
         chart.notes = List.of(first, middle, last, otherTrack);
+        require(HoldGroupRules.isEndpoint(chart, first) && HoldGroupRules.isEndpoint(chart, last),
+                "only the first and last Hold members are editable endpoints");
+        require(!HoldGroupRules.isEndpoint(chart, middle), "middle Hold members cannot open the editor");
         List<HoldInterval> intervals = HoldInterval.fromChart(chart);
         require(intervals.size() == 2, "track-isolated grouping");
         HoldInterval interval = intervals.stream().filter(candidate -> candidate.trackId() == 0).findFirst().orElseThrow();
@@ -60,22 +64,11 @@ public final class HoldPlaybackRegression {
         require(simultaneous.startBeat() == simultaneous.endBeat() && simultaneous.durationBeats() == 0.0,
                 "same-beat hold group remains loadable");
         require(interval.hasEndJudgementBoundary(), "three-member runtime groups have an end boundary");
-        ChartManifest.Note representative = note("representative", 1.0, 12);
-        representative.holdStartBeat = 1.0;
-        representative.holdEndBeat = 8.0;
-        HoldInterval representativeInterval = HoldInterval.fromChart(chartWith(List.of(representative))).getFirst();
+        ChartManifest.Note representative = note("representative-head", 1.0, 12);
+        ChartManifest.Note representativeTail = note("representative-tail", 8.0, 12);
+        HoldInterval representativeInterval = HoldInterval.fromChart(chartWith(List.of(representative, representativeTail))).getFirst();
         require(representativeInterval.startBeat() == 1.0 && representativeInterval.endBeat() == 8.0,
-                "representative hold interval endpoints");
-        ChartManifest.Note representativeStart = note("representative-start", 1.0, 13);
-        representativeStart.holdStartBeat = 1.0;
-        representativeStart.holdEndBeat = 2.5;
-        representativeStart.holdStartX = 0.0;
-        representativeStart.holdEndX = 0.0;
-        representativeStart.holdStartZ = -4.0;
-        representativeStart.holdEndZ = -7.0;
-        HoldInterval singleRepresentative = HoldInterval.fromChart(chartWith(List.of(representativeStart))).getFirst();
-        require(singleRepresentative.durationBeats() == 1.5,
-                "representative hold duration is retained for playback reconstruction");
+                "Hold group interval comes from its endpoint notes");
 
         HoldPlaybackStateMachine machine = new HoldPlaybackStateMachine();
         machine.reset(intervals, 0.0);

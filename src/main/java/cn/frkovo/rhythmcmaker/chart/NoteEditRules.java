@@ -19,11 +19,11 @@ public final class NoteEditRules {
     }
 
     public static boolean usesDisplayEntity(ChartManifest.Note note) {
-        return note != null && (note.holdStartBeat != null || requiresDisplayEntity(note.x, note.y, note.z));
+        return note != null && requiresDisplayEntity(note.x, note.y, note.z);
     }
 
     public static boolean hasBlockRepresentationAt(ChartManifest.Note note, int type, double x, double y, double z) {
-        return note != null && note.type == type && note.holdStartBeat == null
+        return note != null && note.type == type
                 && !requiresDisplayEntity(note.x, note.y, note.z)
                 && Math.abs(note.x - x) < FRACTION_EPSILON
                 && Math.abs(note.y - y) < FRACTION_EPSILON

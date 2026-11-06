@@ -127,14 +127,6 @@ public final class ChartManifest {
         public double rotationY;
         public double rotationZ;
         public int holdGroup = -1;
-        public Double holdStartBeat;
-        public Double holdEndBeat;
-        public Double holdStartX;
-        public Double holdStartY;
-        public Double holdStartZ;
-        public Double holdEndX;
-        public Double holdEndY;
-        public Double holdEndZ;
 
         public Note() {
         }

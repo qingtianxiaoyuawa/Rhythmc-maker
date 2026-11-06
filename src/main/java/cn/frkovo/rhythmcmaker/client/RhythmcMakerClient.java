@@ -93,6 +93,17 @@ public final class RhythmcMakerClient implements ClientModInitializer {
         clearSidebarSnapshot();
     }
 
+    public static boolean interceptNoteItemDrop(net.minecraft.client.network.ClientPlayerEntity player) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.player != player || client.world == null
+                || !(cn.frkovo.rhythmcmaker.ChartDimensionManager.isChartWorld(client.world.getRegistryKey())
+                    || client.world.getRegistryKey().equals(RhythmcMaker.CHARTER_DIMENSION))) return false;
+        Item held = player.getMainHandStack().getItem();
+        if (held != RhythmcMaker.HOLD_NOTE_ITEM && held != RhythmcMaker.HOLD_GROUP_NOTE_ITEM) return false;
+        player.networkHandler.sendChatCommand("rhythmc_hold_toggle");
+        return true;
+    }
+
     @Override public void onInitializeClient() {
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> cn.frkovo.rhythmcmaker.client.render.ImGuiRuntime.dispose());
         WorldRenderEvents.AFTER_ENTITIES.register(RhythmcMakerClient::renderScrollPlaybackBox);

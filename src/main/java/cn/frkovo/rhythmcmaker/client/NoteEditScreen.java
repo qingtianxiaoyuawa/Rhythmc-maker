@@ -49,7 +49,7 @@ public final class NoteEditScreen extends Screen {
             float windowX = showOnRight ? ImGui.getIO().getDisplaySizeX() - windowWidth - 16.0f : 16.0f;
             if (firstFrame) {
                 ImGui.setNextWindowPos(windowX, ImGui.getIO().getDisplaySizeY() * 0.25f, ImGuiCond.Always);
-                ImGui.setNextWindowSize(windowWidth, 260.0f, ImGuiCond.Always);
+                ImGui.setNextWindowSize(windowWidth, 300.0f, ImGuiCond.Always);
                 firstFrame = false;
             }
             ImGui.begin("修改音符##rhythmc-note", ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse);
@@ -107,6 +107,11 @@ public final class NoteEditScreen extends Screen {
             } else if (beatUpdated) {
                 update(client, note.x, note.y, beatWhole.get() + beatNumerator.get() / (double) beatDenominator.get());
             }
+            if (ImGui.button("\u5220\u9664\u97f3\u7b26")) {
+                if (client.player != null) client.player.networkHandler.sendChatCommand("rhythmc_note_delete " + note.id);
+                client.setScreen(null);
+            }
+            ImGui.sameLine();
             if (ImGui.button("关闭")) client.setScreen(null);
             ImGui.end();
         } finally {

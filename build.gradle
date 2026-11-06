@@ -113,8 +113,17 @@ tasks.register("holdPlaybackRegression", JavaExec) {
     dependsOn tasks.named("testClasses")
 }
 
+tasks.register("timeFadeRegression", JavaExec) {
+    group = "verification"
+    description = "Runs deterministic time-of-day fade regression checks."
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = "cn.frkovo.rhythmcmaker.chart.TimeFadeRegression"
+    dependsOn tasks.named("testClasses")
+}
+
 tasks.named("check") {
     dependsOn tasks.named("holdPlaybackRegression")
+    dependsOn tasks.named("timeFadeRegression")
 }
 
 tasks.named("test", Test) {

@@ -34,7 +34,6 @@ public record HoldInterval(String id, int trackId, int holdGroup, double startBe
         if (members.isEmpty()) return null;
         List<ChartManifest.Note> ordered = members.stream().sorted(Comparator.comparingDouble(note -> note.beat)).toList();
         ChartManifest.Note first = ordered.get(0);
-        if (first.holdStartBeat != null && first.holdEndBeat != null) return new HoldInterval(key.trackId + ":" + key.holdGroup, key.trackId, key.holdGroup, first.holdStartBeat, first.holdEndBeat, ordered);
         ChartManifest.Note last = ordered.get(ordered.size() - 1);
         return new HoldInterval(key.trackId + ":" + key.holdGroup, key.trackId, key.holdGroup, first.beat, last.beat, ordered);
     }
